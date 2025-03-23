@@ -28,6 +28,7 @@ set (SRC_FILE ${SRC_FILE}
 
 include_directories(${INCLUDE_DIRS})
 add_library(${TARGET_NAME} STATIC ${SRC_FILE})
+target_include_directories(${TARGET_NAME} PUBLIC ${INCLUDE_DIRS})
 
 add_subdirectory(bytecode_compiler)
 add_subdirectory(segmentator)
