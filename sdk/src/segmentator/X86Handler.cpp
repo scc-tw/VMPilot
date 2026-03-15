@@ -4,8 +4,8 @@
 #include <algorithm>
 #include <unordered_map>
 
-#include <capstone.hpp>
 #include <spdlog/spdlog.h>
+#include <capstone.hpp>
 
 using namespace VMPilot::SDK::Segmentator;
 
@@ -61,8 +61,8 @@ bool X86Handler::doLoad(const std::vector<uint8_t>& code,
 //   1. Direct call (E8 rel32): operand is IMM -> lookup target address
 //   2. RIP-relative indirect call (FF 15 ...): call [rip+disp] -> compute
 //      effective address (GOT entry) -> lookup
-static const std::string* resolveCallTarget(
-    const Capstone::Instruction& insn, const AddrToSymbol& lookup) {
+static const std::string* resolveCallTarget(const Capstone::Instruction& insn,
+                                            const AddrToSymbol& lookup) {
     // Case 1: direct call/jmp with immediate operand
     uint64_t target = insn.getDirectTarget();
     if (target != 0) {
@@ -167,13 +167,11 @@ X86Handler::doGetNativeFunctions() noexcept {
             code.insert(code.end(), insn.bytes.begin(), insn.bytes.end());
         }
 
-        std::string name =
-            "vmpilot_region_0x" +
-            ([&] {
-                char buf[17];
-                snprintf(buf, sizeof(buf), "%lx", start_addr);
-                return std::string(buf);
-            })();
+        std::string name = "vmpilot_region_0x" + ([&] {
+                               char buf[17];
+                               snprintf(buf, sizeof(buf), "%lx", start_addr);
+                               return std::string(buf);
+                           })();
 
         native_functions.push_back(std::make_unique<NativeFunctionBase>(
             start_addr, size, std::move(name), std::move(code)));

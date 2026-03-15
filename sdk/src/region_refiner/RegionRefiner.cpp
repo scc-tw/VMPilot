@@ -6,21 +6,19 @@
 
 using NativeFunc = VMPilot::SDK::Segmentator::NativeFunctionBase;
 
-std::vector<std::unique_ptr<NativeFunc>>
-VMPilot::SDK::RegionRefiner::refine(
+std::vector<std::unique_ptr<NativeFunc>> VMPilot::SDK::RegionRefiner::refine(
     std::vector<std::unique_ptr<NativeFunc>> regions) noexcept {
     if (regions.size() <= 1) {
         return regions;
     }
 
     // Sort by start address, then by size descending (larger regions first)
-    std::sort(regions.begin(), regions.end(),
-              [](const auto& a, const auto& b) {
-                  if (a->getAddr() == b->getAddr()) {
-                      return a->getSize() > b->getSize();
-                  }
-                  return a->getAddr() < b->getAddr();
-              });
+    std::sort(regions.begin(), regions.end(), [](const auto& a, const auto& b) {
+        if (a->getAddr() == b->getAddr()) {
+            return a->getSize() > b->getSize();
+        }
+        return a->getAddr() < b->getAddr();
+    });
 
     std::vector<std::unique_ptr<NativeFunc>> result;
 
@@ -65,8 +63,7 @@ VMPilot::SDK::RegionRefiner::refine(
             uint64_t overlap = current_end - start;
             // Append only the non-overlapping tail of the new region
             if (overlap < this_code.size()) {
-                last_code.insert(last_code.end(),
-                                 this_code.begin() + overlap,
+                last_code.insert(last_code.end(), this_code.begin() + overlap,
                                  this_code.end());
             }
 

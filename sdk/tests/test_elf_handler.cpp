@@ -64,8 +64,7 @@ TEST_F(ELFHandlerX64Test, SymbolTableHasPLTEntries) {
                     has_plt = true;
                     break;
                 }
-            } catch (...) {
-            }
+            } catch (...) {}
         }
     }
     EXPECT_TRUE(has_plt);
@@ -82,8 +81,7 @@ TEST_F(ELFHandlerX64Test, SymbolTableHasGOTEntries) {
                     has_got = true;
                     break;
                 }
-            } catch (...) {
-            }
+            } catch (...) {}
         }
     }
     EXPECT_TRUE(has_got);
@@ -96,9 +94,11 @@ TEST_F(ELFHandlerX64Test, PLTAddrMatchesBeginEndAddr) {
     bool begin_found = false, end_found = false;
     for (const auto& entry : table) {
         auto it = entry.additionalAttributes.find("entry_type");
-        if (it == entry.additionalAttributes.end()) continue;
+        if (it == entry.additionalAttributes.end())
+            continue;
         try {
-            if (std::get<std::string>(it->second) != "PLT") continue;
+            if (std::get<std::string>(it->second) != "PLT")
+                continue;
         } catch (...) {
             continue;
         }
