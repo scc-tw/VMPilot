@@ -34,8 +34,10 @@ add_library(${TARGET_NAME} STATIC ${SRC_FILE})
 
 add_subdirectory(bytecode_compiler)
 add_subdirectory(segmentator)
+add_subdirectory(region_refiner)
 set (LIBS ${LIBS}
     VMPilot_SDK_Bytecode_Compiler
+    VMPilot_SDK_RegionRefiner
     capstone_wrapper
 )
 
