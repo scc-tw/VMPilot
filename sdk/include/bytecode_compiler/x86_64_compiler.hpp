@@ -5,20 +5,10 @@
 
 namespace VMPilot::SDK::BytecodeCompiler {
 
-class X86_64Compiler : public _NotImplementedYet {
+class X86_64Compiler : public CompilerBase {
    public:
-    /**
-         * @brief Compile a script into bytecode.
-         * 
-         * @param script The script to compile.
-         * @return std::vector<uint8_t> The compiled bytecode.
-         */
     std::vector<uint8_t> Compile(const BytecodeCompileRecipe& script) override;
-
-    /**
-         * @brief Construct a new X86_64 Compiler object
-         */
-    X86_64Compiler() : _NotImplementedYet("x86_64") {}
+    X86_64Compiler() : CompilerBase(Arch::X86_64) {}
 };
 
 }  // namespace VMPilot::SDK::BytecodeCompiler

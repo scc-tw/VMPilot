@@ -5,21 +5,15 @@
 using namespace VMPilot::SDK::BytecodeCompiler;
 
 std::unique_ptr<CompilerBase> CompilerFactory::CreateCompiler(
-    const std::string& name) noexcept {
-    if (name == "x86") {
-        return std::make_unique<X86Compiler>();
-    } else if (name == "x86_64") {
-        return std::make_unique<X86_64Compiler>();
-    } else if (name == "arm") {
-        return std::make_unique<_NotImplementedYet>();
-    } else if (name == "arm64") {
-        return std::make_unique<_NotImplementedYet>();
+    Arch arch) noexcept {
+    switch (arch) {
+        case Arch::X86:
+            return std::make_unique<X86Compiler>();
+        case Arch::X86_64:
+            return std::make_unique<X86_64Compiler>();
+        case Arch::ARM:
+        case Arch::ARM64:
+            return nullptr;
     }
     return nullptr;
-}
-
-std::vector<uint8_t> _NotImplementedYet::Compile(
-    [[maybe_unused]] const BytecodeCompileRecipe& script) {
-    throw std::runtime_error(
-        "Not implemented yet, but it is in the future work.");
 }

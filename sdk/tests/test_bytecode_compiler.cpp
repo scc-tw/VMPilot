@@ -5,28 +5,23 @@
 using namespace VMPilot::SDK::BytecodeCompiler;
 
 TEST(CompilerFactory, CreateX86) {
-    auto compiler = CompilerFactory::CreateCompiler("x86");
+    auto compiler = CompilerFactory::CreateCompiler(Arch::X86);
     ASSERT_NE(compiler, nullptr);
-    EXPECT_EQ(compiler->GetName(), "x86");
+    EXPECT_EQ(compiler->GetArch(), Arch::X86);
 }
 
 TEST(CompilerFactory, CreateX86_64) {
-    auto compiler = CompilerFactory::CreateCompiler("x86_64");
+    auto compiler = CompilerFactory::CreateCompiler(Arch::X86_64);
     ASSERT_NE(compiler, nullptr);
-    EXPECT_EQ(compiler->GetName(), "x86_64");
+    EXPECT_EQ(compiler->GetArch(), Arch::X86_64);
 }
 
-TEST(CompilerFactory, CreateArm) {
-    auto compiler = CompilerFactory::CreateCompiler("arm");
-    ASSERT_NE(compiler, nullptr);
-}
-
-TEST(CompilerFactory, CreateUnknown) {
-    auto compiler = CompilerFactory::CreateCompiler("unknown_arch");
+TEST(CompilerFactory, CreateArmReturnsNull) {
+    auto compiler = CompilerFactory::CreateCompiler(Arch::ARM);
     EXPECT_EQ(compiler, nullptr);
 }
 
-TEST(CompilerFactory, CreateEmpty) {
-    auto compiler = CompilerFactory::CreateCompiler("");
+TEST(CompilerFactory, CreateArm64ReturnsNull) {
+    auto compiler = CompilerFactory::CreateCompiler(Arch::ARM64);
     EXPECT_EQ(compiler, nullptr);
 }
