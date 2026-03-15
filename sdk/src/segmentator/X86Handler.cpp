@@ -32,7 +32,7 @@ bool X86Handler::doLoad(const std::vector<uint8_t>& code,
     auto& impl = this->pImpl;
 
     impl->base_addr = base_addr;
-    impl->instructions = impl->cs.disasm(code);
+    impl->instructions = impl->cs.disasm(code, base_addr);
     return !impl->instructions.empty();
 }
 

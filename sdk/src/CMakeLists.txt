@@ -4,21 +4,24 @@ CPMAddPackage(
     GIT_TAG "Release_3.12"
 )
 
-CPMAddPackage(
-    NAME capstone-cpp
-    GITHUB_REPOSITORY "25077667/capstone-cpp"
-    GIT_TAG "0.1.5"
-)
-
 CPMAddPackage("gh:gabime/spdlog@1.14.1")
 
-set (INCLUDE_DIRS 
+# Build capstone from submodule
+set(CAPSTONE_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(CAPSTONE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(CAPSTONE_BUILD_CSTOOL OFF CACHE BOOL "" FORCE)
+add_subdirectory(${CMAKE_SOURCE_DIR}/third_party/capstone
+                 ${CMAKE_BINARY_DIR}/third_party/capstone)
+
+# Build our capstone C++ wrapper
+add_subdirectory(capstone_wrapper)
+
+set (INCLUDE_DIRS
     ${INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
     ${CMAKE_SOURCE_DIR}/common/include
     ${CMAKE_BINARY_DIR}/_deps/elfio-src/
     ${spdlog_SOURCE_DIR}/include
-    ${CAPSTONE_WRAPPER_INCLUDE_DIR}
 )
 
 set (TARGET_NAME VMPilot_SDK_LIB)
@@ -33,7 +36,7 @@ add_subdirectory(bytecode_compiler)
 add_subdirectory(segmentator)
 set (LIBS ${LIBS}
     VMPilot_SDK_Bytecode_Compiler
-    ${CAPSTONE_WRAPPER_LIBRARY}
+    capstone_wrapper
 )
 
 target_link_libraries(${TARGET_NAME} PUBLIC ${LIBS})

@@ -1,3 +1,6 @@
 [submodule "common/crypto"]
 path = common/crypto
 url = ../VMPilot-crypto.git
+[submodule "third_party/capstone"]
+	path = third_party/capstone
+	url = https://github.com/capstone-engine/capstone.git
