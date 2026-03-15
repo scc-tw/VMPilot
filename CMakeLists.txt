@@ -81,6 +81,22 @@ CPMAddPackage("gh:nlohmann/json@3.11.3")
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+# Testing support — only fetch gtest when ENABLE_TESTS is ON
+option(ENABLE_TESTS "Build tests" OFF)
+if (ENABLE_TESTS)
+    include(FetchContent)
+    FetchContent_Declare(
+        googletest
+        GIT_REPOSITORY https://github.com/google/googletest.git
+        GIT_TAG v1.17.0
+    )
+    # Prevent gtest from overriding our compiler/linker options
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+    enable_testing()
+endif()
+
 add_subdirectory(common)
 add_subdirectory(sdk)
 add_subdirectory(loader)
