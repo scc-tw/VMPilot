@@ -18,7 +18,7 @@ class X86Compiler : public CompilerBase {
     /**
          * @brief Construct a new X86 Compiler object
          */
-    X86Compiler() : CompilerBase("x86") {}
+    X86Compiler() : CompilerBase(Arch::X86) {}
 };
 
 }  // namespace VMPilot::SDK::BytecodeCompiler
