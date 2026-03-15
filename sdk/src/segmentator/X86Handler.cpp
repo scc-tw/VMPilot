@@ -1,28 +1,48 @@
 #include <X86Handler.hpp>
+#include <utilities.hpp>
 
 #include <algorithm>
+#include <unordered_map>
 
 #include <capstone.hpp>
+#include <spdlog/spdlog.h>
 
 using namespace VMPilot::SDK::Segmentator;
 
+// Build a lookup table: address -> symbol name
+// Covers direct addresses, PLT entries, and GOT entries
+using AddrToSymbol = std::unordered_map<uint64_t, std::string>;
+
+static AddrToSymbol buildAddrLookup(const NativeSymbolTable& symbols) {
+    AddrToSymbol lookup;
+    for (const auto& entry : symbols) {
+        lookup[entry.address] = entry.name;
+    }
+    return lookup;
+}
+
 struct X86Handler::Impl {
     Capstone::Capstone cs;
-    uint64_t base_addr = -1;
+    AddrToSymbol addr_lookup;
+    uint64_t base_addr = static_cast<uint64_t>(-1);
     std::vector<Capstone::Instruction> instructions;
     std::vector<std::unique_ptr<NativeFunctionBase>> native_functions;
 
-    Impl(Capstone::Capstone&& cs) : cs(std::move(cs)) {}
+    Impl(Capstone::Capstone&& cs, AddrToSymbol&& lookup)
+        : cs(std::move(cs)), addr_lookup(std::move(lookup)) {}
 };
 
-X86Handler::X86Handler(Mode mode)
+X86Handler::X86Handler(Mode mode, const NativeSymbolTable& symbols)
     : ArchHandlerStrategy(Arch::X86, mode),
-      pImpl(make_x86_handler_impl(mode)) {}
+      pImpl(make_x86_handler_impl(mode, symbols)) {}
 
 std::unique_ptr<X86Handler::Impl>
-VMPilot::SDK::Segmentator ::make_x86_handler_impl(Mode mode) {
-    return std::make_unique<X86Handler::Impl>(Capstone::Capstone(
-        Capstone::Arch::X86, static_cast<Capstone::Mode>(mode)));
+VMPilot::SDK::Segmentator::make_x86_handler_impl(
+    Mode mode, const NativeSymbolTable& symbols) {
+    return std::make_unique<X86Handler::Impl>(
+        Capstone::Capstone(Capstone::Arch::X86,
+                           static_cast<Capstone::Mode>(mode)),
+        buildAddrLookup(symbols));
 }
 
 X86Handler::~X86Handler() = default;
@@ -36,20 +56,138 @@ bool X86Handler::doLoad(const std::vector<uint8_t>& code,
     return !impl->instructions.empty();
 }
 
-std::vector<std::unique_ptr<NativeFunctionBase>>
-X86Handler::doGetNativeFunctions() noexcept {
-    auto& native_functions = this->pImpl->native_functions;
-    if (native_functions.empty()) {
-        // TODO: Implement this function
+// Resolve a call/jmp instruction to a symbol name, if any.
+// Handles:
+//   1. Direct call (E8 rel32): operand is IMM -> lookup target address
+//   2. RIP-relative indirect call (FF 15 ...): call [rip+disp] -> compute
+//      effective address (GOT entry) -> lookup
+static const std::string* resolveCallTarget(
+    const Capstone::Instruction& insn, const AddrToSymbol& lookup) {
+    // Case 1: direct call/jmp with immediate operand
+    uint64_t target = insn.getDirectTarget();
+    if (target != 0) {
+        auto it = lookup.find(target);
+        if (it != lookup.end()) {
+            return &it->second;
+        }
     }
 
-    // copy to avoid move
-    std::vector<std::unique_ptr<NativeFunctionBase>> result;
-    std::for_each(
-        native_functions.begin(), native_functions.end(),
-        [&result](const auto& nf) {
+    // Case 2: RIP-relative indirect call/jmp (e.g. -fno-plt)
+    target = insn.getRipRelativeTarget();
+    if (target != 0) {
+        auto it = lookup.find(target);
+        if (it != lookup.end()) {
+            return &it->second;
+        }
+    }
+
+    return nullptr;
+}
+
+std::vector<std::unique_ptr<NativeFunctionBase>>
+X86Handler::doGetNativeFunctions() noexcept {
+    auto& impl = this->pImpl;
+    auto& native_functions = impl->native_functions;
+
+    if (!native_functions.empty()) {
+        // Return cached copy
+        std::vector<std::unique_ptr<NativeFunctionBase>> result;
+        result.reserve(native_functions.size());
+        for (const auto& nf : native_functions) {
             result.push_back(std::make_unique<NativeFunctionBase>(
                 nf->getAddr(), nf->getSize(), nf->getName(), nf->getCode()));
-        });
+        }
+        return result;
+    }
+
+    const auto& begin_sig = VMPilot::Common::BEGIN_VMPILOT_SIGNATURE;
+    const auto& end_sig = VMPilot::Common::END_VMPILOT_SIGNATURE;
+    const auto& instructions = impl->instructions;
+    const auto& lookup = impl->addr_lookup;
+
+    // Scan for pairs of VMPilot_Begin / VMPilot_End calls
+    // Each pair defines a protected region
+    struct Region {
+        size_t begin_idx;  // index of the call VMPilot_Begin instruction
+        size_t end_idx;    // index of the call VMPilot_End instruction
+    };
+    std::vector<Region> regions;
+
+    size_t pending_begin = static_cast<size_t>(-1);
+
+    for (size_t i = 0; i < instructions.size(); ++i) {
+        const auto& insn = instructions[i];
+        if (!insn.isCall()) {
+            continue;
+        }
+
+        const auto* sym = resolveCallTarget(insn, lookup);
+        if (!sym) {
+            continue;
+        }
+
+        if (*sym == begin_sig) {
+            if (pending_begin != static_cast<size_t>(-1)) {
+                spdlog::warn(
+                    "Nested VMPilot_Begin at 0x{:x}, previous begin at 0x{:x}",
+                    insn.address, instructions[pending_begin].address);
+            }
+            pending_begin = i;
+        } else if (*sym == end_sig) {
+            if (pending_begin == static_cast<size_t>(-1)) {
+                spdlog::warn("VMPilot_End at 0x{:x} without matching Begin",
+                             insn.address);
+                continue;
+            }
+            regions.push_back({pending_begin, i});
+            pending_begin = static_cast<size_t>(-1);
+        }
+    }
+
+    if (pending_begin != static_cast<size_t>(-1)) {
+        spdlog::warn("Unmatched VMPilot_Begin at 0x{:x}",
+                     instructions[pending_begin].address);
+    }
+
+    // Extract each region as a NativeFunctionBase
+    for (const auto& region : regions) {
+        const auto& begin_insn = instructions[region.begin_idx];
+        const auto& end_insn = instructions[region.end_idx];
+
+        uint64_t start_addr = begin_insn.address;
+        // Include the VMPilot_End call instruction itself
+        uint64_t end_addr = end_insn.address + end_insn.size;
+        uint64_t size = end_addr - start_addr;
+
+        // Collect the raw bytes for this region
+        std::vector<uint8_t> code;
+        code.reserve(size);
+        for (size_t i = region.begin_idx; i <= region.end_idx; ++i) {
+            const auto& insn = instructions[i];
+            code.insert(code.end(), insn.bytes.begin(), insn.bytes.end());
+        }
+
+        std::string name =
+            "vmpilot_region_0x" +
+            ([&] {
+                char buf[17];
+                snprintf(buf, sizeof(buf), "%lx", start_addr);
+                return std::string(buf);
+            })();
+
+        native_functions.push_back(std::make_unique<NativeFunctionBase>(
+            start_addr, size, std::move(name), std::move(code)));
+
+        spdlog::info("Found protected region: 0x{:x} - 0x{:x} ({} bytes)",
+                     start_addr, end_addr, size);
+    }
+
+    // Return a copy
+    std::vector<std::unique_ptr<NativeFunctionBase>> result;
+    result.reserve(native_functions.size());
+    for (const auto& nf : native_functions) {
+        result.push_back(std::make_unique<NativeFunctionBase>(
+            nf->getAddr(), nf->getSize(), nf->getName(), nf->getCode()));
+    }
     return result;
 }

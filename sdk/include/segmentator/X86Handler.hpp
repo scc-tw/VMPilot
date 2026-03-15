@@ -12,13 +12,14 @@
 namespace VMPilot::SDK::Segmentator {
 class X86Handler : public ArchHandlerStrategy {
    public:
-    X86Handler(Mode mode = Mode::MODE_64);
+    X86Handler(Mode mode, const NativeSymbolTable& symbols);
     virtual ~X86Handler();
 
    private:
     struct Impl;
     std::unique_ptr<Impl> pImpl;
-    friend std::unique_ptr<Impl> make_x86_handler_impl(Mode mode);
+    friend std::unique_ptr<Impl> make_x86_handler_impl(
+        Mode mode, const NativeSymbolTable& symbols);
 
    protected:
     virtual bool doLoad(const std::vector<uint8_t>& code,
@@ -28,7 +29,8 @@ class X86Handler : public ArchHandlerStrategy {
     doGetNativeFunctions() noexcept override;
 };
 
-std::unique_ptr<X86Handler::Impl> make_x86_handler_impl(Mode mode);
+std::unique_ptr<X86Handler::Impl> make_x86_handler_impl(
+    Mode mode, const NativeSymbolTable& symbols);
 
 }  // namespace VMPilot::SDK::Segmentator
 
