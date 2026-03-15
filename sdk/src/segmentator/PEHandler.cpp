@@ -7,6 +7,11 @@
 
 using namespace VMPilot::SDK::Segmentator;
 
+static FileHandlerRegistrar pe_registrar(
+    VMPilot::Common::FileFormat::PE, [](const std::string& filename) {
+        return std::make_unique<PEFileHandlerStrategy>(filename);
+    });
+
 namespace {
 namespace detail {
 constexpr std::uint16_t NT_SHORT_NAME_LEN = 8;

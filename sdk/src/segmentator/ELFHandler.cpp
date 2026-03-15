@@ -13,6 +13,11 @@
 
 using namespace VMPilot::SDK::Segmentator;
 
+static FileHandlerRegistrar elf_registrar(
+    VMPilot::Common::FileFormat::ELF, [](const std::string& filename) {
+        return std::make_unique<ELFFileHandlerStrategy>(filename);
+    });
+
 struct ELFFileHandlerStrategy::Impl {
     ELFIO::elfio reader;
     std::unordered_map<std::string, ELFSectionViewer> section_table;

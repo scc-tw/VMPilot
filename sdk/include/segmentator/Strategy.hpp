@@ -8,8 +8,10 @@
 #include <NativeSymbolTable.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -18,29 +20,17 @@ namespace VMPilot::SDK::Segmentator {
 // Strategy for file handling
 class FileHandlerStrategy {
    protected:
-    /**
-     * @brief Get the begin and end address of the VMPilot signatures.
-     */
     virtual std::pair<uint64_t, uint64_t> doGetBeginEndAddr() noexcept;
-    /**
-     * @brief Get the entire chuck of the .text section.
-     */
     virtual std::vector<uint8_t> doGetTextSection() noexcept;
-
     virtual uint64_t doGetTextBaseAddr() noexcept;
-
     virtual NativeSymbolTable doGetNativeSymbolTable() noexcept;
 
    public:
     virtual ~FileHandlerStrategy() = default;
-    std::pair<uint64_t, uint64_t> getBeginEndAddr() {
-        return doGetBeginEndAddr();
-    }
-    std::vector<uint8_t> getTextSection() { return doGetTextSection(); }
-    uint64_t getTextBaseAddr() { return doGetTextBaseAddr(); }
-    NativeSymbolTable getNativeSymbolTable() {
-        return doGetNativeSymbolTable();
-    }
+    std::pair<uint64_t, uint64_t> getBeginEndAddr();
+    std::vector<uint8_t> getTextSection();
+    uint64_t getTextBaseAddr();
+    NativeSymbolTable getNativeSymbolTable();
 };
 
 // Strategy for architecture handling
@@ -49,49 +39,60 @@ class ArchHandlerStrategy {
     Arch m_arch;
     Mode m_mode;
 
-   protected:
-    /**
-    * @brief Load text code to derived pimpl class
-    * 
-    * @param code The code to load
-    * @param base_addr The base address of the code
-    * @return true if the code is loaded successfully, false otherwise
-    */
     virtual bool doLoad(const std::vector<uint8_t>& code,
                         const uint64_t base_addr);
-
-    /**
-     * @brief Get the native functions from the derived pimpl class
-     * 
-     * @return std::vector<std::unique_ptr<NativeFunctionBase>> The native functions
-     */
     virtual std::vector<std::unique_ptr<NativeFunctionBase>>
     doGetNativeFunctions();
 
    public:
     virtual ~ArchHandlerStrategy() = default;
-    ArchHandlerStrategy() : ArchHandlerStrategy(Arch::X86, Mode::MODE_64) {}
-    ArchHandlerStrategy(Arch arch, Mode mode) : m_arch(arch), m_mode(mode) {}
+    ArchHandlerStrategy();
+    ArchHandlerStrategy(Arch arch, Mode mode);
 
-    /**
-     * @brief Load text code to derived pimpl class
-     * 
-     * @param code The code to load
-     * @param base_addr The base address of the code
-     * @return true if the code is loaded successfully, false otherwise
-     */
-    bool Load(const std::vector<uint8_t>& code, const uint64_t base_addr) {
-        return doLoad(code, base_addr);
-    }
+    bool Load(const std::vector<uint8_t>& code, const uint64_t base_addr);
+    std::vector<std::unique_ptr<NativeFunctionBase>> getNativeFunctions();
+};
 
-    /**
-     * @brief Get the native functions from the derived pimpl class
-     * 
-     * @return std::vector<std::unique_ptr<NativeFunctionBase>> The native functions
-     */
-    std::vector<std::unique_ptr<NativeFunctionBase>> getNativeFunctions() {
-        return doGetNativeFunctions();
-    }
+
+using FileHandlerFactory =
+    std::function<std::unique_ptr<FileHandlerStrategy>(const std::string&)>;
+using ArchHandlerFactory =
+    std::function<std::unique_ptr<ArchHandlerStrategy>(
+        VMPilot::Common::FileMode, const NativeSymbolTable&)>;
+
+class HandlerRegistry {
+   public:
+    static HandlerRegistry& instance();
+
+    void registerFileHandler(VMPilot::Common::FileFormat format,
+                             FileHandlerFactory factory);
+    void registerArchHandler(VMPilot::Common::FileArch arch,
+                             ArchHandlerFactory factory);
+
+    std::unique_ptr<FileHandlerStrategy> createFileHandler(
+        VMPilot::Common::FileFormat format,
+        const std::string& filename) const;
+    std::unique_ptr<ArchHandlerStrategy> createArchHandler(
+        VMPilot::Common::FileArch arch, VMPilot::Common::FileMode mode,
+        const NativeSymbolTable& symbols) const;
+
+   private:
+    HandlerRegistry() = default;
+    std::unordered_map<VMPilot::Common::FileFormat, FileHandlerFactory>
+        file_handlers_;
+    std::unordered_map<VMPilot::Common::FileArch, ArchHandlerFactory>
+        arch_handlers_;
+};
+
+// Helper for self-registration from handler .cpp files
+struct FileHandlerRegistrar {
+    FileHandlerRegistrar(VMPilot::Common::FileFormat format,
+                         FileHandlerFactory factory);
+};
+
+struct ArchHandlerRegistrar {
+    ArchHandlerRegistrar(VMPilot::Common::FileArch arch,
+                         ArchHandlerFactory factory);
 };
 
 }  // namespace VMPilot::SDK::Segmentator

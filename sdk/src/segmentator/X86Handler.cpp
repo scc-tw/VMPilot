@@ -9,6 +9,12 @@
 
 using namespace VMPilot::SDK::Segmentator;
 
+static ArchHandlerRegistrar x86_registrar(
+    VMPilot::Common::FileArch::X86,
+    [](VMPilot::Common::FileMode mode, const NativeSymbolTable& symbols) {
+        return std::make_unique<X86Handler>(mode, symbols);
+    });
+
 // Build a lookup table: address -> symbol name
 // Covers direct addresses, PLT entries, and GOT entries
 using AddrToSymbol = std::unordered_map<uint64_t, std::string>;
