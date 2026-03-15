@@ -30,15 +30,16 @@ static const std::unordered_map<
          }},
 };
 
-// architecture strategy table, ArchHandlerStrategy
+// Architecture strategy table now takes mode + symbol table
 static const std::unordered_map<
     VMPilot::Common::FileArch,
     std::function<std::unique_ptr<ArchHandlerStrategy>(
-        VMPilot::Common::FileMode)>>
+        VMPilot::Common::FileMode, const NativeSymbolTable&)>>
     arch_strategy_table = {
         {VMPilot::Common::FileArch::X86,
-         [](VMPilot::Common::FileMode mode) {
-             return std::make_unique<X86Handler>(mode);
+         [](VMPilot::Common::FileMode mode,
+            const NativeSymbolTable& symbols) {
+             return std::make_unique<X86Handler>(mode, symbols);
          }},
 };
 
@@ -64,10 +65,17 @@ std::unique_ptr<Segmentator> VMPilot::SDK::Segmentator::create_segmentator(
                       static_cast<uint8_t>(format));
     }
 
+    // Build symbol table from file handler, then create arch handler
+    NativeSymbolTable symbols;
+    if (segmentator->m_file_handler) {
+        symbols = segmentator->m_file_handler->getNativeSymbolTable();
+    }
+
     const auto& arch = segmentator->m_metadata.arch;
     auto it2 = detail::arch_strategy_table.find(arch);
     if (it2 != detail::arch_strategy_table.end()) {
-        segmentator->m_arch_handler = it2->second(segmentator->m_metadata.mode);
+        segmentator->m_arch_handler =
+            it2->second(segmentator->m_metadata.mode, symbols);
     } else {
         spdlog::error("Unsupported architecture: {}",
                       static_cast<uint8_t>(arch));
@@ -83,21 +91,13 @@ void VMPilot::SDK::Segmentator::Segmentator::segmentation() noexcept {
         return;
     }
 
-    const auto& [begin_addr, end_addr] = m_file_handler->getBeginEndAddr();
     const auto text_section = m_file_handler->getTextSection();
     const auto text_base_addr = m_file_handler->getTextBaseAddr();
-    const auto native_symbol_table = m_file_handler->getNativeSymbolTable();
 
-    if (begin_addr == static_cast<uint64_t>(-1) ||
-        end_addr == static_cast<uint64_t>(-1) ||
-        text_base_addr == static_cast<uint64_t>(-1) || text_section.empty() ||
-        native_symbol_table.empty()) {
+    if (text_base_addr == static_cast<uint64_t>(-1) || text_section.empty()) {
         spdlog::error(
-            "Segmentation failed: begin_addr: {}, end_addr: {}, "
-            "text_base_addr: {}, text_section size: {}, native_symbol_table "
-            "size: {}",
-            begin_addr, end_addr, text_base_addr, text_section.empty(),
-            native_symbol_table.empty());
+            "Segmentation failed: text_base_addr: {}, text_section size: {}",
+            text_base_addr, text_section.size());
         return;
     }
 
@@ -112,5 +112,6 @@ void VMPilot::SDK::Segmentator::Segmentator::segmentation() noexcept {
         return;
     }
 
-    spdlog::info("Segmentation succeeded");
+    spdlog::info("Segmentation succeeded: found {} protected regions",
+                 native_functions.size());
 }
