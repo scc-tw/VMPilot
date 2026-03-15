@@ -106,13 +106,13 @@ using MetaMode = uint32_t;
     ((static_cast<uint16_t>(arch) << 16) | (endian << 8) | bits)
 
 static const std::unordered_map<MetaMode, FileMode> mode_table = {
-    {MODE(FileArch::ARM, LITTLE_ENDIAN, 32), FileMode::MODE_ARM},
-    {MODE(FileArch::ARM64, LITTLE_ENDIAN, 64), FileMode::MODE_ARM},
-    {MODE(FileArch::X86, LITTLE_ENDIAN, 16), FileMode::MODE_16},
-    {MODE(FileArch::X86, LITTLE_ENDIAN, 32), FileMode::MODE_32},
-    {MODE(FileArch::X86, LITTLE_ENDIAN, 64), FileMode::MODE_64},
-    {MODE(FileArch::RISCV, LITTLE_ENDIAN, 32), FileMode::MODE_RISCV32},
-    {MODE(FileArch::RISCV, LITTLE_ENDIAN, 64), FileMode::MODE_RISCV64},
+    {MODE(FileArch::ARM, LittleEndian, 32), FileMode::MODE_ARM},
+    {MODE(FileArch::ARM64, LittleEndian, 64), FileMode::MODE_ARM},
+    {MODE(FileArch::X86, LittleEndian, 16), FileMode::MODE_16},
+    {MODE(FileArch::X86, LittleEndian, 32), FileMode::MODE_32},
+    {MODE(FileArch::X86, LittleEndian, 64), FileMode::MODE_64},
+    {MODE(FileArch::RISCV, LittleEndian, 32), FileMode::MODE_RISCV32},
+    {MODE(FileArch::RISCV, LittleEndian, 64), FileMode::MODE_RISCV64},
 
     // TODO: complete this table
 };
@@ -314,7 +314,7 @@ FileArch detail::get_file_arch_elf(const std::string& filename) {
             {0x32, VMPilot::Common::FileArch::TMS320C64X},
             {0x35, VMPilot::Common::FileArch::M680X},
             {0x3B, VMPilot::Common::FileArch::EVM},
-            {0x3E, VMPilot::Common::FileArch::MOS65XX},
+            {0x3E, VMPilot::Common::FileArch::X86},  // EM_X86_64
             {0xF3, VMPilot::Common::FileArch::RISCV},
             {0x28, VMPilot::Common::FileArch::SH},
             {0x2B, VMPilot::Common::FileArch::TRICORE},
@@ -331,8 +331,10 @@ FileArch detail::get_file_arch_elf(const std::string& filename) {
 FileMode detail::get_file_mode_elf(const std::string& filename) {
     const auto& elf_header = get_elf_header(filename);
 
+    // e_ident[5]: 1=ELFDATA2LSB (little-endian), 2=ELFDATA2MSB (big-endian)
+    // e_ident[4]: 1=ELFCLASS32, 2=ELFCLASS64
     const auto& key = file_mode_table::lookup_mode(
-        get_file_arch_elf(filename), elf_header.elf32.e_ident[5] == 1,
+        get_file_arch_elf(filename), elf_header.elf32.e_ident[5] == 2,
         elf_header.elf32.e_ident[4] == 2 ? 64 : 32);
 
     auto it = file_mode_table::mode_table.find(key);
