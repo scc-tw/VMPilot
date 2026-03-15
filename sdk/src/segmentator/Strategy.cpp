@@ -4,7 +4,10 @@
 #include <utility>
 
 #include <spdlog/spdlog.h>
+
 using namespace VMPilot::SDK::Segmentator;
+
+// --- FileHandlerStrategy ---
 
 std::pair<uint64_t, uint64_t>
 FileHandlerStrategy::doGetBeginEndAddr() noexcept {
@@ -14,7 +17,7 @@ FileHandlerStrategy::doGetBeginEndAddr() noexcept {
 
 std::vector<uint8_t> FileHandlerStrategy::doGetTextSection() noexcept {
     spdlog::error("FileHandlerStrategy::doGetTextSection not implemented");
-    return std::vector<uint8_t>();
+    return {};
 }
 
 uint64_t FileHandlerStrategy::doGetTextBaseAddr() noexcept {
@@ -25,23 +28,100 @@ uint64_t FileHandlerStrategy::doGetTextBaseAddr() noexcept {
 NativeSymbolTable FileHandlerStrategy::doGetNativeSymbolTable() noexcept {
     spdlog::error(
         "FileHandlerStrategy::doGetNativeSymbolTable not implemented");
-    return NativeSymbolTable();
+    return {};
 }
+
+std::pair<uint64_t, uint64_t> FileHandlerStrategy::getBeginEndAddr() {
+    return doGetBeginEndAddr();
+}
+
+std::vector<uint8_t> FileHandlerStrategy::getTextSection() {
+    return doGetTextSection();
+}
+
+uint64_t FileHandlerStrategy::getTextBaseAddr() {
+    return doGetTextBaseAddr();
+}
+
+NativeSymbolTable FileHandlerStrategy::getNativeSymbolTable() {
+    return doGetNativeSymbolTable();
+}
+
+// --- ArchHandlerStrategy ---
+
+ArchHandlerStrategy::ArchHandlerStrategy()
+    : ArchHandlerStrategy(Arch::X86, Mode::MODE_64) {}
+
+ArchHandlerStrategy::ArchHandlerStrategy(Arch arch, Mode mode)
+    : m_arch(arch), m_mode(mode) {}
 
 bool ArchHandlerStrategy::doLoad(const std::vector<uint8_t>& code,
                                  const uint64_t base_addr) {
-    // Emitting error message, not implemented
     spdlog::error(
         "ArchHandlerStrategy::doLoad not implemented: code size: {}, "
         "base_addr: {}",
         code.size(), base_addr);
-
     return false;
 }
 
-// doGetNativeFunctions
 std::vector<std::unique_ptr<NativeFunctionBase>>
 ArchHandlerStrategy::doGetNativeFunctions() {
     spdlog::error("ArchHandlerStrategy::doGetNativeFunctions not implemented");
-    return std::vector<std::unique_ptr<NativeFunctionBase>>();
+    return {};
+}
+
+bool ArchHandlerStrategy::Load(const std::vector<uint8_t>& code,
+                               const uint64_t base_addr) {
+    return doLoad(code, base_addr);
+}
+
+std::vector<std::unique_ptr<NativeFunctionBase>>
+ArchHandlerStrategy::getNativeFunctions() {
+    return doGetNativeFunctions();
+}
+
+// --- HandlerRegistry ---
+
+HandlerRegistry& HandlerRegistry::instance() {
+    static HandlerRegistry reg;
+    return reg;
+}
+
+void HandlerRegistry::registerFileHandler(VMPilot::Common::FileFormat format,
+                                          FileHandlerFactory factory) {
+    file_handlers_[format] = std::move(factory);
+}
+
+void HandlerRegistry::registerArchHandler(VMPilot::Common::FileArch arch,
+                                          ArchHandlerFactory factory) {
+    arch_handlers_[arch] = std::move(factory);
+}
+
+std::unique_ptr<FileHandlerStrategy> HandlerRegistry::createFileHandler(
+    VMPilot::Common::FileFormat format,
+    const std::string& filename) const {
+    auto it = file_handlers_.find(format);
+    if (it != file_handlers_.end()) return it->second(filename);
+    return nullptr;
+}
+
+std::unique_ptr<ArchHandlerStrategy> HandlerRegistry::createArchHandler(
+    VMPilot::Common::FileArch arch, VMPilot::Common::FileMode mode,
+    const NativeSymbolTable& symbols) const {
+    auto it = arch_handlers_.find(arch);
+    if (it != arch_handlers_.end()) return it->second(mode, symbols);
+    return nullptr;
+}
+
+// --- Registrar helpers ---
+
+FileHandlerRegistrar::FileHandlerRegistrar(VMPilot::Common::FileFormat format,
+                                           FileHandlerFactory factory) {
+    HandlerRegistry::instance().registerFileHandler(format,
+                                                    std::move(factory));
+}
+
+ArchHandlerRegistrar::ArchHandlerRegistrar(VMPilot::Common::FileArch arch,
+                                           ArchHandlerFactory factory) {
+    HandlerRegistry::instance().registerArchHandler(arch, std::move(factory));
 }

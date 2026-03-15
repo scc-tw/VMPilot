@@ -7,6 +7,11 @@
 
 using namespace VMPilot::SDK::Segmentator;
 
+static FileHandlerRegistrar macho_registrar(
+    VMPilot::Common::FileFormat::MachO, [](const std::string& filename) {
+        return std::make_unique<MachOFileHandlerStrategy>(filename);
+    });
+
 namespace {
 namespace detail {
 struct MachOParser {

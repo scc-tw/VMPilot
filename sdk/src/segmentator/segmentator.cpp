@@ -1,49 +1,10 @@
 #include <segmentator.hpp>
 
-#include <ELFHandler.hpp>
-#include <MachOHandler.hpp>
-#include <PEHandler.hpp>
-#include <X86Handler.hpp>
 #include <file_type_parser.hpp>
 
 #include <spdlog/spdlog.h>
 
 using namespace VMPilot::SDK::Segmentator;
-
-namespace {
-namespace detail {
-static const std::unordered_map<
-    VMPilot::Common::FileFormat,
-    std::function<std::unique_ptr<FileHandlerStrategy>(const std::string&)>>
-    file_strategy_table = {
-        {VMPilot::Common::FileFormat::ELF,
-         [](const std::string& filename) {
-             return std::make_unique<ELFFileHandlerStrategy>(filename);
-         }},
-        {VMPilot::Common::FileFormat::PE,
-         [](const std::string& filename) {
-             return std::make_unique<PEFileHandlerStrategy>(filename);
-         }},
-        {VMPilot::Common::FileFormat::MachO,
-         [](const std::string& filename) {
-             return std::make_unique<MachOFileHandlerStrategy>(filename);
-         }},
-};
-
-// Architecture strategy table now takes mode + symbol table
-static const std::unordered_map<
-    VMPilot::Common::FileArch,
-    std::function<std::unique_ptr<ArchHandlerStrategy>(
-        VMPilot::Common::FileMode, const NativeSymbolTable&)>>
-    arch_strategy_table = {
-        {VMPilot::Common::FileArch::X86,
-         [](VMPilot::Common::FileMode mode, const NativeSymbolTable& symbols) {
-             return std::make_unique<X86Handler>(mode, symbols);
-         }},
-};
-
-}  // namespace detail
-}  // namespace
 
 std::unique_ptr<Segmentator> VMPilot::SDK::Segmentator::create_segmentator(
     const std::string& filename) noexcept {
@@ -55,13 +16,13 @@ std::unique_ptr<Segmentator> VMPilot::SDK::Segmentator::create_segmentator(
         spdlog::error("Error creating segmentator: {}", e.what());
     }
 
-    const auto& format = segmentator->m_metadata.format;
-    auto it = detail::file_strategy_table.find(format);
-    if (it != detail::file_strategy_table.end()) {
-        segmentator->m_file_handler = it->second(filename);
-    } else {
+    const auto& registry = HandlerRegistry::instance();
+
+    segmentator->m_file_handler =
+        registry.createFileHandler(segmentator->m_metadata.format, filename);
+    if (!segmentator->m_file_handler) {
         spdlog::error("Unsupported file format: {}",
-                      static_cast<uint8_t>(format));
+                      static_cast<uint8_t>(segmentator->m_metadata.format));
     }
 
     // Build symbol table from file handler, then create arch handler
@@ -70,14 +31,11 @@ std::unique_ptr<Segmentator> VMPilot::SDK::Segmentator::create_segmentator(
         symbols = segmentator->m_file_handler->getNativeSymbolTable();
     }
 
-    const auto& arch = segmentator->m_metadata.arch;
-    auto it2 = detail::arch_strategy_table.find(arch);
-    if (it2 != detail::arch_strategy_table.end()) {
-        segmentator->m_arch_handler =
-            it2->second(segmentator->m_metadata.mode, symbols);
-    } else {
+    segmentator->m_arch_handler = registry.createArchHandler(
+        segmentator->m_metadata.arch, segmentator->m_metadata.mode, symbols);
+    if (!segmentator->m_arch_handler) {
         spdlog::error("Unsupported architecture: {}",
-                      static_cast<uint8_t>(arch));
+                      static_cast<uint8_t>(segmentator->m_metadata.arch));
     }
 
     return segmentator;
