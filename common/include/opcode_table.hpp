@@ -40,9 +40,9 @@ using OID_to_OI = std::unordered_map<OID, OI>;
 class Opcode_table {
    public:
     Opcode_table() = default;
-    Opcode_table(const std::unordered_map<OI, RealOpcode>& t_) : table(t_){};
+    Opcode_table(const std::unordered_map<OI, RealOpcode>& t_) : table(t_) {};
     Opcode_table(std::unordered_map<OI, RealOpcode>&& t_)
-        : table(std::move(t_)){};
+        : table(std::move(t_)) {};
 
     [[nodiscard]] RealOpcode find(OI oi) const;
 

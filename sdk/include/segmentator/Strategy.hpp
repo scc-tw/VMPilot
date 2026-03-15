@@ -38,7 +38,9 @@ class FileHandlerStrategy {
     }
     std::vector<uint8_t> getTextSection() { return doGetTextSection(); }
     uint64_t getTextBaseAddr() { return doGetTextBaseAddr(); }
-    NativeSymbolTable getNativeSymbolTable() { return doGetNativeSymbolTable(); }
+    NativeSymbolTable getNativeSymbolTable() {
+        return doGetNativeSymbolTable();
+    }
 };
 
 // Strategy for architecture handling

@@ -23,7 +23,8 @@ uint64_t FileHandlerStrategy::doGetTextBaseAddr() noexcept {
 }
 
 NativeSymbolTable FileHandlerStrategy::doGetNativeSymbolTable() noexcept {
-    spdlog::error("FileHandlerStrategy::doGetNativeSymbolTable not implemented");
+    spdlog::error(
+        "FileHandlerStrategy::doGetNativeSymbolTable not implemented");
     return NativeSymbolTable();
 }
 

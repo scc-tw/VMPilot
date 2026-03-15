@@ -37,9 +37,8 @@ void VMPilot::Common::Instruction::decrypt(Instruction_t& inst,
         padded_key.resize(32);
 
     // Decrypt the instruction
-    const auto decrypted_data =
-        VMPilot::Crypto::Decrypt_AES_256_CBC_PKCS7(
-            std::vector<uint8_t>(data.begin(), data.end()), padded_key);
+    const auto decrypted_data = VMPilot::Crypto::Decrypt_AES_256_CBC_PKCS7(
+        std::vector<uint8_t>(data.begin(), data.end()), padded_key);
     ::memcpy(&inst, decrypted_data.data(), sizeof(Instruction_t));
 
     // Update the checksum
@@ -70,9 +69,9 @@ Hash_val_t detail::Hash(const Instruction_t& inst) noexcept {
     std::string salt = std::to_string(inst.nounce);
 
     // Hash the data
-    const auto& hash_str = VMPilot::Crypto::SHA256(
-        std::vector<uint8_t>(data.begin(), data.end()),
-        std::vector<uint8_t>(salt.begin(), salt.end()));
+    const auto& hash_str =
+        VMPilot::Crypto::SHA256(std::vector<uint8_t>(data.begin(), data.end()),
+                                std::vector<uint8_t>(salt.begin(), salt.end()));
 
     // hash that string
     return std::hash<std::string>{}(

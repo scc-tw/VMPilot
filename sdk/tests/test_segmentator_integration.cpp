@@ -92,8 +92,7 @@ TEST_F(SegmentatorIntegrationX64, RegionsDontOverlap) {
             uint64_t b_end = regions[j]->getAddr() + regions[j]->getSize();
             // Either a ends before b starts, or b ends before a starts
             bool no_overlap =
-                (a_end <= b_start) ||
-                (b_end <= regions[i]->getAddr());
+                (a_end <= b_start) || (b_end <= regions[i]->getAddr());
             EXPECT_TRUE(no_overlap)
                 << "Regions overlap: [" << std::hex << regions[i]->getAddr()
                 << ", " << a_end << ") and [" << b_start << ", " << b_end

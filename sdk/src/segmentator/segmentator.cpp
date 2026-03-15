@@ -37,8 +37,7 @@ static const std::unordered_map<
         VMPilot::Common::FileMode, const NativeSymbolTable&)>>
     arch_strategy_table = {
         {VMPilot::Common::FileArch::X86,
-         [](VMPilot::Common::FileMode mode,
-            const NativeSymbolTable& symbols) {
+         [](VMPilot::Common::FileMode mode, const NativeSymbolTable& symbols) {
              return std::make_unique<X86Handler>(mode, symbols);
          }},
 };

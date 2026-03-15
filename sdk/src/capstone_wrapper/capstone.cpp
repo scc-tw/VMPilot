@@ -3,8 +3,8 @@
 #include <capstone/capstone.h>
 #include <capstone/x86.h>
 
-#include <stdexcept>
 #include <algorithm>
+#include <stdexcept>
 
 namespace Capstone {
 
@@ -44,8 +44,8 @@ uint64_t Instruction::getRipRelativeTarget() const noexcept {
         operands[0].mem.isRipRelative()) {
         // RIP-relative: effective addr = next instruction addr + displacement
         // next instruction addr = this instruction's address + size
-        return static_cast<uint64_t>(
-            static_cast<int64_t>(address + size) + operands[0].mem.disp);
+        return static_cast<uint64_t>(static_cast<int64_t>(address + size) +
+                                     operands[0].mem.disp);
     }
     return 0;
 }
@@ -54,24 +54,42 @@ uint64_t Instruction::getRipRelativeTarget() const noexcept {
 
 static cs_arch toCSArch(Arch arch) {
     switch (arch) {
-        case Arch::ARM:    return CS_ARCH_ARM;
-        case Arch::ARM64:  return CS_ARCH_ARM64;
-        case Arch::MIPS:   return CS_ARCH_MIPS;
-        case Arch::X86:    return CS_ARCH_X86;
-        case Arch::PPC:    return CS_ARCH_PPC;
-        case Arch::SPARC:  return CS_ARCH_SPARC;
-        case Arch::SYSZ:   return CS_ARCH_SYSZ;
-        case Arch::XCORE:  return CS_ARCH_XCORE;
-        case Arch::M68K:   return CS_ARCH_M68K;
-        case Arch::TMS320C64X: return CS_ARCH_TMS320C64X;
-        case Arch::M680X:  return CS_ARCH_M680X;
-        case Arch::EVM:    return CS_ARCH_EVM;
-        case Arch::WASM:   return CS_ARCH_WASM;
-        case Arch::BPF:    return CS_ARCH_BPF;
-        case Arch::RISCV:  return CS_ARCH_RISCV;
-        case Arch::SH:     return CS_ARCH_SH;
-        case Arch::TRICORE: return CS_ARCH_TRICORE;
-        default:           return CS_ARCH_X86;
+        case Arch::ARM:
+            return CS_ARCH_ARM;
+        case Arch::ARM64:
+            return CS_ARCH_ARM64;
+        case Arch::MIPS:
+            return CS_ARCH_MIPS;
+        case Arch::X86:
+            return CS_ARCH_X86;
+        case Arch::PPC:
+            return CS_ARCH_PPC;
+        case Arch::SPARC:
+            return CS_ARCH_SPARC;
+        case Arch::SYSZ:
+            return CS_ARCH_SYSZ;
+        case Arch::XCORE:
+            return CS_ARCH_XCORE;
+        case Arch::M68K:
+            return CS_ARCH_M68K;
+        case Arch::TMS320C64X:
+            return CS_ARCH_TMS320C64X;
+        case Arch::M680X:
+            return CS_ARCH_M680X;
+        case Arch::EVM:
+            return CS_ARCH_EVM;
+        case Arch::WASM:
+            return CS_ARCH_WASM;
+        case Arch::BPF:
+            return CS_ARCH_BPF;
+        case Arch::RISCV:
+            return CS_ARCH_RISCV;
+        case Arch::SH:
+            return CS_ARCH_SH;
+        case Arch::TRICORE:
+            return CS_ARCH_TRICORE;
+        default:
+            return CS_ARCH_X86;
     }
 }
 
