@@ -25,9 +25,22 @@ uint64_t FileHandlerStrategy::doGetTextBaseAddr() noexcept {
     return -1;
 }
 
-NativeSymbolTable FileHandlerStrategy::doGetNativeSymbolTable() noexcept {
+NativeSymbolTable FileHandlerStrategy::doGetSymbols() noexcept {
+    spdlog::error("FileHandlerStrategy::doGetSymbols not implemented");
+    return {};
+}
+
+std::vector<CallTarget>
+FileHandlerStrategy::doGetDirectCallTargets() noexcept {
     spdlog::error(
-        "FileHandlerStrategy::doGetNativeSymbolTable not implemented");
+        "FileHandlerStrategy::doGetDirectCallTargets not implemented");
+    return {};
+}
+
+std::vector<CallTarget>
+FileHandlerStrategy::doGetIndirectCallTargets() noexcept {
+    spdlog::error(
+        "FileHandlerStrategy::doGetIndirectCallTargets not implemented");
     return {};
 }
 
@@ -44,7 +57,35 @@ uint64_t FileHandlerStrategy::getTextBaseAddr() {
 }
 
 NativeSymbolTable FileHandlerStrategy::getNativeSymbolTable() {
-    return doGetNativeSymbolTable();
+    NativeSymbolTable table;
+
+    for (auto& sym : doGetSymbols()) {
+        table.push_back(std::move(sym));
+    }
+
+    for (auto& target : doGetDirectCallTargets()) {
+        NativeSymbolTableEntry entry;
+        entry.name = std::move(target.name);
+        entry.address = target.address;
+        entry.size = target.size;
+        entry.type = SymbolType::FUNC;
+        entry.isGlobal = true;
+        entry.setAttribute("entry_type", std::string("direct"));
+        table.push_back(std::move(entry));
+    }
+
+    for (auto& target : doGetIndirectCallTargets()) {
+        NativeSymbolTableEntry entry;
+        entry.name = std::move(target.name);
+        entry.address = target.address;
+        entry.size = target.size;
+        entry.type = SymbolType::OBJECT;
+        entry.isGlobal = true;
+        entry.setAttribute("entry_type", std::string("indirect"));
+        table.push_back(std::move(entry));
+    }
+
+    return table;
 }
 
 // --- ArchHandlerStrategy ---

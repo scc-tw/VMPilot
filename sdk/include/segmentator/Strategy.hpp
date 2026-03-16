@@ -17,19 +17,41 @@
 
 namespace VMPilot::SDK::Segmentator {
 
+/// Format-neutral representation of a callable target address
+/// (ELF PLT entry, PE IAT thunk, Mach-O __stub, or GOT/IAT pointer)
+struct CallTarget {
+    std::string name;
+    uint64_t address;
+    uint64_t size;
+};
+
 // Strategy for file handling
 class FileHandlerStrategy {
    protected:
     virtual std::pair<uint64_t, uint64_t> doGetBeginEndAddr() noexcept;
     virtual std::vector<uint8_t> doGetTextSection() noexcept;
     virtual uint64_t doGetTextBaseAddr() noexcept;
-    virtual NativeSymbolTable doGetNativeSymbolTable() noexcept;
+
+    /// Collect function symbols from the binary
+    /// (ELF: .dynsym, PE: export table, Mach-O: LC_SYMTAB)
+    virtual NativeSymbolTable doGetSymbols() noexcept;
+
+    /// Collect direct call stub addresses that map to a symbol
+    /// (ELF: PLT entries, PE: IAT thunks, Mach-O: __stubs)
+    virtual std::vector<CallTarget> doGetDirectCallTargets() noexcept;
+
+    /// Collect indirect pointer-table addresses that map to a symbol
+    /// (ELF: GOT entries, PE: IAT entries, Mach-O: __got / __la_symbol_ptr)
+    virtual std::vector<CallTarget> doGetIndirectCallTargets() noexcept;
 
    public:
     virtual ~FileHandlerStrategy() = default;
     std::pair<uint64_t, uint64_t> getBeginEndAddr();
     std::vector<uint8_t> getTextSection();
     uint64_t getTextBaseAddr();
+
+    /// Assemble a complete symbol table from the three sources above.
+    /// Not virtual — subclasses override doGetSymbols/Direct/Indirect instead.
     NativeSymbolTable getNativeSymbolTable();
 };
 
