@@ -147,7 +147,7 @@ ARM64Handler::doGetNativeFunctions() noexcept {
 
         std::string name = "vmpilot_region_0x" + ([&] {
                                char buf[17];
-                               snprintf(buf, sizeof(buf), "%lx", start_addr);
+                               snprintf(buf, sizeof(buf), "%llx", static_cast<unsigned long long>(start_addr));
                                return std::string(buf);
                            })();
 

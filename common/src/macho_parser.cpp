@@ -11,7 +11,7 @@ namespace VMPilot::Common::MachO {
 namespace raw {
 
 constexpr uint32_t MH_MAGIC_64 = 0xFEEDFACF;
-constexpr uint32_t MH_CIGAM_64 = 0xCFFAEDFE;
+[[maybe_unused]] constexpr uint32_t MH_CIGAM_64 = 0xCFFAEDFE;
 
 constexpr uint32_t LC_SEGMENT_64 = 0x19;
 constexpr uint32_t LC_SYMTAB = 0x02;

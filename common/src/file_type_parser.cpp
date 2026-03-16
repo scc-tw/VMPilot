@@ -97,7 +97,7 @@ namespace file_mode_table {
 using Endian = bool;   // true for big endian, false for little endian
 using Bits = uint8_t;  // 16, 32 or 64
 constexpr auto LittleEndian = false;
-constexpr auto BigEndian = true;
+[[maybe_unused]] constexpr auto BigEndian = true;
 
 // (FileArch (uint16_t)) | (Endinaness (uint8_t)) | (Bits (uint8_t))
 using MetaMode = uint32_t;
