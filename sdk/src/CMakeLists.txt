@@ -4,7 +4,7 @@ CPMAddPackage(
     GIT_TAG "Release_3.12"
 )
 
-CPMAddPackage("gh:gabime/spdlog@1.14.1")
+CPMAddPackage("gh:gabime/spdlog@1.17.0")
 
 # Build capstone from submodule
 set(CAPSTONE_BUILD_SHARED OFF CACHE BOOL "" FORCE)
