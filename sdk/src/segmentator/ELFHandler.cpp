@@ -109,56 +109,70 @@ ELFFileHandlerStrategy::buildRelocationMap() noexcept {
 NativeSymbolTable ELFFileHandlerStrategy::doGetSymbols() noexcept {
     NativeSymbolTable table;
 
-    const auto& dynsym_it = pImpl->section_table.find(".dynsym");
-    if (dynsym_it == pImpl->section_table.end()) {
-        spdlog::error("Could not find .dynsym section");
-        return table;
-    }
+    // Read symbols from a given section into |table|.
+    // .dynsym covers dynamically-linked imports; .symtab covers everything
+    // including statically-linked library symbols.  We try both so that
+    // far-calls resolved through PLT *and* direct calls into static code
+    // are both discoverable.
+    auto readSymbolSection = [&](const char* section_name) {
+        const auto& it = pImpl->section_table.find(section_name);
+        if (it == pImpl->section_table.end()) return;
 
-    auto dynsym_sec = dynsym_it->second.getSection();
-    if (!dynsym_sec) {
-        return table;
-    }
+        auto sec = it->second.getSection();
+        if (!sec) return;
 
-    ELFIO::elfio& reader = pImpl->reader;  // NOLINT
-    ELFIO::symbol_section_accessor accessor(reader, dynsym_sec);
-    const auto count = accessor.get_symbols_num();
+        ELFIO::elfio& reader = pImpl->reader;  // NOLINT
+        ELFIO::symbol_section_accessor accessor(reader, sec);
+        const auto count = accessor.get_symbols_num();
 
-    for (size_t i = 0; i < count; ++i) {
-        std::string name;
-        ELFIO::Elf64_Addr value;
-        ELFIO::Elf_Xword sym_size;
-        unsigned char bind;
-        unsigned char type;
-        ELFIO::Elf_Half section_index;
-        unsigned char other;
+        for (size_t i = 0; i < count; ++i) {
+            std::string name;
+            ELFIO::Elf64_Addr value;
+            ELFIO::Elf_Xword sym_size;
+            unsigned char bind;
+            unsigned char type;
+            ELFIO::Elf_Half section_index;
+            unsigned char other;
 
-        if (!accessor.get_symbol(i, name, value, sym_size, bind, type,
-                                 section_index, other)) {
-            continue;
+            if (!accessor.get_symbol(i, name, value, sym_size, bind, type,
+                                     section_index, other)) {
+                continue;
+            }
+
+            if (name.empty() || value == 0) {
+                continue;
+            }
+
+            SymbolType sym_type = SymbolType::NOTYPE;
+            if (type == ELFIO::STT_FUNC)
+                sym_type = SymbolType::FUNC;
+            else if (type == ELFIO::STT_OBJECT)
+                sym_type = SymbolType::OBJECT;
+            else if (type == ELFIO::STT_SECTION)
+                sym_type = SymbolType::SECTION;
+            else if (type == ELFIO::STT_FILE)
+                sym_type = SymbolType::FILE;
+
+            NativeSymbolTableEntry entry;
+            entry.name = name;
+            entry.address = value;
+            entry.size = sym_size;
+            entry.type = sym_type;
+            entry.isGlobal =
+                (bind == ELFIO::STB_GLOBAL || bind == ELFIO::STB_WEAK);
+            table.push_back(std::move(entry));
         }
+    };
 
-        if (name.empty() || value == 0) {
-            continue;
-        }
+    // .dynsym: always present for dynamically-linked binaries
+    readSymbolSection(".dynsym");
 
-        SymbolType sym_type = SymbolType::NOTYPE;
-        if (type == ELFIO::STT_FUNC)
-            sym_type = SymbolType::FUNC;
-        else if (type == ELFIO::STT_OBJECT)
-            sym_type = SymbolType::OBJECT;
-        else if (type == ELFIO::STT_SECTION)
-            sym_type = SymbolType::SECTION;
-        else if (type == ELFIO::STT_FILE)
-            sym_type = SymbolType::FILE;
+    // .symtab: present in non-stripped binaries; covers statically-linked
+    // library symbols that are absent from .dynsym
+    readSymbolSection(".symtab");
 
-        NativeSymbolTableEntry entry;
-        entry.name = name;
-        entry.address = value;
-        entry.size = sym_size;
-        entry.type = sym_type;
-        entry.isGlobal = (bind == ELFIO::STB_GLOBAL || bind == ELFIO::STB_WEAK);
-        table.push_back(std::move(entry));
+    if (table.empty()) {
+        spdlog::error("Could not find symbols in .dynsym or .symtab");
     }
 
     return table;

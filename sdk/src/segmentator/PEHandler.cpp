@@ -46,7 +46,7 @@ struct PEFileHandlerStrategy::Impl {
 
 const char* PEFileHandlerStrategy::rvaToPtr(uint32_t rva) const noexcept {
     auto& sections = pImpl->reader.get_sections();
-    for (size_t i = 0; i < sections.size(); ++i) {
+    for (size_t i = 0; i < sections.get_count(); ++i) {
         auto* sec = sections[i];
         uint32_t sec_va = sec->get_virtual_address();
         uint32_t sec_size = sec->get_data_size();
@@ -63,7 +63,7 @@ void PEFileHandlerStrategy::parseImports() noexcept {
     pImpl->imports_parsed = true;
 
     auto& dirs = pImpl->reader.get_directories();
-    if (dirs.size() <= PE_DIRECTORY_IMPORT) return;
+    if (dirs.get_count() <= PE_DIRECTORY_IMPORT) return;
 
     auto* import_dir = dirs[PE_DIRECTORY_IMPORT];
     if (!import_dir) return;
@@ -150,7 +150,7 @@ PEFileHandlerStrategy::~PEFileHandlerStrategy() = default;
 
 std::vector<uint8_t> PEFileHandlerStrategy::doGetTextSection() noexcept {
     auto& sections = pImpl->reader.get_sections();
-    for (size_t i = 0; i < sections.size(); ++i) {
+    for (size_t i = 0; i < sections.get_count(); ++i) {
         auto* sec = sections[i];
         if (sec->get_name() == ".text") {
             auto size = sec->get_data_size();
@@ -169,7 +169,7 @@ uint64_t PEFileHandlerStrategy::doGetTextBaseAddr() noexcept {
     }
 
     auto& sections = pImpl->reader.get_sections();
-    for (size_t i = 0; i < sections.size(); ++i) {
+    for (size_t i = 0; i < sections.get_count(); ++i) {
         auto* sec = sections[i];
         if (sec->get_name() == ".text") {
             pImpl->text_base_addr =

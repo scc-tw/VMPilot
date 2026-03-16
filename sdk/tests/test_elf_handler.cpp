@@ -122,9 +122,25 @@ TEST_F(ELFHandlerX86Test, GetTextSection) {
     EXPECT_FALSE(text.empty());
 }
 
+TEST_F(ELFHandlerX86Test, GetTextBaseAddr) {
+    auto base = handler.getTextBaseAddr();
+    EXPECT_NE(base, static_cast<uint64_t>(-1));
+    EXPECT_GT(base, 0u);
+}
+
 TEST_F(ELFHandlerX86Test, GetNativeSymbolTable) {
     auto table = handler.getNativeSymbolTable();
     EXPECT_FALSE(table.empty());
+
+    bool found_begin = false, found_end = false;
+    for (const auto& entry : table) {
+        if (entry.name.find("VMPilot_Begin") != std::string::npos)
+            found_begin = true;
+        if (entry.name.find("VMPilot_End") != std::string::npos)
+            found_end = true;
+    }
+    EXPECT_TRUE(found_begin);
+    EXPECT_TRUE(found_end);
 }
 
 TEST_F(ELFHandlerX86Test, HasStubAndPointerTableEntries) {
@@ -137,4 +153,35 @@ TEST_F(ELFHandlerX86Test, HasStubAndPointerTableEntries) {
     }
     EXPECT_TRUE(has_stub);
     EXPECT_TRUE(has_pointer_table);
+}
+
+TEST_F(ELFHandlerX86Test, StubEntriesHaveVMPilotMarkers) {
+    auto table = handler.getNativeSymbolTable();
+
+    bool begin_found = false, end_found = false;
+    for (const auto& entry : table) {
+        if (getEntryType(entry) != "stub") continue;
+        if (entry.name.find("VMPilot_Begin") != std::string::npos) {
+            begin_found = true;
+            EXPECT_GT(entry.address, 0u);
+        }
+        if (entry.name.find("VMPilot_End") != std::string::npos) {
+            end_found = true;
+            EXPECT_GT(entry.address, 0u);
+        }
+    }
+    EXPECT_TRUE(begin_found);
+    EXPECT_TRUE(end_found);
+}
+
+TEST_F(ELFHandlerX86Test, StubAndPointerTableCountsMatch) {
+    auto table = handler.getNativeSymbolTable();
+    size_t stub_count = 0, pointer_table_count = 0;
+    for (const auto& entry : table) {
+        auto t = getEntryType(entry);
+        if (t == "stub") ++stub_count;
+        if (t == "pointer_table") ++pointer_table_count;
+    }
+    // Every PLT entry should have a matching GOT entry
+    EXPECT_EQ(stub_count, pointer_table_count);
 }
