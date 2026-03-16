@@ -33,7 +33,7 @@ TEST_F(ARM64HandlerTest, LoadSucceeds) {
 
 TEST_F(ARM64HandlerTest, FindsProtectedRegions) {
     ARM64Handler handler(mode, symbols);
-    handler.Load(text, text_base);
+    ASSERT_TRUE(handler.Load(text, text_base));
     auto functions = handler.getNativeFunctions();
     // foo() has one pair + main() may have inlined pair
     EXPECT_GE(functions.size(), 1u);
@@ -41,7 +41,7 @@ TEST_F(ARM64HandlerTest, FindsProtectedRegions) {
 
 TEST_F(ARM64HandlerTest, RegionsHaveValidData) {
     ARM64Handler handler(mode, symbols);
-    handler.Load(text, text_base);
+    ASSERT_TRUE(handler.Load(text, text_base));
     auto functions = handler.getNativeFunctions();
 
     for (const auto& f : functions) {
@@ -54,7 +54,7 @@ TEST_F(ARM64HandlerTest, RegionsHaveValidData) {
 
 TEST_F(ARM64HandlerTest, CalledTwiceReturnsSameResult) {
     ARM64Handler handler(mode, symbols);
-    handler.Load(text, text_base);
+    ASSERT_TRUE(handler.Load(text, text_base));
     auto first = handler.getNativeFunctions();
     auto second = handler.getNativeFunctions();
     ASSERT_EQ(first.size(), second.size());
@@ -68,7 +68,7 @@ TEST(ARM64HandlerEdge, EmptySymbolTable) {
     NativeSymbolTable empty;
     ARM64Handler handler(VMPilot::Common::FileMode::MODE_ARM, empty);
     std::vector<uint8_t> code = {0x00, 0x00, 0x00, 0x94, 0xC0, 0x03, 0x5F, 0xD6};
-    handler.Load(code, 0x1000);
+    ASSERT_TRUE(handler.Load(code, 0x1000));
     auto functions = handler.getNativeFunctions();
     EXPECT_TRUE(functions.empty());
 }

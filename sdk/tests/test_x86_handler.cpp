@@ -52,14 +52,14 @@ TEST_F(X86HandlerX64Test, LoadSucceeds) {
 
 TEST_F(X86HandlerX64Test, FindsProtectedRegions) {
     X86Handler handler(mode, symbols);
-    handler.Load(text, text_base);
+    ASSERT_TRUE(handler.Load(text, text_base));
     auto functions = handler.getNativeFunctions();
     EXPECT_EQ(functions.size(), 2u);
 }
 
 TEST_F(X86HandlerX64Test, RegionsHaveValidData) {
     X86Handler handler(mode, symbols);
-    handler.Load(text, text_base);
+    ASSERT_TRUE(handler.Load(text, text_base));
     auto functions = handler.getNativeFunctions();
 
     for (const auto& f : functions) {
@@ -72,7 +72,7 @@ TEST_F(X86HandlerX64Test, RegionsHaveValidData) {
 
 TEST_F(X86HandlerX64Test, CalledTwiceReturnsSameResult) {
     X86Handler handler(mode, symbols);
-    handler.Load(text, text_base);
+    ASSERT_TRUE(handler.Load(text, text_base));
     auto first = handler.getNativeFunctions();
     auto second = handler.getNativeFunctions();
     ASSERT_EQ(first.size(), second.size());
@@ -89,7 +89,7 @@ TEST_F(X86HandlerX86Test, LoadSucceeds) {
 
 TEST_F(X86HandlerX86Test, FindsProtectedRegions) {
     X86Handler handler(mode, symbols);
-    handler.Load(text, text_base);
+    ASSERT_TRUE(handler.Load(text, text_base));
     auto functions = handler.getNativeFunctions();
     EXPECT_EQ(functions.size(), 2u);
 }
@@ -99,7 +99,7 @@ TEST(X86HandlerEdge, EmptySymbolTable) {
     X86Handler handler(VMPilot::Common::FileMode::MODE_64, empty);
     // Should load but find no regions
     std::vector<uint8_t> code = {0xE8, 0x00, 0x00, 0x00, 0x00, 0xC3};
-    handler.Load(code, 0x1000);
+    ASSERT_TRUE(handler.Load(code, 0x1000));
     auto functions = handler.getNativeFunctions();
     EXPECT_TRUE(functions.empty());
 }

@@ -7,10 +7,17 @@
 #include <cstdint>
 #include <memory>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace VMPilot::SDK::Segmentator {
+
+/// PE file handler.
+///
+/// Unlike ELF (PLT section) and Mach-O (__stubs section), PE/COFF has no
+/// dedicated stub section. MSVC links import thunks (`jmp [IAT]`, encoded
+/// as `FF 25 <disp32>`) inline in the `.text` section. Therefore
+/// doGetStubCallTargets() scans `.text` for `FF 25` byte patterns to
+/// discover them, rather than reading a separate section.
 class PEFileHandlerStrategy : public FileHandlerStrategy {
    private:
     struct Impl;
@@ -22,14 +29,13 @@ class PEFileHandlerStrategy : public FileHandlerStrategy {
     virtual ~PEFileHandlerStrategy();
 
    protected:
-    virtual std::pair<uint64_t, uint64_t> doGetBeginEndAddr() noexcept override;
     virtual std::vector<uint8_t> doGetTextSection() noexcept override;
     virtual uint64_t doGetTextBaseAddr() noexcept override;
 
     virtual NativeSymbolTable doGetSymbols() noexcept override;
-    virtual std::vector<CallTarget> doGetDirectCallTargets() noexcept override;
+    virtual std::vector<CallTarget> doGetStubCallTargets() noexcept override;
     virtual std::vector<CallTarget>
-    doGetIndirectCallTargets() noexcept override;
+    doGetPointerTableTargets() noexcept override;
 
    private:
     void parseImports() noexcept;

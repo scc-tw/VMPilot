@@ -4,13 +4,6 @@
 
 using namespace VMPilot::SDK::Segmentator;
 
-TEST(FileHandlerStrategy, DefaultGetBeginEndAddr) {
-    FileHandlerStrategy handler;
-    auto [begin, end] = handler.getBeginEndAddr();
-    EXPECT_EQ(begin, static_cast<uint64_t>(-1));
-    EXPECT_EQ(end, static_cast<uint64_t>(-1));
-}
-
 TEST(FileHandlerStrategy, DefaultGetTextSection) {
     FileHandlerStrategy handler;
     auto text = handler.getTextSection();

@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <memory>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace VMPilot::SDK::Segmentator {
@@ -23,14 +22,13 @@ class MachOFileHandlerStrategy : public FileHandlerStrategy {
     virtual ~MachOFileHandlerStrategy();
 
    protected:
-    virtual std::pair<uint64_t, uint64_t> doGetBeginEndAddr() noexcept override;
     virtual std::vector<uint8_t> doGetTextSection() noexcept override;
     virtual uint64_t doGetTextBaseAddr() noexcept override;
 
     virtual NativeSymbolTable doGetSymbols() noexcept override;
-    virtual std::vector<CallTarget> doGetDirectCallTargets() noexcept override;
+    virtual std::vector<CallTarget> doGetStubCallTargets() noexcept override;
     virtual std::vector<CallTarget>
-    doGetIndirectCallTargets() noexcept override;
+    doGetPointerTableTargets() noexcept override;
 };
 
 std::unique_ptr<MachOFileHandlerStrategy::Impl> make_macho_impl(

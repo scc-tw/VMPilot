@@ -21,8 +21,6 @@ static FileHandlerRegistrar elf_registrar(
 struct ELFFileHandlerStrategy::Impl {
     ELFIO::elfio reader;
     std::unordered_map<std::string, ELFSectionViewer> section_table;
-    uint64_t vmp_begin_addr = static_cast<uint64_t>(-1);
-    uint64_t vmp_end_addr = static_cast<uint64_t>(-1);
     uint64_t text_base_addr = static_cast<uint64_t>(-1);
 };
 
@@ -50,18 +48,6 @@ ELFFileHandlerStrategy::~ELFFileHandlerStrategy() {
     pImpl->section_table.clear();
 }
 
-std::pair<uint64_t, uint64_t>
-ELFFileHandlerStrategy::doGetBeginEndAddr() noexcept {
-    if (pImpl->vmp_begin_addr == static_cast<uint64_t>(-1) ||
-        pImpl->vmp_end_addr == static_cast<uint64_t>(-1)) {
-        const auto& [begin_addr, end_addr] = doGetBeginEndAddrIntl();
-        pImpl->vmp_begin_addr = begin_addr;
-        pImpl->vmp_end_addr = end_addr;
-    }
-
-    return {pImpl->vmp_begin_addr, pImpl->vmp_end_addr};
-}
-
 std::vector<uint8_t> ELFFileHandlerStrategy::doGetTextSection() noexcept {
     const auto& chunk = this->doGetTextSectionIntl();
     if (chunk.empty()) {
@@ -84,146 +70,6 @@ uint64_t ELFFileHandlerStrategy::doGetTextBaseAddr() noexcept {
     }
 
     return pImpl->text_base_addr;
-}
-
-uint64_t ELFFileHandlerStrategy::getEntryIndex(
-    const std::string& signature) noexcept {
-    const auto& dynsym = pImpl->section_table.find(".dynsym");
-    if (dynsym == pImpl->section_table.end()) {
-        return static_cast<uint64_t>(-1);
-    }
-
-    auto section = dynsym->second.getSection();
-    if (!section) {
-        spdlog::error("Failed to get the .dynsym section");
-        return static_cast<uint64_t>(-1);
-    }
-
-    ELFIO::elfio& reader = pImpl->reader;  // NOLINT
-    ELFIO::symbol_section_accessor accessor(reader, section);
-    auto sym_count = accessor.get_symbols_num();
-    for (size_t i = 0; i < sym_count; ++i) {
-        std::string name;
-        ELFIO::Elf64_Addr value;
-        ELFIO::Elf_Xword sym_size;
-        unsigned char bind;
-        unsigned char type;
-        ELFIO::Elf_Half section_index;
-        unsigned char other;
-
-        if (!accessor.get_symbol(i, name, value, sym_size, bind, type,
-                                 section_index, other)) {
-            spdlog::error("Failed to get the symbol at index {}", i);
-            continue;
-        }
-
-        if (name == signature) {
-            return i;
-        }
-    }
-
-    return static_cast<uint64_t>(-1);
-}
-
-uint64_t ELFFileHandlerStrategy::getRelapltIdx(uint64_t dynsym_idx) noexcept {
-    // 32-bit is .rel.plt, 64-bit is .rela.plt
-    static const char* relaplt_name[] = {".rel.plt", ".rela.plt"};
-    const int& is_64_bit = pImpl->reader.get_class() == ELFIO::ELFCLASS64;
-
-    const auto& relaplt = pImpl->section_table.find(relaplt_name[is_64_bit]);
-    if (relaplt == pImpl->section_table.end()) {
-        return static_cast<uint64_t>(-1);
-    }
-
-    auto section = relaplt->second.getSection();
-    if (!section) {
-        spdlog::error("Failed to get the .rela.plt section");
-        return static_cast<uint64_t>(-1);
-    }
-
-    const auto& reader = pImpl->reader;  // NOLINT
-    ELFIO::relocation_section_accessor accessor(reader, section);
-    auto size = accessor.get_entries_num();
-    for (size_t i = 0; i < size; ++i) {
-        ELFIO::Elf64_Addr offset;
-        ELFIO::Elf_Word symbol;
-        ELFIO::Elf_Sxword addend;
-        unsigned int type;
-
-        if (!accessor.get_entry(i, offset, symbol, type, addend)) {
-            spdlog::error("Failed to get the entry at index {}", i);
-            continue;
-        }
-
-        if (symbol == dynsym_idx) {
-            return i;
-        }
-    }
-
-    return static_cast<uint64_t>(-1);
-}
-
-uint64_t ELFFileHandlerStrategy::getPltAddr(uint64_t relaplt_idx) noexcept {
-    const auto& plt = pImpl->section_table.find(".plt");
-    if (plt == pImpl->section_table.end()) {
-        return static_cast<uint64_t>(-1);
-    }
-
-    const auto& section = plt->second.getSection();
-    if (!section) {
-        spdlog::error("Failed to get the .plt section");
-        return static_cast<uint64_t>(-1);
-    }
-
-    uint64_t alignment = section->get_addr_align();
-    uint64_t plt_base_addr = section->get_address();
-
-    return plt_base_addr + alignment * (relaplt_idx + 1);
-}
-
-std::pair<uint64_t, uint64_t>
-ELFFileHandlerStrategy::doGetBeginEndAddrIntl() noexcept {
-    // Step 1: get the index of begin and end with getEntryIndex
-    // Try all known mangling variants (Itanium, MSVC x64, MSVC x86)
-    uint64_t begin_dynsym_idx = static_cast<uint64_t>(-1);
-    for (const auto& sig : VMPilot::Common::BEGIN_VMPILOT_SIGNATURES) {
-        begin_dynsym_idx = getEntryIndex(sig);
-        if (begin_dynsym_idx != static_cast<uint64_t>(-1)) break;
-    }
-    uint64_t end_dynsym_idx = static_cast<uint64_t>(-1);
-    for (const auto& sig : VMPilot::Common::END_VMPILOT_SIGNATURES) {
-        end_dynsym_idx = getEntryIndex(sig);
-        if (end_dynsym_idx != static_cast<uint64_t>(-1)) break;
-    }
-    if (begin_dynsym_idx == static_cast<uint64_t>(-1) ||
-        end_dynsym_idx == static_cast<uint64_t>(-1)) {
-        spdlog::error(
-            "Error: Could not find the VMPilot signatures in the "
-            ".dynsym section");
-        return {static_cast<uint64_t>(-1), static_cast<uint64_t>(-1)};
-    }
-
-    // Step 2: get the index of the .rela.plt section
-    uint64_t begin_relaplt_idx = getRelapltIdx(begin_dynsym_idx);
-    uint64_t end_relaplt_idx = getRelapltIdx(end_dynsym_idx);
-    if (begin_relaplt_idx == static_cast<uint64_t>(-1) ||
-        end_relaplt_idx == static_cast<uint64_t>(-1)) {
-        spdlog::error(
-            "Error: Could not find the VMPilot signatures in the "
-            ".rela.plt or .rel.plt section");
-        return {static_cast<uint64_t>(-1), static_cast<uint64_t>(-1)};
-    }
-
-    // Step 3: get the base address and alignment of the .plt section
-    uint64_t begin_addr = getPltAddr(begin_relaplt_idx);
-    uint64_t end_addr = getPltAddr(end_relaplt_idx);
-    if (begin_addr == static_cast<uint64_t>(-1) ||
-        end_addr == static_cast<uint64_t>(-1)) {
-        spdlog::error("Error: Could not find the .plt section");
-        return {static_cast<uint64_t>(-1), static_cast<uint64_t>(-1)};
-    }
-
-    return {begin_addr, end_addr};
 }
 
 std::unordered_map<uint64_t, ELFFileHandlerStrategy::RelaInfo>
@@ -319,7 +165,7 @@ NativeSymbolTable ELFFileHandlerStrategy::doGetSymbols() noexcept {
 }
 
 std::vector<CallTarget>
-ELFFileHandlerStrategy::doGetDirectCallTargets() noexcept {
+ELFFileHandlerStrategy::doGetStubCallTargets() noexcept {
     std::vector<CallTarget> targets;
 
     const auto& plt_it = pImpl->section_table.find(".plt");
@@ -377,7 +223,7 @@ ELFFileHandlerStrategy::doGetDirectCallTargets() noexcept {
 }
 
 std::vector<CallTarget>
-ELFFileHandlerStrategy::doGetIndirectCallTargets() noexcept {
+ELFFileHandlerStrategy::doGetPointerTableTargets() noexcept {
     std::vector<CallTarget> targets;
 
     const bool is_64_bit = pImpl->reader.get_class() == ELFIO::ELFCLASS64;

@@ -180,7 +180,7 @@ TEST_F(SegmentatorIntegrationX64, RegionsDontOverlap) {
     ELFFileHandlerStrategy elf(binary_path);
     auto metadata = VMPilot::Common::get_file_metadata(binary_path);
     X86Handler x86(metadata.mode, elf.getNativeSymbolTable());
-    x86.Load(elf.getTextSection(), elf.getTextBaseAddr());
+    ASSERT_TRUE(x86.Load(elf.getTextSection(), elf.getTextBaseAddr()));
     auto regions = x86.getNativeFunctions();
 
     // Verify no two regions overlap

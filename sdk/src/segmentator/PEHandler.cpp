@@ -41,8 +41,6 @@ struct PEFileHandlerStrategy::Impl {
     std::vector<ImportEntry> import_entries;
     bool imports_parsed = false;
 
-    uint64_t vmp_begin_addr = static_cast<uint64_t>(-1);
-    uint64_t vmp_end_addr = static_cast<uint64_t>(-1);
     uint64_t text_base_addr = static_cast<uint64_t>(-1);
 };
 
@@ -150,51 +148,6 @@ PEFileHandlerStrategy::PEFileHandlerStrategy(const std::string& file_name)
 
 PEFileHandlerStrategy::~PEFileHandlerStrategy() = default;
 
-std::pair<uint64_t, uint64_t>
-PEFileHandlerStrategy::doGetBeginEndAddr() noexcept {
-    if (pImpl->vmp_begin_addr != static_cast<uint64_t>(-1) &&
-        pImpl->vmp_end_addr != static_cast<uint64_t>(-1)) {
-        return {pImpl->vmp_begin_addr, pImpl->vmp_end_addr};
-    }
-
-    // Prefer thunk addresses (direct call targets) since that's what
-    // call instructions in .text actually target.
-    auto direct = doGetDirectCallTargets();
-
-    const auto& begin_sigs = VMPilot::Common::BEGIN_VMPILOT_SIGNATURES;
-    const auto& end_sigs = VMPilot::Common::END_VMPILOT_SIGNATURES;
-
-    auto matchesAny = [](const std::string& name,
-                         const std::vector<std::string>& sigs) {
-        for (const auto& sig : sigs)
-            if (name == sig) return true;
-        return false;
-    };
-
-    for (const auto& target : direct) {
-        if (matchesAny(target.name, begin_sigs))
-            pImpl->vmp_begin_addr = target.address;
-        if (matchesAny(target.name, end_sigs))
-            pImpl->vmp_end_addr = target.address;
-    }
-
-    // Fall back to IAT addresses if no thunks found
-    if (pImpl->vmp_begin_addr == static_cast<uint64_t>(-1) ||
-        pImpl->vmp_end_addr == static_cast<uint64_t>(-1)) {
-        parseImports();
-        for (const auto& entry : pImpl->import_entries) {
-            if (pImpl->vmp_begin_addr == static_cast<uint64_t>(-1) &&
-                matchesAny(entry.func_name, begin_sigs))
-                pImpl->vmp_begin_addr = entry.iat_va;
-            if (pImpl->vmp_end_addr == static_cast<uint64_t>(-1) &&
-                matchesAny(entry.func_name, end_sigs))
-                pImpl->vmp_end_addr = entry.iat_va;
-        }
-    }
-
-    return {pImpl->vmp_begin_addr, pImpl->vmp_end_addr};
-}
-
 std::vector<uint8_t> PEFileHandlerStrategy::doGetTextSection() noexcept {
     auto& sections = pImpl->reader.get_sections();
     for (size_t i = 0; i < sections.size(); ++i) {
@@ -234,7 +187,7 @@ NativeSymbolTable PEFileHandlerStrategy::doGetSymbols() noexcept {
 }
 
 std::vector<CallTarget>
-PEFileHandlerStrategy::doGetDirectCallTargets() noexcept {
+PEFileHandlerStrategy::doGetStubCallTargets() noexcept {
     parseImports();
 
     // Build reverse lookup: IAT VA -> function name
@@ -243,9 +196,11 @@ PEFileHandlerStrategy::doGetDirectCallTargets() noexcept {
         iat_lookup[entry.iat_va] = entry.func_name;
     }
 
-    // Scan .text section for MSVC import thunks: FF 25 <disp32>
-    // These are `jmp qword/dword ptr [rip+disp]` (x64) or
-    // `jmp dword ptr [addr]` (x86) instructions that jump through the IAT.
+    // PE has no dedicated stub section (unlike ELF .plt or Mach-O __stubs).
+    // MSVC links import thunks inline in .text as `FF 25 <disp32>`:
+    //   x64: jmp qword ptr [rip+disp]  (RIP-relative through IAT)
+    //   x86: jmp dword ptr [addr]      (absolute through IAT)
+    // We scan .text for these byte patterns to discover stub addresses.
     auto text = doGetTextSection();
     uint64_t text_base = doGetTextBaseAddr();
     if (text.empty() || text_base == static_cast<uint64_t>(-1)) return {};
@@ -281,7 +236,7 @@ PEFileHandlerStrategy::doGetDirectCallTargets() noexcept {
 }
 
 std::vector<CallTarget>
-PEFileHandlerStrategy::doGetIndirectCallTargets() noexcept {
+PEFileHandlerStrategy::doGetPointerTableTargets() noexcept {
     parseImports();
 
     std::vector<CallTarget> targets;

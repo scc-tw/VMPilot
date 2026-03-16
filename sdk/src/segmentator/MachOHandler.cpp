@@ -43,22 +43,6 @@ MachOFileHandlerStrategy::MachOFileHandlerStrategy(const std::string& filename)
 
 MachOFileHandlerStrategy::~MachOFileHandlerStrategy() = default;
 
-std::pair<uint64_t, uint64_t>
-MachOFileHandlerStrategy::doGetBeginEndAddr() noexcept {
-    // Find stub addresses for VMPilot_Begin and VMPilot_End
-    uint64_t begin_addr = static_cast<uint64_t>(-1), end_addr = static_cast<uint64_t>(-1);
-    for (const auto& entry : pImpl->parser.stubEntries()) {
-        auto name = stripLeadingUnderscore(entry.symbol_name);
-        for (const auto& sig : VMPilot::Common::BEGIN_VMPILOT_SIGNATURES) {
-            if (name == sig) { begin_addr = entry.address; break; }
-        }
-        for (const auto& sig : VMPilot::Common::END_VMPILOT_SIGNATURES) {
-            if (name == sig) { end_addr = entry.address; break; }
-        }
-    }
-    return {begin_addr, end_addr};
-}
-
 std::vector<uint8_t> MachOFileHandlerStrategy::doGetTextSection() noexcept {
     auto sect = pImpl->parser.findSection("__TEXT", "__text");
     if (!sect) {
@@ -102,7 +86,7 @@ NativeSymbolTable MachOFileHandlerStrategy::doGetSymbols() noexcept {
 }
 
 std::vector<CallTarget>
-MachOFileHandlerStrategy::doGetDirectCallTargets() noexcept {
+MachOFileHandlerStrategy::doGetStubCallTargets() noexcept {
     std::vector<CallTarget> targets;
 
     for (const auto& entry : pImpl->parser.stubEntries()) {
@@ -114,7 +98,7 @@ MachOFileHandlerStrategy::doGetDirectCallTargets() noexcept {
 }
 
 std::vector<CallTarget>
-MachOFileHandlerStrategy::doGetIndirectCallTargets() noexcept {
+MachOFileHandlerStrategy::doGetPointerTableTargets() noexcept {
     std::vector<CallTarget> targets;
 
     for (const auto& entry : pImpl->parser.gotEntries()) {
