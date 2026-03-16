@@ -6,6 +6,10 @@
 #include <vector>
 
 namespace VMPilot::Common {
+extern const std::vector<std::string> BEGIN_VMPILOT_SIGNATURES;
+extern const std::vector<std::string> END_VMPILOT_SIGNATURES;
+
+// Preferred signature for the current host platform
 extern const std::string BEGIN_VMPILOT_SIGNATURE;
 extern const std::string END_VMPILOT_SIGNATURE;
 
