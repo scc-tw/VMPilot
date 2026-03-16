@@ -134,6 +134,7 @@ class Capstone {
 
    private:
     size_t handle_ = 0;
+    Arch arch_ = Arch::X86;
 };
 
 }  // namespace Capstone

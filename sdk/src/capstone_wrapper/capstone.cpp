@@ -1,6 +1,7 @@
 #include <capstone.hpp>
 
 #include <capstone/capstone.h>
+#include <capstone/arm64.h>
 #include <capstone/x86.h>
 
 #include <algorithm>
@@ -110,7 +111,7 @@ static cs_arch toCSArch(Arch arch) {
 
 // --- Capstone class ---
 
-Capstone::Capstone(Arch arch, Mode mode) {
+Capstone::Capstone(Arch arch, Mode mode) : arch_(arch) {
     auto c_arch = toCSArch(arch);
     auto c_mode = static_cast<enum cs_mode>(static_cast<uint32_t>(mode));
 
@@ -132,7 +133,8 @@ Capstone::~Capstone() {
     }
 }
 
-Capstone::Capstone(Capstone&& other) noexcept : handle_(other.handle_) {
+Capstone::Capstone(Capstone&& other) noexcept
+    : handle_(other.handle_), arch_(other.arch_) {
     other.handle_ = 0;
 }
 
@@ -174,37 +176,65 @@ std::vector<Instruction> Capstone::disasm(const std::vector<uint8_t>& code,
             inst.groups.assign(detail.groups,
                                detail.groups + detail.groups_count);
 
-            // x86-specific operands
-            const auto& x86 = detail.x86;
-            inst.operands.reserve(x86.op_count);
-            for (uint8_t j = 0; j < x86.op_count; ++j) {
-                const auto& src = x86.operands[j];
-                X86::Operand op;
-                op.size = src.size;
-
-                switch (src.type) {
-                    case X86_OP_REG:
-                        op.type = X86::OpType::REG;
-                        op.reg = src.reg;
-                        break;
-                    case X86_OP_IMM:
-                        op.type = X86::OpType::IMM;
-                        op.imm = src.imm;
-                        break;
-                    case X86_OP_MEM:
-                        op.type = X86::OpType::MEM;
-                        op.mem.segment = src.mem.segment;
-                        op.mem.base = src.mem.base;
-                        op.mem.index = src.mem.index;
-                        op.mem.scale = src.mem.scale;
-                        op.mem.disp = src.mem.disp;
-                        break;
-                    default:
-                        op.type = X86::OpType::INVALID;
-                        break;
+            // Architecture-specific operands
+            if (arch_ == Arch::X86) {
+                const auto& x86 = detail.x86;
+                inst.operands.reserve(x86.op_count);
+                for (uint8_t j = 0; j < x86.op_count; ++j) {
+                    const auto& src = x86.operands[j];
+                    X86::Operand op;
+                    op.size = src.size;
+                    switch (src.type) {
+                        case X86_OP_REG:
+                            op.type = X86::OpType::REG;
+                            op.reg = src.reg;
+                            break;
+                        case X86_OP_IMM:
+                            op.type = X86::OpType::IMM;
+                            op.imm = src.imm;
+                            break;
+                        case X86_OP_MEM:
+                            op.type = X86::OpType::MEM;
+                            op.mem.segment = src.mem.segment;
+                            op.mem.base = src.mem.base;
+                            op.mem.index = src.mem.index;
+                            op.mem.scale = src.mem.scale;
+                            op.mem.disp = src.mem.disp;
+                            break;
+                        default:
+                            op.type = X86::OpType::INVALID;
+                            break;
+                    }
+                    inst.operands.push_back(std::move(op));
                 }
-
-                inst.operands.push_back(std::move(op));
+            } else if (arch_ == Arch::ARM64) {
+                const auto& arm64 = detail.arm64;
+                inst.operands.reserve(arm64.op_count);
+                for (uint8_t j = 0; j < arm64.op_count; ++j) {
+                    const auto& src = arm64.operands[j];
+                    X86::Operand op;
+                    op.size = 0;
+                    switch (src.type) {
+                        case ARM64_OP_REG:
+                            op.type = X86::OpType::REG;
+                            op.reg = src.reg;
+                            break;
+                        case ARM64_OP_IMM:
+                            op.type = X86::OpType::IMM;
+                            op.imm = src.imm;
+                            break;
+                        case ARM64_OP_MEM:
+                            op.type = X86::OpType::MEM;
+                            op.mem.base = src.mem.base;
+                            op.mem.index = src.mem.index;
+                            op.mem.disp = src.mem.disp;
+                            break;
+                        default:
+                            op.type = X86::OpType::INVALID;
+                            break;
+                    }
+                    inst.operands.push_back(std::move(op));
+                }
             }
         }
 
