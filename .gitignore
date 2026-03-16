@@ -26,6 +26,9 @@
 *.out
 *.app
 
+# Allow test binaries in data/
+!data/basic/bin/*.exe
+
 build/
 .vscode/
 .DS_Store
