@@ -60,7 +60,7 @@ TEST(NativeFunctionBase, MoveAssignment) {
 TEST(NativeFunctionBase, SelfAssignment) {
     std::vector<uint8_t> code = {0x90, 0xC3};
     NativeFunctionBase nf(0x1000, 2, "self", code);
-    nf = nf;
+    nf = *&nf;  // Self-assignment via indirection to avoid -Wself-assign warning
     EXPECT_EQ(nf.getName(), "self");
     EXPECT_EQ(nf.getCode(), code);
 }

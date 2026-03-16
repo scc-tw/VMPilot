@@ -4,3 +4,6 @@ url = ../VMPilot-crypto.git
 [submodule "third_party/capstone"]
 	path = third_party/capstone
 	url = https://github.com/capstone-engine/capstone.git
+[submodule "third_party/BLAKE3"]
+	path = third_party/BLAKE3
+	url = https://github.com/BLAKE3-team/BLAKE3.git

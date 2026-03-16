@@ -2,11 +2,9 @@
 
 #include <gtest/gtest.h>
 
-using namespace Capstone;
-
 class CapstoneX64Test : public ::testing::Test {
    protected:
-    Capstone::Capstone cs{Arch::X86, Mode::MODE_64};
+    Capstone::Capstone cs{Capstone::Arch::X86, Capstone::Mode::MODE_64};
 };
 
 TEST_F(CapstoneX64Test, DisasmNop) {
@@ -89,14 +87,14 @@ TEST_F(CapstoneX64Test, OperandDetail) {
     auto insns = cs.disasm({0x48, 0xC7, 0xC0, 0x42, 0x00, 0x00, 0x00}, 0);
     ASSERT_EQ(insns.size(), 1u);
     ASSERT_GE(insns[0].operands.size(), 2u);
-    EXPECT_EQ(insns[0].operands[0].type, X86::OpType::REG);
-    EXPECT_EQ(insns[0].operands[1].type, X86::OpType::IMM);
+    EXPECT_EQ(insns[0].operands[0].type, Capstone::X86::OpType::REG);
+    EXPECT_EQ(insns[0].operands[1].type, Capstone::X86::OpType::IMM);
     EXPECT_EQ(insns[0].operands[1].imm, 0x42);
 }
 
 class CapstoneX86Test : public ::testing::Test {
    protected:
-    Capstone::Capstone cs{Arch::X86, Mode::MODE_32};
+    Capstone::Capstone cs{Capstone::Arch::X86, Capstone::Mode::MODE_32};
 };
 
 TEST_F(CapstoneX86Test, DisasmCall32) {
@@ -108,7 +106,7 @@ TEST_F(CapstoneX86Test, DisasmCall32) {
 }
 
 TEST(CapstoneMove, MoveConstructor) {
-    Capstone::Capstone a(Arch::X86, Mode::MODE_64);
+    Capstone::Capstone a(Capstone::Arch::X86, Capstone::Mode::MODE_64);
     auto insns = a.disasm({0x90}, 0);
     ASSERT_FALSE(insns.empty());
 
