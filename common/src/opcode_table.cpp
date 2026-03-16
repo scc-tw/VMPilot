@@ -96,7 +96,7 @@ void VMPilot::Common::Opcode_table_generator::three_way_table_init() {
     // Generate the RealOp_to_OI table and OID_to_OI table
     Opcode_t index = 0;
     for (const auto& [_, opcode] : list) {
-        const auto OID = start_number + index;
+        const Opcode_t OID = static_cast<Opcode_t>(start_number + index);
         OI_to_RealOp_.insert(std::make_pair(index, opcode));
         RealOp_to_OID_.insert(std::make_pair(opcode, OID));
         OID_to_OI_.insert(std::make_pair(OID, index));

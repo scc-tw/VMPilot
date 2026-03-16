@@ -12,7 +12,7 @@ using namespace VMPilot::SDK::Segmentator;
 std::pair<uint64_t, uint64_t>
 FileHandlerStrategy::doGetBeginEndAddr() noexcept {
     spdlog::error("FileHandlerStrategy::doGetBeginEndAddr not implemented");
-    return std::make_pair(-1, -1);
+    return std::make_pair(static_cast<uint64_t>(-1), static_cast<uint64_t>(-1));
 }
 
 std::vector<uint8_t> FileHandlerStrategy::doGetTextSection() noexcept {
@@ -22,7 +22,7 @@ std::vector<uint8_t> FileHandlerStrategy::doGetTextSection() noexcept {
 
 uint64_t FileHandlerStrategy::doGetTextBaseAddr() noexcept {
     spdlog::error("FileHandlerStrategy::doGetTextBaseAddr not implemented");
-    return -1;
+    return static_cast<uint64_t>(-1);
 }
 
 NativeSymbolTable FileHandlerStrategy::doGetSymbols() noexcept {

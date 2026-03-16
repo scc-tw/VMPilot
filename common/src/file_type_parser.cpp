@@ -300,24 +300,24 @@ FileArch detail::get_file_arch_elf(const std::string& filename) {
 
     static const std::unordered_map<uint16_t, VMPilot::Common::FileArch>
         arch_table = {
-            {0x00, VMPilot::Common::FileArch::ALL},
-            {0x01, VMPilot::Common::FileArch::ARM},
-            {0x02, VMPilot::Common::FileArch::SPARC},
-            {0x03, VMPilot::Common::FileArch::X86},
-            {0x04, VMPilot::Common::FileArch::M68K},
-            {0x08, VMPilot::Common::FileArch::MIPS},
-            {0x14, VMPilot::Common::FileArch::PPC},
-            {0x16, VMPilot::Common::FileArch::SYSZ},
-            {0x28, VMPilot::Common::FileArch::ARM64},
-            {0x2A, VMPilot::Common::FileArch::XCORE},
-            {0x2C, VMPilot::Common::FileArch::SPARC},
-            {0x32, VMPilot::Common::FileArch::TMS320C64X},
-            {0x35, VMPilot::Common::FileArch::M680X},
-            {0x3B, VMPilot::Common::FileArch::EVM},
-            {0x3E, VMPilot::Common::FileArch::X86},  // EM_X86_64
-            {0xF3, VMPilot::Common::FileArch::RISCV},
-            {0x28, VMPilot::Common::FileArch::SH},
-            {0x2B, VMPilot::Common::FileArch::TRICORE},
+            {uint16_t{0x00}, VMPilot::Common::FileArch::ALL},
+            {uint16_t{0x01}, VMPilot::Common::FileArch::ARM},
+            {uint16_t{0x02}, VMPilot::Common::FileArch::SPARC},
+            {uint16_t{0x03}, VMPilot::Common::FileArch::X86},
+            {uint16_t{0x04}, VMPilot::Common::FileArch::M68K},
+            {uint16_t{0x08}, VMPilot::Common::FileArch::MIPS},
+            {uint16_t{0x14}, VMPilot::Common::FileArch::PPC},
+            {uint16_t{0x16}, VMPilot::Common::FileArch::SYSZ},
+            {uint16_t{0x28}, VMPilot::Common::FileArch::ARM64},
+            {uint16_t{0x2A}, VMPilot::Common::FileArch::XCORE},
+            {uint16_t{0x2C}, VMPilot::Common::FileArch::SPARC},
+            {uint16_t{0x32}, VMPilot::Common::FileArch::TMS320C64X},
+            {uint16_t{0x35}, VMPilot::Common::FileArch::M680X},
+            {uint16_t{0x3B}, VMPilot::Common::FileArch::EVM},
+            {uint16_t{0x3E}, VMPilot::Common::FileArch::X86},  // EM_X86_64
+            {uint16_t{0xF3}, VMPilot::Common::FileArch::RISCV},
+            {uint16_t{0x28}, VMPilot::Common::FileArch::SH},
+            {uint16_t{0x2B}, VMPilot::Common::FileArch::TRICORE},
         };
 
     auto it = arch_table.find(elf_header.elf32.e_machine);
@@ -366,10 +366,10 @@ FileArch detail::get_file_arch_pe(const std::string& filename) {
 
     static const std::unordered_map<uint16_t, VMPilot::Common::FileArch>
         arch_table = {
-            {0x014C, VMPilot::Common::FileArch::X86},
-            {0x8664, VMPilot::Common::FileArch::X86},
-            {0x01C0, VMPilot::Common::FileArch::ARM},
-            {0xaa64, VMPilot::Common::FileArch::ARM64},
+            {uint16_t(0x014C), VMPilot::Common::FileArch::X86},
+            {uint16_t(0x8664), VMPilot::Common::FileArch::X86},
+            {uint16_t(0x01C0), VMPilot::Common::FileArch::ARM},
+            {uint16_t(0xAA64), VMPilot::Common::FileArch::ARM64},
         };
 
     auto it = arch_table.find(pe_header.pe32.Machine);
@@ -384,7 +384,7 @@ FileMode detail::get_file_mode_pe(const std::string& filename) {
     const auto& pe_header = get_pe_header(filename);
 
     const auto& key = file_mode_table::lookup_mode(
-        get_file_arch_pe(filename), false, pe_header.pe32.SizeOfOptionalHeader);
+        get_file_arch_pe(filename), false, static_cast<file_mode_table::Bits>(pe_header.pe32.SizeOfOptionalHeader));
 
     auto it = file_mode_table::mode_table.find(key);
     if (it == file_mode_table::mode_table.end()) {

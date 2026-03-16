@@ -74,6 +74,6 @@ Hash_val_t detail::Hash(const Instruction_t& inst) noexcept {
                                 std::vector<uint8_t>(salt.begin(), salt.end()));
 
     // hash that string
-    return std::hash<std::string>{}(
-        std::string(hash_str.begin(), hash_str.end()));
+    return static_cast<Hash_val_t>(std::hash<std::string>{}(
+        std::string(hash_str.begin(), hash_str.end())));
 }
