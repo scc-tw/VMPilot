@@ -17,6 +17,17 @@ class ELFHandlerX86Test : public ::testing::Test {
                                    "/basic_binary.Linux.x86"};
 };
 
+// --- Helper to find entry_type attribute ---
+static std::string getEntryType(const NativeSymbolTableEntry& entry) {
+    auto it = entry.additionalAttributes.find("entry_type");
+    if (it == entry.additionalAttributes.end()) return "";
+    try {
+        return std::get<std::string>(it->second);
+    } catch (...) {
+        return "";
+    }
+}
+
 // --- x86_64 tests ---
 
 TEST_F(ELFHandlerX64Test, GetBeginEndAddr) {
@@ -41,7 +52,6 @@ TEST_F(ELFHandlerX64Test, GetNativeSymbolTable) {
     auto table = handler.getNativeSymbolTable();
     EXPECT_FALSE(table.empty());
 
-    // Should contain VMPilot_Begin and VMPilot_End entries
     bool found_begin = false, found_end = false;
     for (const auto& entry : table) {
         if (entry.name.find("VMPilot_Begin") != std::string::npos)
@@ -53,55 +63,41 @@ TEST_F(ELFHandlerX64Test, GetNativeSymbolTable) {
     EXPECT_TRUE(found_end);
 }
 
-TEST_F(ELFHandlerX64Test, SymbolTableHasPLTEntries) {
+TEST_F(ELFHandlerX64Test, SymbolTableHasDirectEntries) {
     auto table = handler.getNativeSymbolTable();
-    bool has_plt = false;
+    bool found = false;
     for (const auto& entry : table) {
-        auto it = entry.additionalAttributes.find("entry_type");
-        if (it != entry.additionalAttributes.end()) {
-            try {
-                if (std::get<std::string>(it->second) == "PLT") {
-                    has_plt = true;
-                    break;
-                }
-            } catch (...) {}
+        if (getEntryType(entry) == "direct") {
+            found = true;
+            EXPECT_EQ(entry.type, SymbolType::FUNC);
+            EXPECT_GT(entry.address, 0u);
+            break;
         }
     }
-    EXPECT_TRUE(has_plt);
+    EXPECT_TRUE(found);
 }
 
-TEST_F(ELFHandlerX64Test, SymbolTableHasGOTEntries) {
+TEST_F(ELFHandlerX64Test, SymbolTableHasIndirectEntries) {
     auto table = handler.getNativeSymbolTable();
-    bool has_got = false;
+    bool found = false;
     for (const auto& entry : table) {
-        auto it = entry.additionalAttributes.find("entry_type");
-        if (it != entry.additionalAttributes.end()) {
-            try {
-                if (std::get<std::string>(it->second) == "GOT") {
-                    has_got = true;
-                    break;
-                }
-            } catch (...) {}
+        if (getEntryType(entry) == "indirect") {
+            found = true;
+            EXPECT_EQ(entry.type, SymbolType::OBJECT);
+            EXPECT_GT(entry.address, 0u);
+            break;
         }
     }
-    EXPECT_TRUE(has_got);
+    EXPECT_TRUE(found);
 }
 
-TEST_F(ELFHandlerX64Test, PLTAddrMatchesBeginEndAddr) {
+TEST_F(ELFHandlerX64Test, DirectCallTargetMatchesBeginEndAddr) {
     auto [begin, end] = handler.getBeginEndAddr();
     auto table = handler.getNativeSymbolTable();
 
     bool begin_found = false, end_found = false;
     for (const auto& entry : table) {
-        auto it = entry.additionalAttributes.find("entry_type");
-        if (it == entry.additionalAttributes.end())
-            continue;
-        try {
-            if (std::get<std::string>(it->second) != "PLT")
-                continue;
-        } catch (...) {
-            continue;
-        }
+        if (getEntryType(entry) != "direct") continue;
         if (entry.name.find("VMPilot_Begin") != std::string::npos &&
             entry.address == begin)
             begin_found = true;
@@ -111,6 +107,18 @@ TEST_F(ELFHandlerX64Test, PLTAddrMatchesBeginEndAddr) {
     }
     EXPECT_TRUE(begin_found);
     EXPECT_TRUE(end_found);
+}
+
+TEST_F(ELFHandlerX64Test, DirectAndIndirectCountsMatch) {
+    auto table = handler.getNativeSymbolTable();
+    size_t direct_count = 0, indirect_count = 0;
+    for (const auto& entry : table) {
+        auto t = getEntryType(entry);
+        if (t == "direct") ++direct_count;
+        if (t == "indirect") ++indirect_count;
+    }
+    // Every PLT entry should have a matching GOT entry
+    EXPECT_EQ(direct_count, indirect_count);
 }
 
 // --- x86 tests ---
@@ -129,4 +137,16 @@ TEST_F(ELFHandlerX86Test, GetTextSection) {
 TEST_F(ELFHandlerX86Test, GetNativeSymbolTable) {
     auto table = handler.getNativeSymbolTable();
     EXPECT_FALSE(table.empty());
+}
+
+TEST_F(ELFHandlerX86Test, HasDirectAndIndirectEntries) {
+    auto table = handler.getNativeSymbolTable();
+    bool has_direct = false, has_indirect = false;
+    for (const auto& entry : table) {
+        auto t = getEntryType(entry);
+        if (t == "direct") has_direct = true;
+        if (t == "indirect") has_indirect = true;
+    }
+    EXPECT_TRUE(has_direct);
+    EXPECT_TRUE(has_indirect);
 }

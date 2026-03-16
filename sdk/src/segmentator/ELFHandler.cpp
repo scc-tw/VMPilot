@@ -219,10 +219,43 @@ ELFFileHandlerStrategy::doGetBeginEndAddrIntl() noexcept {
     return {begin_addr, end_addr};
 }
 
-NativeSymbolTable ELFFileHandlerStrategy::doGetNativeSymbolTable() noexcept {
+std::unordered_map<uint64_t, ELFFileHandlerStrategy::RelaInfo>
+ELFFileHandlerStrategy::buildRelocationMap() noexcept {
+    std::unordered_map<uint64_t, RelaInfo> result;
+
+    const bool is_64_bit = pImpl->reader.get_class() == ELFIO::ELFCLASS64;
+    const char* rela_name = is_64_bit ? ".rela.plt" : ".rel.plt";
+    const auto& rela_it = pImpl->section_table.find(rela_name);
+    if (rela_it == pImpl->section_table.end()) {
+        return result;
+    }
+
+    auto rela_sec = rela_it->second.getSection();
+    if (!rela_sec) {
+        return result;
+    }
+
+    const auto& reader = pImpl->reader;  // NOLINT
+    ELFIO::relocation_section_accessor accessor(reader, rela_sec);
+    const auto count = accessor.get_entries_num();
+    for (size_t i = 0; i < count; ++i) {
+        ELFIO::Elf64_Addr offset;
+        ELFIO::Elf_Word symbol;
+        ELFIO::Elf_Sxword addend;
+        unsigned int type;
+
+        if (!accessor.get_entry(i, offset, symbol, type, addend)) {
+            continue;
+        }
+        result[symbol] = {i, offset};
+    }
+
+    return result;
+}
+
+NativeSymbolTable ELFFileHandlerStrategy::doGetSymbols() noexcept {
     NativeSymbolTable table;
 
-    // --- Collect symbols from .dynsym ---
     const auto& dynsym_it = pImpl->section_table.find(".dynsym");
     if (dynsym_it == pImpl->section_table.end()) {
         spdlog::error("Could not find .dynsym section");
@@ -235,56 +268,10 @@ NativeSymbolTable ELFFileHandlerStrategy::doGetNativeSymbolTable() noexcept {
     }
 
     ELFIO::elfio& reader = pImpl->reader;  // NOLINT
-    ELFIO::symbol_section_accessor sym_accessor(reader, dynsym_sec);
-    const auto sym_count = sym_accessor.get_symbols_num();
+    ELFIO::symbol_section_accessor accessor(reader, dynsym_sec);
+    const auto count = accessor.get_symbols_num();
 
-    // --- Prepare relocation accessor for PLT/GOT resolution ---
-    const bool is_64_bit = reader.get_class() == ELFIO::ELFCLASS64;
-    const char* relaplt_name = is_64_bit ? ".rela.plt" : ".rel.plt";
-    const auto& relaplt_it = pImpl->section_table.find(relaplt_name);
-
-    // Build a map: dynsym index -> (rela.plt index, GOT offset)
-    // GOT offset comes from the relocation entry's r_offset field
-    struct RelaInfo {
-        uint64_t rela_idx;
-        uint64_t got_addr;  // r_offset = address of the GOT entry
-    };
-    std::unordered_map<uint64_t, RelaInfo> dynsym_to_rela;
-
-    if (relaplt_it != pImpl->section_table.end()) {
-        auto rela_sec = relaplt_it->second.getSection();
-        if (rela_sec) {
-            const auto& r = pImpl->reader;  // NOLINT
-            ELFIO::relocation_section_accessor rela_accessor(r, rela_sec);
-            const auto rela_count = rela_accessor.get_entries_num();
-            for (size_t i = 0; i < rela_count; ++i) {
-                ELFIO::Elf64_Addr offset;
-                ELFIO::Elf_Word symbol;
-                ELFIO::Elf_Sxword addend;
-                unsigned int type;
-
-                if (!rela_accessor.get_entry(i, offset, symbol, type, addend)) {
-                    continue;
-                }
-                dynsym_to_rela[symbol] = {i, offset};
-            }
-        }
-    }
-
-    // --- PLT base address and alignment ---
-    uint64_t plt_base = 0;
-    uint64_t plt_align = 0;
-    const auto& plt_it = pImpl->section_table.find(".plt");
-    if (plt_it != pImpl->section_table.end()) {
-        auto plt_sec = plt_it->second.getSection();
-        if (plt_sec) {
-            plt_base = plt_sec->get_address();
-            plt_align = plt_sec->get_addr_align();
-        }
-    }
-
-    // --- Build the symbol table ---
-    for (size_t i = 0; i < sym_count; ++i) {
+    for (size_t i = 0; i < count; ++i) {
         std::string name;
         ELFIO::Elf64_Addr value;
         ELFIO::Elf_Xword sym_size;
@@ -293,74 +280,137 @@ NativeSymbolTable ELFFileHandlerStrategy::doGetNativeSymbolTable() noexcept {
         ELFIO::Elf_Half section_index;
         unsigned char other;
 
-        if (!sym_accessor.get_symbol(i, name, value, sym_size, bind, type,
-                                     section_index, other)) {
+        if (!accessor.get_symbol(i, name, value, sym_size, bind, type,
+                                 section_index, other)) {
             continue;
         }
 
-        if (name.empty()) {
+        if (name.empty() || value == 0) {
             continue;
         }
 
-        // Map ELF symbol type to our SymbolType
         SymbolType sym_type = SymbolType::NOTYPE;
-        if (type == ELFIO::STT_FUNC) {
+        if (type == ELFIO::STT_FUNC)
             sym_type = SymbolType::FUNC;
-        } else if (type == ELFIO::STT_OBJECT) {
+        else if (type == ELFIO::STT_OBJECT)
             sym_type = SymbolType::OBJECT;
-        } else if (type == ELFIO::STT_SECTION) {
+        else if (type == ELFIO::STT_SECTION)
             sym_type = SymbolType::SECTION;
-        } else if (type == ELFIO::STT_FILE) {
+        else if (type == ELFIO::STT_FILE)
             sym_type = SymbolType::FILE;
-        }
 
-        bool is_global = (bind == ELFIO::STB_GLOBAL || bind == ELFIO::STB_WEAK);
-
-        // Add the direct symbol entry (value from .dynsym)
-        if (value != 0) {
-            NativeSymbolTableEntry entry;
-            entry.name = name;
-            entry.address = value;
-            entry.size = sym_size;
-            entry.type = sym_type;
-            entry.isGlobal = is_global;
-            table.push_back(std::move(entry));
-        }
-
-        // For FUNC symbols, add PLT and GOT entries if they exist
-        if (type == ELFIO::STT_FUNC) {
-            auto rela_it = dynsym_to_rela.find(i);
-            if (rela_it != dynsym_to_rela.end()) {
-                const auto& [rela_idx, got_addr] = rela_it->second;
-
-                // PLT entry: plt_base + plt_align * (rela_idx + 1)
-                if (plt_base != 0 && plt_align != 0) {
-                    NativeSymbolTableEntry plt_entry;
-                    plt_entry.name = name;
-                    plt_entry.address = plt_base + plt_align * (rela_idx + 1);
-                    plt_entry.size = plt_align;
-                    plt_entry.type = SymbolType::FUNC;
-                    plt_entry.isGlobal = is_global;
-                    plt_entry.setAttribute("entry_type", std::string("PLT"));
-                    table.push_back(std::move(plt_entry));
-                }
-
-                // GOT entry: the r_offset from the relocation
-                {
-                    NativeSymbolTableEntry got_entry;
-                    got_entry.name = name;
-                    got_entry.address = got_addr;
-                    got_entry.size = is_64_bit ? 8 : 4;
-                    got_entry.type = SymbolType::OBJECT;
-                    got_entry.isGlobal = is_global;
-                    got_entry.setAttribute("entry_type", std::string("GOT"));
-                    table.push_back(std::move(got_entry));
-                }
-            }
-        }
+        NativeSymbolTableEntry entry;
+        entry.name = name;
+        entry.address = value;
+        entry.size = sym_size;
+        entry.type = sym_type;
+        entry.isGlobal = (bind == ELFIO::STB_GLOBAL || bind == ELFIO::STB_WEAK);
+        table.push_back(std::move(entry));
     }
 
     return table;
+}
+
+std::vector<CallTarget>
+ELFFileHandlerStrategy::doGetDirectCallTargets() noexcept {
+    std::vector<CallTarget> targets;
+
+    const auto& plt_it = pImpl->section_table.find(".plt");
+    if (plt_it == pImpl->section_table.end()) {
+        return targets;
+    }
+
+    auto plt_sec = plt_it->second.getSection();
+    if (!plt_sec) {
+        return targets;
+    }
+
+    const uint64_t plt_base = plt_sec->get_address();
+    const uint64_t plt_align = plt_sec->get_addr_align();
+    if (plt_base == 0 || plt_align == 0) {
+        return targets;
+    }
+
+    const auto& dynsym_it = pImpl->section_table.find(".dynsym");
+    if (dynsym_it == pImpl->section_table.end()) {
+        return targets;
+    }
+
+    auto dynsym_sec = dynsym_it->second.getSection();
+    if (!dynsym_sec) {
+        return targets;
+    }
+
+    ELFIO::elfio& reader = pImpl->reader;  // NOLINT
+    ELFIO::symbol_section_accessor sym_accessor(reader, dynsym_sec);
+    auto rela_map = buildRelocationMap();
+
+    for (auto& [dynsym_idx, info] : rela_map) {
+        std::string name;
+        ELFIO::Elf64_Addr value;
+        ELFIO::Elf_Xword sym_size;
+        unsigned char bind, type;
+        ELFIO::Elf_Half section_index;
+        unsigned char other;
+
+        if (!sym_accessor.get_symbol(dynsym_idx, name, value, sym_size, bind,
+                                     type, section_index, other)) {
+            continue;
+        }
+
+        if (name.empty() || type != ELFIO::STT_FUNC) {
+            continue;
+        }
+
+        uint64_t plt_addr = plt_base + plt_align * (info.rela_idx + 1);
+        targets.push_back({std::move(name), plt_addr, plt_align});
+    }
+
+    return targets;
+}
+
+std::vector<CallTarget>
+ELFFileHandlerStrategy::doGetIndirectCallTargets() noexcept {
+    std::vector<CallTarget> targets;
+
+    const bool is_64_bit = pImpl->reader.get_class() == ELFIO::ELFCLASS64;
+    const uint64_t ptr_size = is_64_bit ? 8 : 4;
+
+    const auto& dynsym_it = pImpl->section_table.find(".dynsym");
+    if (dynsym_it == pImpl->section_table.end()) {
+        return targets;
+    }
+
+    auto dynsym_sec = dynsym_it->second.getSection();
+    if (!dynsym_sec) {
+        return targets;
+    }
+
+    ELFIO::elfio& reader = pImpl->reader;  // NOLINT
+    ELFIO::symbol_section_accessor sym_accessor(reader, dynsym_sec);
+    auto rela_map = buildRelocationMap();
+
+    for (auto& [dynsym_idx, info] : rela_map) {
+        std::string name;
+        ELFIO::Elf64_Addr value;
+        ELFIO::Elf_Xword sym_size;
+        unsigned char bind, type;
+        ELFIO::Elf_Half section_index;
+        unsigned char other;
+
+        if (!sym_accessor.get_symbol(dynsym_idx, name, value, sym_size, bind,
+                                     type, section_index, other)) {
+            continue;
+        }
+
+        if (name.empty() || type != ELFIO::STT_FUNC) {
+            continue;
+        }
+
+        targets.push_back({std::move(name), info.got_addr, ptr_size});
+    }
+
+    return targets;
 }
 
 std::vector<uint8_t> ELFFileHandlerStrategy::doGetTextSectionIntl() noexcept {
