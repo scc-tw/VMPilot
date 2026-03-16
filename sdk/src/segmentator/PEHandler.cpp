@@ -4,8 +4,15 @@
 #include <cstring>
 #include <unordered_map>
 
-#include <coffi/coffi.hpp>
+// clang-format off
+// spdlog must be included before coffi. On Windows, spdlog transitively
+// pulls in <windows.h> which defines IMAGE_* macros via winnt.h. COFFI's
+// coffi_types.hpp defines the same constants with #ifndef guards, so if
+// winnt.h is included first the guards prevent C4005 (macro redefinition)
+// warnings. Reversing the order causes ~50 C4005 warnings on MSVC.
 #include <spdlog/spdlog.h>
+#include <coffi/coffi.hpp>
+// clang-format on
 
 using namespace VMPilot::SDK::Segmentator;
 
