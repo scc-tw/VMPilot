@@ -52,6 +52,21 @@ uint64_t Instruction::getRipRelativeTarget() const noexcept {
 
 // --- Arch/Mode mapping to capstone C enums ---
 
+// Capstone 6.x renamed CS_ARCH_ARM64 → CS_ARCH_AARCH64
+//                  and CS_ARCH_SYSZ  → CS_ARCH_SYSTEMZ
+#ifndef CS_ARCH_ARM64
+#define CS_ARCH_ARM64 CS_ARCH_AARCH64
+#endif
+#ifndef CS_ARCH_AARCH64
+#define CS_ARCH_AARCH64 CS_ARCH_ARM64
+#endif
+#ifndef CS_ARCH_SYSZ
+#define CS_ARCH_SYSZ CS_ARCH_SYSTEMZ
+#endif
+#ifndef CS_ARCH_SYSTEMZ
+#define CS_ARCH_SYSTEMZ CS_ARCH_SYSZ
+#endif
+
 static cs_arch toCSArch(Arch arch) {
     switch (arch) {
         case Arch::ARM:
