@@ -6,8 +6,8 @@ CPMAddPackage(
 
 CPMAddPackage(
     NAME COFFI
-    GITHUB_REPOSITORY "serge1/COFFI"
-    GIT_TAG "Release_1.1"
+    GITHUB_REPOSITORY "scc-tw/COFFI"
+    GIT_TAG "v1.1.2"
 )
 
 CPMAddPackage("gh:gabime/spdlog@1.17.0")
