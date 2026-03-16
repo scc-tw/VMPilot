@@ -4,6 +4,12 @@ CPMAddPackage(
     GIT_TAG "Release_3.12"
 )
 
+CPMAddPackage(
+    NAME COFFI
+    GITHUB_REPOSITORY "serge1/COFFI"
+    GIT_TAG "Release_1.1"
+)
+
 CPMAddPackage("gh:gabime/spdlog@1.17.0")
 
 # Build capstone from submodule
@@ -21,6 +27,7 @@ set (INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
     ${CMAKE_SOURCE_DIR}/common/include
     ${CMAKE_BINARY_DIR}/_deps/elfio-src/
+    ${CMAKE_BINARY_DIR}/_deps/coffi-src/
     ${spdlog_SOURCE_DIR}/include
 )
 

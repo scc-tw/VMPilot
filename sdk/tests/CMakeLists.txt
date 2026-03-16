@@ -6,6 +6,7 @@ set(INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/bytecode_compiler
     ${CMAKE_SOURCE_DIR}/common/include
     ${CMAKE_BINARY_DIR}/_deps/elfio-src/
+    ${CMAKE_BINARY_DIR}/_deps/coffi-src/
     ${spdlog_SOURCE_DIR}/include
 )
 
@@ -51,6 +52,10 @@ target_link_libraries(test_macho_handler GTest::gtest_main VMPilot_SDK_Segmentat
 add_executable(test_arm64_handler test_arm64_handler.cpp)
 target_link_libraries(test_arm64_handler GTest::gtest_main VMPilot_SDK_Segmentator capstone_wrapper opcode_table)
 
+add_executable(test_pe_handler test_pe_handler.cpp)
+target_link_libraries(test_pe_handler GTest::gtest_main VMPilot_SDK_Segmentator capstone_wrapper opcode_table)
+
+
 # Register with CTest
 include(GoogleTest)
 gtest_discover_tests(test_native_function_base)
@@ -63,4 +68,5 @@ gtest_discover_tests(test_strategy)
 gtest_discover_tests(test_bytecode_compiler)
 gtest_discover_tests(test_macho_handler)
 gtest_discover_tests(test_arm64_handler)
+gtest_discover_tests(test_pe_handler)
 gtest_discover_tests(test_segmentator_integration)

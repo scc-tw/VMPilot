@@ -183,12 +183,27 @@ Magic detail::get_magic_number(const std::string& filename) {
             "Failed to open file for magic number reading: " + filename);
     }
     uint32_t magic;
-    if (file.read(reinterpret_cast<char*>(&magic), sizeof(magic))) {
-        return static_cast<Magic>(magic);
+    if (!file.read(reinterpret_cast<char*>(&magic), sizeof(magic))) {
+        throw std::runtime_error("Failed to read magic number from file: " +
+                                 filename);
     }
-    // Should not reach here
-    throw std::runtime_error("Failed to read magic number from file: " +
-                             filename);
+
+    // PE files start with DOS "MZ" header; the actual PE signature
+    // ("PE\0\0" = 0x00004550) is at the offset stored at byte 0x3C.
+    if ((magic & 0xFFFF) == 0x5A4D) {  // 'MZ' in little-endian
+        uint32_t pe_offset = 0;
+        file.seekg(0x3C);
+        if (file.read(reinterpret_cast<char*>(&pe_offset), sizeof(pe_offset))) {
+            uint32_t pe_sig = 0;
+            file.seekg(pe_offset);
+            if (file.read(reinterpret_cast<char*>(&pe_sig), sizeof(pe_sig)) &&
+                pe_sig == static_cast<uint32_t>(Magic::PE)) {
+                return Magic::PE;
+            }
+        }
+    }
+
+    return static_cast<Magic>(magic);
 }
 
 FileFormat detail::get_file_format(Magic magic) {
@@ -268,6 +283,17 @@ header::PEHeader detail::get_pe_header(const std::string& filename) {
         throw std::runtime_error("Failed to open file for PE header reading: " +
                                  filename);
     }
+
+    // Read the PE header offset from the DOS header at 0x3C
+    uint32_t pe_offset = 0;
+    file.seekg(0x3C);
+    if (!file.read(reinterpret_cast<char*>(&pe_offset), sizeof(pe_offset))) {
+        throw std::runtime_error("Failed to read PE offset from file: " +
+                                 filename);
+    }
+
+    // Skip past PE signature ("PE\0\0" = 4 bytes) to reach COFF header
+    file.seekg(pe_offset + 4);
 
     header::PEHeader pe_header;
     if (!file.read(reinterpret_cast<char*>(&pe_header), sizeof(pe_header))) {
@@ -383,8 +409,14 @@ FileArch detail::get_file_arch_pe(const std::string& filename) {
 FileMode detail::get_file_mode_pe(const std::string& filename) {
     const auto& pe_header = get_pe_header(filename);
 
+    // PE32 Machine=0x014C (i386), PE32+ Machine=0x8664 (AMD64)
+    uint8_t bits = (pe_header.pe32.Machine == 0x8664 ||
+                    pe_header.pe32.Machine == 0xAA64)
+                       ? 64
+                       : 32;
+
     const auto& key = file_mode_table::lookup_mode(
-        get_file_arch_pe(filename), false, static_cast<file_mode_table::Bits>(pe_header.pe32.SizeOfOptionalHeader));
+        get_file_arch_pe(filename), false, bits);
 
     auto it = file_mode_table::mode_table.find(key);
     if (it == file_mode_table::mode_table.end()) {

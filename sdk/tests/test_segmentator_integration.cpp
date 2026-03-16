@@ -1,6 +1,7 @@
 #include <ARM64Handler.hpp>
 #include <ELFHandler.hpp>
 #include <MachOHandler.hpp>
+#include <PEHandler.hpp>
 #include <RegionRefiner.hpp>
 #include <X86Handler.hpp>
 #include <file_type_parser.hpp>
@@ -99,6 +100,70 @@ TEST_F(SegmentatorIntegrationDarwinARM64, FullPipeline) {
     ARM64Handler arm64(metadata.mode, symbols);
     ASSERT_TRUE(arm64.Load(text, base));
     auto regions = arm64.getNativeFunctions();
+    ASSERT_GE(regions.size(), 1u);
+
+    auto refined = VMPilot::SDK::RegionRefiner::refine(std::move(regions));
+    EXPECT_GE(refined.size(), 1u);
+
+    for (const auto& r : refined) {
+        EXPECT_GT(r->getAddr(), 0u);
+        EXPECT_GT(r->getSize(), 0u);
+        EXPECT_EQ(r->getCode().size(), r->getSize());
+    }
+}
+
+class SegmentatorIntegrationWindowsX64 : public ::testing::Test {
+   protected:
+    const std::string binary_path =
+        std::string(TEST_DATA_DIR) + "/basic_binary.Windows.x86_64.exe";
+};
+
+class SegmentatorIntegrationWindowsX86 : public ::testing::Test {
+   protected:
+    const std::string binary_path =
+        std::string(TEST_DATA_DIR) + "/basic_binary.Windows.x86.exe";
+};
+
+TEST_F(SegmentatorIntegrationWindowsX64, FullPipeline) {
+    auto metadata = VMPilot::Common::get_file_metadata(binary_path);
+    EXPECT_EQ(metadata.format, VMPilot::Common::FileFormat::PE);
+
+    PEFileHandlerStrategy pe(binary_path);
+    auto text = pe.getTextSection();
+    auto base = pe.getTextBaseAddr();
+    auto symbols = pe.getNativeSymbolTable();
+    ASSERT_FALSE(text.empty());
+    ASSERT_FALSE(symbols.empty());
+
+    X86Handler x86(metadata.mode, symbols);
+    ASSERT_TRUE(x86.Load(text, base));
+    auto regions = x86.getNativeFunctions();
+    ASSERT_GE(regions.size(), 1u);
+
+    auto refined = VMPilot::SDK::RegionRefiner::refine(std::move(regions));
+    EXPECT_GE(refined.size(), 1u);
+
+    for (const auto& r : refined) {
+        EXPECT_GT(r->getAddr(), 0u);
+        EXPECT_GT(r->getSize(), 0u);
+        EXPECT_EQ(r->getCode().size(), r->getSize());
+    }
+}
+
+TEST_F(SegmentatorIntegrationWindowsX86, FullPipeline) {
+    auto metadata = VMPilot::Common::get_file_metadata(binary_path);
+    EXPECT_EQ(metadata.format, VMPilot::Common::FileFormat::PE);
+
+    PEFileHandlerStrategy pe(binary_path);
+    auto text = pe.getTextSection();
+    auto base = pe.getTextBaseAddr();
+    auto symbols = pe.getNativeSymbolTable();
+    ASSERT_FALSE(text.empty());
+    ASSERT_FALSE(symbols.empty());
+
+    X86Handler x86(metadata.mode, symbols);
+    ASSERT_TRUE(x86.Load(text, base));
+    auto regions = x86.getNativeFunctions();
     ASSERT_GE(regions.size(), 1u);
 
     auto refined = VMPilot::SDK::RegionRefiner::refine(std::move(regions));

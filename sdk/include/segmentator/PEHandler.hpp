@@ -15,7 +15,6 @@ class PEFileHandlerStrategy : public FileHandlerStrategy {
    private:
     struct Impl;
     std::unique_ptr<Impl> pImpl;
-    // Private method to create an instance of the implementation
     friend std::unique_ptr<Impl> make_pe_impl(const std::string& filename);
 
    public:
@@ -23,34 +22,18 @@ class PEFileHandlerStrategy : public FileHandlerStrategy {
     virtual ~PEFileHandlerStrategy();
 
    protected:
-    /**
-     * @brief Get the begin and end address of the VMPilot signatures.
-     */
     virtual std::pair<uint64_t, uint64_t> doGetBeginEndAddr() noexcept override;
-
-    /**
-     * @brief Get the entire chunk of the executable code section (usually .text section).
-     */
     virtual std::vector<uint8_t> doGetTextSection() noexcept override;
-
-    /**
-     * @brief Get the base address of the executable code section (usually .text section).
-     */
     virtual uint64_t doGetTextBaseAddr() noexcept override;
 
-   private:
-    // Internal implementations that perform the actual logic
-    std::pair<uint64_t, uint64_t> doGetBeginEndAddrIntl() noexcept;
-    std::vector<uint8_t> doGetTextSectionIntl() noexcept;
+    virtual NativeSymbolTable doGetSymbols() noexcept override;
+    virtual std::vector<CallTarget> doGetDirectCallTargets() noexcept override;
+    virtual std::vector<CallTarget>
+    doGetIndirectCallTargets() noexcept override;
 
-    /**
-     * Parses headers to locate and return specific PE section data.
-     *
-     * @param sectionName The name of the section to retrieve.
-     * @return The data of the section if found, or an empty vector if not.
-     */
-    std::vector<uint8_t> getSectionData(
-        const std::string& sectionName) noexcept;
+   private:
+    void parseImports() noexcept;
+    const char* rvaToPtr(uint32_t rva) const noexcept;
 };
 
 std::unique_ptr<PEFileHandlerStrategy::Impl> make_pe_impl(
