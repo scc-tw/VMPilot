@@ -1,0 +1,6 @@
+# Build directories
+build*/
+
+# MSVC import libraries and export files
+bin/*.lib
+bin/*.exp
