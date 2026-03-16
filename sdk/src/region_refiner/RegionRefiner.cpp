@@ -67,10 +67,22 @@ std::vector<std::unique_ptr<NativeFunc>> VMPilot::SDK::RegionRefiner::refine(
                                  this_code.end());
             }
 
-            result.back() = std::make_unique<NativeFunc>(
+            auto merged = std::make_unique<NativeFunc>(
                 merged_start, merged_size, last->getName(),
                 std::move(last_code));
 
+            if (!merged->isValid()) {
+                spdlog::error(
+                    "RegionRefiner: merged region '{}' at 0x{:x} is invalid: "
+                    "size={} but code.size()={}, dropping",
+                    merged->getName(), merged_start, merged_size,
+                    merged->getCode().size());
+                result.pop_back();
+                // Don't update current_end — treat as if both were dropped
+                continue;
+            }
+
+            result.back() = std::move(merged);
             current_end = end;
         }
     }

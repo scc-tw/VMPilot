@@ -105,11 +105,20 @@ std::vector<std::unique_ptr<NativeFunctionBase>> extractNativeFunctions(
                                return std::string(buf);
                            })();
 
-        native_functions.push_back(std::make_unique<NativeFunctionBase>(
-            start_addr, size, std::move(name), std::move(code)));
+        auto nf = std::make_unique<NativeFunctionBase>(
+            start_addr, size, std::move(name), std::move(code));
+
+        if (!nf->isValid()) {
+            spdlog::error(
+                "Skipping invalid region at 0x{:x}: "
+                "size={} but code.size()={}",
+                start_addr, size, nf->getCode().size());
+            continue;
+        }
 
         spdlog::info("Found protected region: 0x{:x} - 0x{:x} ({} bytes)",
                      start_addr, end_addr, size);
+        native_functions.push_back(std::move(nf));
     }
 
     // Return a copy

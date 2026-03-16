@@ -65,6 +65,9 @@ class NativeFunctionBase {
     std::string getName() const { return m_name; }
     std::vector<uint8_t> getCode() const { return m_code; }
     std::vector<uint8_t> getGlobalData() const { return globalData; }
+
+    /// Check that code.size() == m_size (the fundamental invariant).
+    bool isValid() const { return m_code.size() == m_size; }
 };
 }  // namespace VMPilot::SDK::Segmentator
 
