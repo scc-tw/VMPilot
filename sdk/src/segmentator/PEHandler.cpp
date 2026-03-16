@@ -29,8 +29,8 @@ struct PE_IMPORT_DESCRIPTOR {
     uint32_t OriginalFirstThunk;  // RVA to ILT
     uint32_t TimeDateStamp;
     uint32_t ForwarderChain;
-    uint32_t Name;       // RVA to DLL name string
-    uint32_t FirstThunk; // RVA to IAT
+    uint32_t Name;        // RVA to DLL name string
+    uint32_t FirstThunk;  // RVA to IAT
 };
 #pragma pack(pop)
 }  // namespace
@@ -42,8 +42,8 @@ struct PEFileHandlerStrategy::Impl {
 
     struct ImportEntry {
         std::string func_name;
-        uint64_t iat_va;   // Virtual address of this IAT slot
-        uint64_t iat_size; // Size of IAT entry (4 or 8)
+        uint64_t iat_va;    // Virtual address of this IAT slot
+        uint64_t iat_size;  // Size of IAT entry (4 or 8)
     };
     std::vector<ImportEntry> import_entries;
     bool imports_parsed = false;
@@ -57,7 +57,8 @@ const char* PEFileHandlerStrategy::rvaToPtr(uint32_t rva) const noexcept {
         auto* sec = sections[i];
         uint32_t sec_va = sec->get_virtual_address();
         uint32_t sec_size = sec->get_data_size();
-        if (sec_size == 0 || !sec->get_data()) continue;
+        if (sec_size == 0 || !sec->get_data())
+            continue;
         if (rva >= sec_va && rva < sec_va + sec_size) {
             return sec->get_data() + (rva - sec_va);
         }
@@ -66,57 +67,64 @@ const char* PEFileHandlerStrategy::rvaToPtr(uint32_t rva) const noexcept {
 }
 
 void PEFileHandlerStrategy::parseImports() noexcept {
-    if (pImpl->imports_parsed) return;
+    if (pImpl->imports_parsed)
+        return;
     pImpl->imports_parsed = true;
 
     auto& dirs = pImpl->reader.get_directories();
-    if (dirs.get_count() <= PE_DIRECTORY_IMPORT) return;
+    if (dirs.get_count() <= PE_DIRECTORY_IMPORT)
+        return;
 
     auto* import_dir = dirs[PE_DIRECTORY_IMPORT];
-    if (!import_dir) return;
+    if (!import_dir)
+        return;
 
     uint32_t import_rva = import_dir->get_virtual_address();
     uint32_t import_size = import_dir->get_size();
-    if (import_rva == 0 || import_size == 0) return;
+    if (import_rva == 0 || import_size == 0)
+        return;
 
     const char* import_ptr = rvaToPtr(import_rva);
-    if (!import_ptr) return;
+    if (!import_ptr)
+        return;
 
     const bool is_pe32_plus = pImpl->is_pe32_plus;
     const uint64_t image_base = pImpl->image_base;
     const size_t thunk_size = is_pe32_plus ? 8 : 4;
-    const uint64_t ordinal_flag =
-        is_pe32_plus ? (1ULL << 63) : (1ULL << 31);
+    const uint64_t ordinal_flag = is_pe32_plus ? (1ULL << 63) : (1ULL << 31);
 
     // Iterate import descriptors (null-terminated array)
-    for (auto desc =
-             reinterpret_cast<const PE_IMPORT_DESCRIPTOR*>(import_ptr);
+    for (auto desc = reinterpret_cast<const PE_IMPORT_DESCRIPTOR*>(import_ptr);
          desc->Name != 0; ++desc) {
         const char* dll_name = rvaToPtr(desc->Name);
-        if (!dll_name) continue;
+        if (!dll_name)
+            continue;
 
         // Prefer ILT (OriginalFirstThunk), fall back to IAT (FirstThunk)
-        uint32_t ilt_rva =
-            desc->OriginalFirstThunk ? desc->OriginalFirstThunk
-                                     : desc->FirstThunk;
+        uint32_t ilt_rva = desc->OriginalFirstThunk ? desc->OriginalFirstThunk
+                                                    : desc->FirstThunk;
         uint32_t iat_rva = desc->FirstThunk;
 
         const char* ilt_ptr = rvaToPtr(ilt_rva);
-        if (!ilt_ptr) continue;
+        if (!ilt_ptr)
+            continue;
 
         for (size_t idx = 0;; ++idx) {
             uint64_t ilt_entry = 0;
             std::memcpy(&ilt_entry, ilt_ptr + idx * thunk_size, thunk_size);
 
-            if (ilt_entry == 0) break;
+            if (ilt_entry == 0)
+                break;
 
             // Skip ordinal imports
-            if (ilt_entry & ordinal_flag) continue;
+            if (ilt_entry & ordinal_flag)
+                continue;
 
             // Import by name: entry is RVA to (uint16_t hint + name)
             uint32_t hint_name_rva = static_cast<uint32_t>(ilt_entry);
             const char* hint_name_ptr = rvaToPtr(hint_name_rva);
-            if (!hint_name_ptr) continue;
+            if (!hint_name_ptr)
+                continue;
 
             // Skip 2-byte hint, read null-terminated name
             const char* func_name = hint_name_ptr + 2;
@@ -128,8 +136,7 @@ void PEFileHandlerStrategy::parseImports() noexcept {
         }
     }
 
-    spdlog::info("PE: parsed {} import entries",
-                 pImpl->import_entries.size());
+    spdlog::info("PE: parsed {} import entries", pImpl->import_entries.size());
 }
 
 std::unique_ptr<PEFileHandlerStrategy::Impl>
@@ -162,7 +169,8 @@ std::vector<uint8_t> PEFileHandlerStrategy::doGetTextSection() noexcept {
         if (sec->get_name() == ".text") {
             auto size = sec->get_data_size();
             const char* data = sec->get_data();
-            if (!data || size == 0) return {};
+            if (!data || size == 0)
+                return {};
             return std::vector<uint8_t>(data, data + size);
         }
     }
@@ -193,8 +201,7 @@ NativeSymbolTable PEFileHandlerStrategy::doGetSymbols() noexcept {
     return {};
 }
 
-std::vector<CallTarget>
-PEFileHandlerStrategy::doGetStubCallTargets() noexcept {
+std::vector<CallTarget> PEFileHandlerStrategy::doGetStubCallTargets() noexcept {
     parseImports();
 
     // Build reverse lookup: IAT VA -> function name
@@ -210,13 +217,15 @@ PEFileHandlerStrategy::doGetStubCallTargets() noexcept {
     // We scan .text for these byte patterns to discover stub addresses.
     auto text = doGetTextSection();
     uint64_t text_base = doGetTextBaseAddr();
-    if (text.empty() || text_base == static_cast<uint64_t>(-1)) return {};
+    if (text.empty() || text_base == static_cast<uint64_t>(-1))
+        return {};
 
     constexpr size_t THUNK_SIZE = 6;  // FF 25 + 4-byte operand
     std::vector<CallTarget> targets;
 
     for (size_t pos = 0; pos + THUNK_SIZE <= text.size(); ++pos) {
-        if (text[pos] != 0xFF || text[pos + 1] != 0x25) continue;
+        if (text[pos] != 0xFF || text[pos + 1] != 0x25)
+            continue;
 
         int32_t operand;
         std::memcpy(&operand, &text[pos + 2], 4);

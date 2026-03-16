@@ -116,10 +116,12 @@ NativeSymbolTable ELFFileHandlerStrategy::doGetSymbols() noexcept {
     // are both discoverable.
     auto readSymbolSection = [&](const char* section_name) {
         const auto& it = pImpl->section_table.find(section_name);
-        if (it == pImpl->section_table.end()) return;
+        if (it == pImpl->section_table.end())
+            return;
 
         auto sec = it->second.getSection();
-        if (!sec) return;
+        if (!sec)
+            return;
 
         ELFIO::elfio& reader = pImpl->reader;  // NOLINT
         ELFIO::symbol_section_accessor accessor(reader, sec);

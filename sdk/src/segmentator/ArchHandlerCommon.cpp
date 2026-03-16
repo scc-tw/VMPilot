@@ -39,7 +39,8 @@ std::vector<std::unique_ptr<NativeFunctionBase>> extractNativeFunctions(
     auto matchesAny = [](const std::string& name,
                          const std::vector<std::string>& sigs) {
         for (const auto& sig : sigs)
-            if (name == sig) return true;
+            if (name == sig)
+                return true;
         return false;
     };
 
@@ -53,10 +54,12 @@ std::vector<std::unique_ptr<NativeFunctionBase>> extractNativeFunctions(
 
     for (size_t i = 0; i < instructions.size(); ++i) {
         const auto& insn = instructions[i];
-        if (!insn.isCall()) continue;
+        if (!insn.isCall())
+            continue;
 
         auto sym = resolver(insn, lookup);
-        if (!sym) continue;
+        if (!sym)
+            continue;
 
         if (matchesAny(*sym, begin_sigs)) {
             if (pending_begin != static_cast<size_t>(-1)) {
@@ -97,13 +100,13 @@ std::vector<std::unique_ptr<NativeFunctionBase>> extractNativeFunctions(
             code.insert(code.end(), insn.bytes.begin(), insn.bytes.end());
         }
 
-        std::string name = "vmpilot_region_0x" + ([&] {
-                               char buf[17];
-                               snprintf(buf, sizeof(buf), "%llx",
-                                        static_cast<unsigned long long>(
-                                            start_addr));
-                               return std::string(buf);
-                           })();
+        std::string name =
+            "vmpilot_region_0x" + ([&] {
+                char buf[17];
+                snprintf(buf, sizeof(buf), "%llx",
+                         static_cast<unsigned long long>(start_addr));
+                return std::string(buf);
+            })();
 
         auto nf = std::make_unique<NativeFunctionBase>(
             start_addr, size, std::move(name), std::move(code));

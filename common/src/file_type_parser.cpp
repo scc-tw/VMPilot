@@ -410,13 +410,13 @@ FileMode detail::get_file_mode_pe(const std::string& filename) {
     const auto& pe_header = get_pe_header(filename);
 
     // PE32 Machine=0x014C (i386), PE32+ Machine=0x8664 (AMD64)
-    uint8_t bits = (pe_header.pe32.Machine == 0x8664 ||
-                    pe_header.pe32.Machine == 0xAA64)
-                       ? 64
-                       : 32;
+    uint8_t bits =
+        (pe_header.pe32.Machine == 0x8664 || pe_header.pe32.Machine == 0xAA64)
+            ? 64
+            : 32;
 
-    const auto& key = file_mode_table::lookup_mode(
-        get_file_arch_pe(filename), false, bits);
+    const auto& key =
+        file_mode_table::lookup_mode(get_file_arch_pe(filename), false, bits);
 
     auto it = file_mode_table::mode_table.find(key);
     if (it == file_mode_table::mode_table.end()) {
@@ -445,10 +445,10 @@ FileArch detail::get_file_arch_macho(const std::string& filename) {
 
     static const std::unordered_map<uint32_t, VMPilot::Common::FileArch>
         arch_table = {
-            {0x00000007, VMPilot::Common::FileArch::X86},      // CPU_TYPE_X86
-            {0x01000007, VMPilot::Common::FileArch::X86},      // CPU_TYPE_X86_64
-            {0x0000000C, VMPilot::Common::FileArch::ARM},      // CPU_TYPE_ARM
-            {0x0100000C, VMPilot::Common::FileArch::ARM64},    // CPU_TYPE_ARM64
+            {0x00000007, VMPilot::Common::FileArch::X86},    // CPU_TYPE_X86
+            {0x01000007, VMPilot::Common::FileArch::X86},    // CPU_TYPE_X86_64
+            {0x0000000C, VMPilot::Common::FileArch::ARM},    // CPU_TYPE_ARM
+            {0x0100000C, VMPilot::Common::FileArch::ARM64},  // CPU_TYPE_ARM64
         };
 
     auto it = arch_table.find(macho_header.macho.cputype);

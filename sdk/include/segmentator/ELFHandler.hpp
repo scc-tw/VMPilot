@@ -28,8 +28,8 @@ class ELFFileHandlerStrategy : public FileHandlerStrategy {
 
     virtual NativeSymbolTable doGetSymbols() noexcept override;
     virtual std::vector<CallTarget> doGetStubCallTargets() noexcept override;
-    virtual std::vector<CallTarget>
-    doGetPointerTableTargets() noexcept override;
+    virtual std::vector<CallTarget> doGetPointerTableTargets() noexcept
+        override;
 
    private:
     /// dynsym index -> (rela.plt index, GOT address)

@@ -34,8 +34,7 @@ VMPilot::SDK::Segmentator::make_macho_impl(const std::string& filename) {
     if (!parser) {
         throw std::runtime_error("Failed to parse Mach-O file: " + filename);
     }
-    return std::make_unique<MachOFileHandlerStrategy::Impl>(
-        std::move(*parser));
+    return std::make_unique<MachOFileHandlerStrategy::Impl>(std::move(*parser));
 }
 
 MachOFileHandlerStrategy::MachOFileHandlerStrategy(const std::string& filename)
@@ -68,7 +67,8 @@ NativeSymbolTable MachOFileHandlerStrategy::doGetSymbols() noexcept {
     NativeSymbolTable table;
 
     for (const auto& sym : pImpl->parser.symbols()) {
-        if (sym.name.empty() || sym.value == 0) continue;
+        if (sym.name.empty() || sym.value == 0)
+            continue;
 
         NativeSymbolTableEntry entry;
         entry.name = stripLeadingUnderscore(sym.name);
@@ -76,8 +76,8 @@ NativeSymbolTable MachOFileHandlerStrategy::doGetSymbols() noexcept {
         entry.size = 0;
         // Mach-O n_type: bit 0xe = N_TYPE mask
         // N_SECT (0xe) = defined in a section
-        entry.type = (sym.type & 0x0e) == 0x0e ? SymbolType::FUNC
-                                                : SymbolType::NOTYPE;
+        entry.type =
+            (sym.type & 0x0e) == 0x0e ? SymbolType::FUNC : SymbolType::NOTYPE;
         entry.isGlobal = (sym.type & 0x01) != 0;  // N_EXT
         table.push_back(std::move(entry));
     }
