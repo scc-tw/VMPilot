@@ -45,6 +45,12 @@ target_link_libraries(test_bytecode_compiler GTest::gtest_main VMPilot_SDK_LIB)
 add_executable(test_segmentator_integration test_segmentator_integration.cpp)
 target_link_libraries(test_segmentator_integration GTest::gtest_main VMPilot_SDK_Segmentator VMPilot_SDK_RegionRefiner VMPilot_SDK_LIB capstone_wrapper opcode_table)
 
+add_executable(test_macho_handler test_macho_handler.cpp)
+target_link_libraries(test_macho_handler GTest::gtest_main VMPilot_SDK_Segmentator capstone_wrapper opcode_table)
+
+add_executable(test_arm64_handler test_arm64_handler.cpp)
+target_link_libraries(test_arm64_handler GTest::gtest_main VMPilot_SDK_Segmentator capstone_wrapper opcode_table)
+
 # Register with CTest
 include(GoogleTest)
 gtest_discover_tests(test_native_function_base)
@@ -55,4 +61,6 @@ gtest_discover_tests(test_x86_handler)
 gtest_discover_tests(test_region_refiner)
 gtest_discover_tests(test_strategy)
 gtest_discover_tests(test_bytecode_compiler)
+gtest_discover_tests(test_macho_handler)
+gtest_discover_tests(test_arm64_handler)
 gtest_discover_tests(test_segmentator_integration)

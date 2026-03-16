@@ -413,12 +413,10 @@ FileArch detail::get_file_arch_macho(const std::string& filename) {
 
     static const std::unordered_map<uint32_t, VMPilot::Common::FileArch>
         arch_table = {
-            {0x00000007, VMPilot::Common::FileArch::X86},
-            {0x01000007, VMPilot::Common::FileArch::X86},
-            {0x0000000C, VMPilot::Common::FileArch::ARM},
-            {0x0100000C, VMPilot::Common::FileArch::ARM},
-            {0x0000000E, VMPilot::Common::FileArch::ARM64},
-            {0x0100000E, VMPilot::Common::FileArch::ARM64},
+            {0x00000007, VMPilot::Common::FileArch::X86},      // CPU_TYPE_X86
+            {0x01000007, VMPilot::Common::FileArch::X86},      // CPU_TYPE_X86_64
+            {0x0000000C, VMPilot::Common::FileArch::ARM},      // CPU_TYPE_ARM
+            {0x0100000C, VMPilot::Common::FileArch::ARM64},    // CPU_TYPE_ARM64
         };
 
     auto it = arch_table.find(macho_header.macho.cputype);
