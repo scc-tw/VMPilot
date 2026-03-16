@@ -2,29 +2,37 @@
 
 #include <fstream>
 
+// All known name-mangling variants for VMPilot_Begin/End across compilers
+const std::vector<std::string> VMPilot::Common::BEGIN_VMPILOT_SIGNATURES = {
+    "_Z13VMPilot_BeginPKc",        // gcc / clang (Itanium ABI)
+    "?VMPilot_Begin@@YAXPEBD@Z",   // MSVC x64
+    "?VMPilot_Begin@@YAXPBD@Z",    // MSVC x86
+};
+
+const std::vector<std::string> VMPilot::Common::END_VMPILOT_SIGNATURES = {
+    "_Z11VMPilot_EndPKc",           // gcc / clang (Itanium ABI)
+    "?VMPilot_End@@YAXPEBD@Z",     // MSVC x64
+    "?VMPilot_End@@YAXPBD@Z",      // MSVC x86
+};
+
+// Preferred signature for the current host platform
 const std::string VMPilot::Common::BEGIN_VMPILOT_SIGNATURE =
-    []() noexcept -> std::string {
-// Mangling of VMPilot_Begin(__FUNCTION__); signature
 #ifdef _WIN64
-    return "?VMPilot_Begin@@YAXPEBD@Z";
+    "?VMPilot_Begin@@YAXPEBD@Z";
 #elif _WIN32
-    return "?VMPilot_Begin@@YAXPBD@Z";
-#else  // gcc or clang
-    return "_Z13VMPilot_BeginPKc";
+    "?VMPilot_Begin@@YAXPBD@Z";
+#else
+    "_Z13VMPilot_BeginPKc";
 #endif
-}();
 
 const std::string VMPilot::Common::END_VMPILOT_SIGNATURE =
-    []() noexcept -> std::string {
-// Mangling of VMPilot_End(__FUNCTION__); signature
 #ifdef _WIN64
-    return "?VMPilot_End@@YAXPEBD@Z";
+    "?VMPilot_End@@YAXPEBD@Z";
 #elif _WIN32
-    return "?VMPilot_End@@YAXPBD@Z";
-#else  // gcc or clang
-    return "_Z11VMPilot_EndPKc";
+    "?VMPilot_End@@YAXPBD@Z";
+#else
+    "_Z11VMPilot_EndPKc";
 #endif
-}();
 
 std::vector<uint8_t> VMPilot::Common::read_file(
     const std::string& filename) noexcept {

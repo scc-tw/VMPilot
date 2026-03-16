@@ -184,10 +184,17 @@ uint64_t ELFFileHandlerStrategy::getPltAddr(uint64_t relaplt_idx) noexcept {
 std::pair<uint64_t, uint64_t>
 ELFFileHandlerStrategy::doGetBeginEndAddrIntl() noexcept {
     // Step 1: get the index of begin and end with getEntryIndex
-    uint64_t begin_dynsym_idx =
-        getEntryIndex(VMPilot::Common::BEGIN_VMPILOT_SIGNATURE);
-    uint64_t end_dynsym_idx =
-        getEntryIndex(VMPilot::Common::END_VMPILOT_SIGNATURE);
+    // Try all known mangling variants (Itanium, MSVC x64, MSVC x86)
+    uint64_t begin_dynsym_idx = static_cast<uint64_t>(-1);
+    for (const auto& sig : VMPilot::Common::BEGIN_VMPILOT_SIGNATURES) {
+        begin_dynsym_idx = getEntryIndex(sig);
+        if (begin_dynsym_idx != static_cast<uint64_t>(-1)) break;
+    }
+    uint64_t end_dynsym_idx = static_cast<uint64_t>(-1);
+    for (const auto& sig : VMPilot::Common::END_VMPILOT_SIGNATURES) {
+        end_dynsym_idx = getEntryIndex(sig);
+        if (end_dynsym_idx != static_cast<uint64_t>(-1)) break;
+    }
     if (begin_dynsym_idx == static_cast<uint64_t>(-1) ||
         end_dynsym_idx == static_cast<uint64_t>(-1)) {
         spdlog::error(

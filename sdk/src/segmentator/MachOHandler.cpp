@@ -49,10 +49,11 @@ MachOFileHandlerStrategy::doGetBeginEndAddr() noexcept {
     uint64_t begin_addr = static_cast<uint64_t>(-1), end_addr = static_cast<uint64_t>(-1);
     for (const auto& entry : pImpl->parser.stubEntries()) {
         auto name = stripLeadingUnderscore(entry.symbol_name);
-        if (name == VMPilot::Common::BEGIN_VMPILOT_SIGNATURE) {
-            begin_addr = entry.address;
-        } else if (name == VMPilot::Common::END_VMPILOT_SIGNATURE) {
-            end_addr = entry.address;
+        for (const auto& sig : VMPilot::Common::BEGIN_VMPILOT_SIGNATURES) {
+            if (name == sig) { begin_addr = entry.address; break; }
+        }
+        for (const auto& sig : VMPilot::Common::END_VMPILOT_SIGNATURES) {
+            if (name == sig) { end_addr = entry.address; break; }
         }
     }
     return {begin_addr, end_addr};

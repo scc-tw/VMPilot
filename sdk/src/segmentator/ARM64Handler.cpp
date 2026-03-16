@@ -88,10 +88,17 @@ ARM64Handler::doGetNativeFunctions() noexcept {
         return result;
     }
 
-    const auto& begin_sig = VMPilot::Common::BEGIN_VMPILOT_SIGNATURE;
-    const auto& end_sig = VMPilot::Common::END_VMPILOT_SIGNATURE;
+    const auto& begin_sigs = VMPilot::Common::BEGIN_VMPILOT_SIGNATURES;
+    const auto& end_sigs = VMPilot::Common::END_VMPILOT_SIGNATURES;
     const auto& instructions = impl->instructions;
     const auto& lookup = impl->addr_lookup;
+
+    auto matchesAny = [](const std::string& name,
+                         const std::vector<std::string>& sigs) {
+        for (const auto& sig : sigs)
+            if (name == sig) return true;
+        return false;
+    };
 
     struct Region {
         size_t begin_idx;
@@ -107,14 +114,14 @@ ARM64Handler::doGetNativeFunctions() noexcept {
         const auto* sym = resolveCallTarget(insn, lookup);
         if (!sym) continue;
 
-        if (*sym == begin_sig) {
+        if (matchesAny(*sym, begin_sigs)) {
             if (pending_begin != static_cast<size_t>(-1)) {
                 spdlog::warn(
                     "Nested VMPilot_Begin at 0x{:x}, previous begin at 0x{:x}",
                     insn.address, instructions[pending_begin].address);
             }
             pending_begin = i;
-        } else if (*sym == end_sig) {
+        } else if (matchesAny(*sym, end_sigs)) {
             if (pending_begin == static_cast<size_t>(-1)) {
                 spdlog::warn("VMPilot_End at 0x{:x} without matching Begin",
                              insn.address);
