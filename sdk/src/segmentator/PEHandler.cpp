@@ -42,9 +42,9 @@ struct ImageSectionHeader {
 struct PEFileHandlerStrategy::Impl {
     detail::PEParser pe_handler;
     std::unordered_map<std::string, detail::ImageSectionHeader> section_table;
-    uint64_t vmp_begin_addr = -1;
-    uint64_t vmp_end_addr = -1;
-    uint64_t text_base_addr = -1;
+    uint64_t vmp_begin_addr = static_cast<uint64_t>(-1);
+    uint64_t vmp_end_addr = static_cast<uint64_t>(-1);
+    uint64_t text_base_addr = static_cast<uint64_t>(-1);
 };
 
 std::unique_ptr<PEFileHandlerStrategy::Impl>
@@ -66,7 +66,7 @@ PEFileHandlerStrategy::~PEFileHandlerStrategy() {}
 std::pair<uint64_t, uint64_t>
 PEFileHandlerStrategy::doGetBeginEndAddr() noexcept {
     spdlog::error("PEFileHandlerStrategy::doGetBeginEndAddr not implemented");
-    return std::make_pair(-1, -1);
+    return std::make_pair(static_cast<uint64_t>(-1), static_cast<uint64_t>(-1));
 }
 
 std::vector<uint8_t> PEFileHandlerStrategy::doGetTextSection() noexcept {
@@ -76,14 +76,14 @@ std::vector<uint8_t> PEFileHandlerStrategy::doGetTextSection() noexcept {
 
 uint64_t PEFileHandlerStrategy::doGetTextBaseAddr() noexcept {
     spdlog::error("PEFileHandlerStrategy::doGetTextBaseAddr not implemented");
-    return -1;
+    return static_cast<uint64_t>(-1);
 }
 
 std::pair<uint64_t, uint64_t>
 PEFileHandlerStrategy::doGetBeginEndAddrIntl() noexcept {
     spdlog::error(
         "PEFileHandlerStrategy::doGetBeginEndAddrIntl not implemented");
-    return std::make_pair(-1, -1);
+    return std::make_pair(static_cast<uint64_t>(-1), static_cast<uint64_t>(-1));
 }
 
 std::vector<uint8_t> PEFileHandlerStrategy::doGetTextSectionIntl() noexcept {

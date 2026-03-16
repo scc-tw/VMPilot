@@ -46,7 +46,7 @@ MachOFileHandlerStrategy::~MachOFileHandlerStrategy() = default;
 std::pair<uint64_t, uint64_t>
 MachOFileHandlerStrategy::doGetBeginEndAddr() noexcept {
     // Find stub addresses for VMPilot_Begin and VMPilot_End
-    uint64_t begin_addr = -1, end_addr = -1;
+    uint64_t begin_addr = static_cast<uint64_t>(-1), end_addr = static_cast<uint64_t>(-1);
     for (const auto& entry : pImpl->parser.stubEntries()) {
         auto name = stripLeadingUnderscore(entry.symbol_name);
         if (name == VMPilot::Common::BEGIN_VMPILOT_SIGNATURE) {
@@ -72,7 +72,7 @@ uint64_t MachOFileHandlerStrategy::doGetTextBaseAddr() noexcept {
         auto sect = pImpl->parser.findSection("__TEXT", "__text");
         if (!sect) {
             spdlog::error("Could not find __TEXT,__text section");
-            return -1;
+            return static_cast<uint64_t>(-1);
         }
         pImpl->text_base_addr = sect->addr;
     }

@@ -12,3 +12,6 @@ set(INCLUDE_DIRS
 add_library(${TARGET_NAME} STATIC ${SRC_FILES})
 target_include_directories(${TARGET_NAME} PUBLIC ${INCLUDE_DIRS})
 target_link_libraries(${TARGET_NAME} PUBLIC capstone)
+if(MSVC)
+    target_compile_options(${TARGET_NAME} PRIVATE /utf-8)
+endif()
