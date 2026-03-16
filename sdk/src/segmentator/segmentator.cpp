@@ -2,18 +2,26 @@
 
 #include <file_type_parser.hpp>
 
+#include <new>
+
 #include <spdlog/spdlog.h>
 
 using namespace VMPilot::SDK::Segmentator;
 
 std::unique_ptr<Segmentator> VMPilot::SDK::Segmentator::create_segmentator(
     const std::string& filename) noexcept {
-    auto segmentator = std::unique_ptr<Segmentator>(nullptr);
+    auto segmentator =
+        std::unique_ptr<Segmentator>(new (std::nothrow) Segmentator());
+    if (!segmentator) {
+        spdlog::error("Failed to allocate Segmentator");
+        return nullptr;
+    }
 
     try {
         segmentator->m_metadata = VMPilot::Common::get_file_metadata(filename);
     } catch (const std::exception& e) {
         spdlog::error("Error creating segmentator: {}", e.what());
+        return nullptr;
     }
 
     const auto& registry = HandlerRegistry::instance();
@@ -23,19 +31,19 @@ std::unique_ptr<Segmentator> VMPilot::SDK::Segmentator::create_segmentator(
     if (!segmentator->m_file_handler) {
         spdlog::error("Unsupported file format: {}",
                       static_cast<uint8_t>(segmentator->m_metadata.format));
+        return nullptr;
     }
 
     // Build symbol table from file handler, then create arch handler
-    NativeSymbolTable symbols;
-    if (segmentator->m_file_handler) {
-        symbols = segmentator->m_file_handler->getNativeSymbolTable();
-    }
+    NativeSymbolTable symbols =
+        segmentator->m_file_handler->getNativeSymbolTable();
 
     segmentator->m_arch_handler = registry.createArchHandler(
         segmentator->m_metadata.arch, segmentator->m_metadata.mode, symbols);
     if (!segmentator->m_arch_handler) {
         spdlog::error("Unsupported architecture: {}",
                       static_cast<uint8_t>(segmentator->m_metadata.arch));
+        return nullptr;
     }
 
     return segmentator;

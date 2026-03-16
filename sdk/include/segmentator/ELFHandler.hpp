@@ -8,7 +8,6 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
-#include <utility>
 #include <vector>
 
 namespace VMPilot::SDK::Segmentator {
@@ -24,14 +23,13 @@ class ELFFileHandlerStrategy : public FileHandlerStrategy {
     virtual ~ELFFileHandlerStrategy();
 
    protected:
-    virtual std::pair<uint64_t, uint64_t> doGetBeginEndAddr() noexcept override;
     virtual std::vector<uint8_t> doGetTextSection() noexcept override;
     virtual uint64_t doGetTextBaseAddr() noexcept override;
 
     virtual NativeSymbolTable doGetSymbols() noexcept override;
-    virtual std::vector<CallTarget> doGetDirectCallTargets() noexcept override;
+    virtual std::vector<CallTarget> doGetStubCallTargets() noexcept override;
     virtual std::vector<CallTarget>
-    doGetIndirectCallTargets() noexcept override;
+    doGetPointerTableTargets() noexcept override;
 
    private:
     /// dynsym index -> (rela.plt index, GOT address)
@@ -43,11 +41,6 @@ class ELFFileHandlerStrategy : public FileHandlerStrategy {
     /// Build map from .rela.plt: dynsym_index -> RelaInfo
     std::unordered_map<uint64_t, RelaInfo> buildRelocationMap() noexcept;
 
-    // --- helpers for doGetBeginEndAddr ---
-    uint64_t getEntryIndex(const std::string& signature) noexcept;
-    uint64_t getRelapltIdx(uint64_t dynsym_idx) noexcept;
-    uint64_t getPltAddr(uint64_t relaplt_idx) noexcept;
-    std::pair<uint64_t, uint64_t> doGetBeginEndAddrIntl() noexcept;
     std::vector<uint8_t> doGetTextSectionIntl() noexcept;
 };
 

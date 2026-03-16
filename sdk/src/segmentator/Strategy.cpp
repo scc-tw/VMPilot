@@ -9,12 +9,6 @@ using namespace VMPilot::SDK::Segmentator;
 
 // --- FileHandlerStrategy ---
 
-std::pair<uint64_t, uint64_t>
-FileHandlerStrategy::doGetBeginEndAddr() noexcept {
-    spdlog::error("FileHandlerStrategy::doGetBeginEndAddr not implemented");
-    return std::make_pair(static_cast<uint64_t>(-1), static_cast<uint64_t>(-1));
-}
-
 std::vector<uint8_t> FileHandlerStrategy::doGetTextSection() noexcept {
     spdlog::error("FileHandlerStrategy::doGetTextSection not implemented");
     return {};
@@ -31,21 +25,17 @@ NativeSymbolTable FileHandlerStrategy::doGetSymbols() noexcept {
 }
 
 std::vector<CallTarget>
-FileHandlerStrategy::doGetDirectCallTargets() noexcept {
+FileHandlerStrategy::doGetStubCallTargets() noexcept {
     spdlog::error(
-        "FileHandlerStrategy::doGetDirectCallTargets not implemented");
+        "FileHandlerStrategy::doGetStubCallTargets not implemented");
     return {};
 }
 
 std::vector<CallTarget>
-FileHandlerStrategy::doGetIndirectCallTargets() noexcept {
+FileHandlerStrategy::doGetPointerTableTargets() noexcept {
     spdlog::error(
-        "FileHandlerStrategy::doGetIndirectCallTargets not implemented");
+        "FileHandlerStrategy::doGetPointerTableTargets not implemented");
     return {};
-}
-
-std::pair<uint64_t, uint64_t> FileHandlerStrategy::getBeginEndAddr() {
-    return doGetBeginEndAddr();
 }
 
 std::vector<uint8_t> FileHandlerStrategy::getTextSection() {
@@ -63,25 +53,25 @@ NativeSymbolTable FileHandlerStrategy::getNativeSymbolTable() {
         table.push_back(std::move(sym));
     }
 
-    for (auto& target : doGetDirectCallTargets()) {
+    for (auto& target : doGetStubCallTargets()) {
         NativeSymbolTableEntry entry;
         entry.name = std::move(target.name);
         entry.address = target.address;
         entry.size = target.size;
         entry.type = SymbolType::FUNC;
         entry.isGlobal = true;
-        entry.setAttribute("entry_type", std::string("direct"));
+        entry.setAttribute("entry_type", std::string("stub"));
         table.push_back(std::move(entry));
     }
 
-    for (auto& target : doGetIndirectCallTargets()) {
+    for (auto& target : doGetPointerTableTargets()) {
         NativeSymbolTableEntry entry;
         entry.name = std::move(target.name);
         entry.address = target.address;
         entry.size = target.size;
         entry.type = SymbolType::OBJECT;
         entry.isGlobal = true;
-        entry.setAttribute("entry_type", std::string("indirect"));
+        entry.setAttribute("entry_type", std::string("pointer_table"));
         table.push_back(std::move(entry));
     }
 

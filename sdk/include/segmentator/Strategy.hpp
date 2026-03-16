@@ -12,7 +12,6 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
-#include <utility>
 #include <vector>
 
 namespace VMPilot::SDK::Segmentator {
@@ -25,10 +24,12 @@ struct CallTarget {
     uint64_t size;
 };
 
-// Strategy for file handling
+/// Strategy for file handling.
+/// Subclass constructors throw on parse failure (e.g. file not found,
+/// corrupt header). After successful construction, virtual methods
+/// never throw — they return empty/sentinel values on failure.
 class FileHandlerStrategy {
    protected:
-    virtual std::pair<uint64_t, uint64_t> doGetBeginEndAddr() noexcept;
     virtual std::vector<uint8_t> doGetTextSection() noexcept;
     virtual uint64_t doGetTextBaseAddr() noexcept;
 
@@ -36,17 +37,16 @@ class FileHandlerStrategy {
     /// (ELF: .dynsym, PE: export table, Mach-O: LC_SYMTAB)
     virtual NativeSymbolTable doGetSymbols() noexcept;
 
-    /// Collect direct call stub addresses that map to a symbol
-    /// (ELF: PLT entries, PE: IAT thunks, Mach-O: __stubs)
-    virtual std::vector<CallTarget> doGetDirectCallTargets() noexcept;
+    /// Collect stub/thunk addresses that map to a symbol
+    /// (ELF: PLT entries, PE: import thunks, Mach-O: __stubs)
+    virtual std::vector<CallTarget> doGetStubCallTargets() noexcept;
 
-    /// Collect indirect pointer-table addresses that map to a symbol
+    /// Collect pointer-table addresses that map to a symbol
     /// (ELF: GOT entries, PE: IAT entries, Mach-O: __got / __la_symbol_ptr)
-    virtual std::vector<CallTarget> doGetIndirectCallTargets() noexcept;
+    virtual std::vector<CallTarget> doGetPointerTableTargets() noexcept;
 
    public:
     virtual ~FileHandlerStrategy() = default;
-    std::pair<uint64_t, uint64_t> getBeginEndAddr();
     std::vector<uint8_t> getTextSection();
     uint64_t getTextBaseAddr();
 
@@ -55,7 +55,9 @@ class FileHandlerStrategy {
     NativeSymbolTable getNativeSymbolTable();
 };
 
-// Strategy for architecture handling
+/// Strategy for architecture handling.
+/// ArchHandlers never throw. Load() returns false on failure;
+/// getNativeFunctions() returns empty on failure.
 class ArchHandlerStrategy {
    protected:
     Arch m_arch;
@@ -71,7 +73,8 @@ class ArchHandlerStrategy {
     ArchHandlerStrategy();
     ArchHandlerStrategy(Arch arch, Mode mode);
 
-    bool Load(const std::vector<uint8_t>& code, const uint64_t base_addr);
+    [[nodiscard]] bool Load(const std::vector<uint8_t>& code,
+                            const uint64_t base_addr);
     std::vector<std::unique_ptr<NativeFunctionBase>> getNativeFunctions();
 };
 

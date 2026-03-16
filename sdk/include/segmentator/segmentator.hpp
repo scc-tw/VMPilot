@@ -22,9 +22,9 @@ class Segmentator {
    protected:
     virtual void segmentation() noexcept;
 
+   private:
+    Segmentator() = default;
    public:
-    // not allowed to default construct, please use create_segmentator
-    Segmentator() = delete;
     virtual ~Segmentator() = default;
 };
 

@@ -11,11 +11,15 @@ class MachOHandlerARM64Test : public ::testing::Test {
                                      "/basic_binary.Darwin.arm64"};
 };
 
-TEST_F(MachOHandlerARM64Test, GetBeginEndAddr) {
-    auto [begin, end] = handler.getBeginEndAddr();
-    EXPECT_NE(begin, static_cast<uint64_t>(-1));
-    EXPECT_NE(end, static_cast<uint64_t>(-1));
-    EXPECT_NE(begin, end);
+// --- Helper to find entry_type attribute ---
+static std::string getEntryType(const NativeSymbolTableEntry& entry) {
+    auto it = entry.additionalAttributes.find("entry_type");
+    if (it == entry.additionalAttributes.end()) return "";
+    try {
+        return std::get<std::string>(it->second);
+    } catch (...) {
+        return "";
+    }
 }
 
 TEST_F(MachOHandlerARM64Test, GetTextSection) {
@@ -44,59 +48,44 @@ TEST_F(MachOHandlerARM64Test, GetNativeSymbolTable) {
     EXPECT_TRUE(found_end);
 }
 
-TEST_F(MachOHandlerARM64Test, HasDirectCallTargets) {
+TEST_F(MachOHandlerARM64Test, HasStubCallTargets) {
     auto table = handler.getNativeSymbolTable();
     bool found = false;
     for (const auto& entry : table) {
-        auto it = entry.additionalAttributes.find("entry_type");
-        if (it != entry.additionalAttributes.end()) {
-            try {
-                if (std::get<std::string>(it->second) == "direct") {
-                    found = true;
-                    break;
-                }
-            } catch (...) {}
+        if (getEntryType(entry) == "stub") {
+            found = true;
+            break;
         }
     }
     EXPECT_TRUE(found);
 }
 
-TEST_F(MachOHandlerARM64Test, HasIndirectCallTargets) {
+TEST_F(MachOHandlerARM64Test, HasPointerTableTargets) {
     auto table = handler.getNativeSymbolTable();
     bool found = false;
     for (const auto& entry : table) {
-        auto it = entry.additionalAttributes.find("entry_type");
-        if (it != entry.additionalAttributes.end()) {
-            try {
-                if (std::get<std::string>(it->second) == "indirect") {
-                    found = true;
-                    break;
-                }
-            } catch (...) {}
+        if (getEntryType(entry) == "pointer_table") {
+            found = true;
+            break;
         }
     }
     EXPECT_TRUE(found);
 }
 
-TEST_F(MachOHandlerARM64Test, StubAddrMatchesBeginEndAddr) {
-    auto [begin, end] = handler.getBeginEndAddr();
+TEST_F(MachOHandlerARM64Test, StubEntriesHaveVMPilotMarkers) {
     auto table = handler.getNativeSymbolTable();
 
     bool begin_found = false, end_found = false;
     for (const auto& entry : table) {
-        auto it = entry.additionalAttributes.find("entry_type");
-        if (it == entry.additionalAttributes.end()) continue;
-        try {
-            if (std::get<std::string>(it->second) != "direct") continue;
-        } catch (...) {
-            continue;
-        }
-        if (entry.name.find("VMPilot_Begin") != std::string::npos &&
-            entry.address == begin)
+        if (getEntryType(entry) != "stub") continue;
+        if (entry.name.find("VMPilot_Begin") != std::string::npos) {
             begin_found = true;
-        if (entry.name.find("VMPilot_End") != std::string::npos &&
-            entry.address == end)
+            EXPECT_GT(entry.address, 0u);
+        }
+        if (entry.name.find("VMPilot_End") != std::string::npos) {
             end_found = true;
+            EXPECT_GT(entry.address, 0u);
+        }
     }
     EXPECT_TRUE(begin_found);
     EXPECT_TRUE(end_found);

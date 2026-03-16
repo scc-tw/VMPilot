@@ -30,13 +30,6 @@ static std::string getEntryType(const NativeSymbolTableEntry& entry) {
 
 // --- x86_64 tests ---
 
-TEST_F(PEHandlerX64Test, GetBeginEndAddr) {
-    auto [begin, end] = handler.getBeginEndAddr();
-    EXPECT_NE(begin, static_cast<uint64_t>(-1));
-    EXPECT_NE(end, static_cast<uint64_t>(-1));
-    EXPECT_NE(begin, end);
-}
-
 TEST_F(PEHandlerX64Test, GetTextSection) {
     auto text = handler.getTextSection();
     EXPECT_FALSE(text.empty());
@@ -63,11 +56,11 @@ TEST_F(PEHandlerX64Test, GetNativeSymbolTable) {
     EXPECT_TRUE(found_end);
 }
 
-TEST_F(PEHandlerX64Test, SymbolTableHasIndirectEntries) {
+TEST_F(PEHandlerX64Test, SymbolTableHasPointerTableEntries) {
     auto table = handler.getNativeSymbolTable();
     bool found = false;
     for (const auto& entry : table) {
-        if (getEntryType(entry) == "indirect") {
+        if (getEntryType(entry) == "pointer_table") {
             found = true;
             EXPECT_EQ(entry.type, SymbolType::OBJECT);
             EXPECT_GT(entry.address, 0u);
@@ -77,29 +70,30 @@ TEST_F(PEHandlerX64Test, SymbolTableHasIndirectEntries) {
     EXPECT_TRUE(found);
 }
 
-TEST_F(PEHandlerX64Test, DirectCallTargetMatchesBeginEndAddr) {
-    auto [begin, end] = handler.getBeginEndAddr();
+TEST_F(PEHandlerX64Test, StubEntriesHaveVMPilotMarkers) {
     auto table = handler.getNativeSymbolTable();
 
     bool begin_found = false, end_found = false;
     for (const auto& entry : table) {
-        if (getEntryType(entry) != "direct") continue;
-        if (entry.name.find("VMPilot_Begin") != std::string::npos &&
-            entry.address == begin)
+        if (getEntryType(entry) != "stub") continue;
+        if (entry.name.find("VMPilot_Begin") != std::string::npos) {
             begin_found = true;
-        if (entry.name.find("VMPilot_End") != std::string::npos &&
-            entry.address == end)
+            EXPECT_GT(entry.address, 0u);
+        }
+        if (entry.name.find("VMPilot_End") != std::string::npos) {
             end_found = true;
+            EXPECT_GT(entry.address, 0u);
+        }
     }
     EXPECT_TRUE(begin_found);
     EXPECT_TRUE(end_found);
 }
 
-TEST_F(PEHandlerX64Test, SymbolTableHasDirectEntries) {
+TEST_F(PEHandlerX64Test, SymbolTableHasStubEntries) {
     auto table = handler.getNativeSymbolTable();
     bool found = false;
     for (const auto& entry : table) {
-        if (getEntryType(entry) == "direct") {
+        if (getEntryType(entry) == "stub") {
             found = true;
             EXPECT_EQ(entry.type, SymbolType::FUNC);
             EXPECT_GT(entry.address, 0u);
@@ -111,12 +105,6 @@ TEST_F(PEHandlerX64Test, SymbolTableHasDirectEntries) {
 
 // --- x86 tests ---
 
-TEST_F(PEHandlerX86Test, GetBeginEndAddr) {
-    auto [begin, end] = handler.getBeginEndAddr();
-    EXPECT_NE(begin, static_cast<uint64_t>(-1));
-    EXPECT_NE(end, static_cast<uint64_t>(-1));
-}
-
 TEST_F(PEHandlerX86Test, GetTextSection) {
     auto text = handler.getTextSection();
     EXPECT_FALSE(text.empty());
@@ -127,11 +115,11 @@ TEST_F(PEHandlerX86Test, GetNativeSymbolTable) {
     EXPECT_FALSE(table.empty());
 }
 
-TEST_F(PEHandlerX86Test, HasIndirectEntries) {
+TEST_F(PEHandlerX86Test, HasPointerTableEntries) {
     auto table = handler.getNativeSymbolTable();
-    bool has_indirect = false;
+    bool has_pointer_table = false;
     for (const auto& entry : table) {
-        if (getEntryType(entry) == "indirect") has_indirect = true;
+        if (getEntryType(entry) == "pointer_table") has_pointer_table = true;
     }
-    EXPECT_TRUE(has_indirect);
+    EXPECT_TRUE(has_pointer_table);
 }

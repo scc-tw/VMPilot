@@ -30,13 +30,6 @@ static std::string getEntryType(const NativeSymbolTableEntry& entry) {
 
 // --- x86_64 tests ---
 
-TEST_F(ELFHandlerX64Test, GetBeginEndAddr) {
-    auto [begin, end] = handler.getBeginEndAddr();
-    EXPECT_NE(begin, static_cast<uint64_t>(-1));
-    EXPECT_NE(end, static_cast<uint64_t>(-1));
-    EXPECT_NE(begin, end);
-}
-
 TEST_F(ELFHandlerX64Test, GetTextSection) {
     auto text = handler.getTextSection();
     EXPECT_FALSE(text.empty());
@@ -63,11 +56,11 @@ TEST_F(ELFHandlerX64Test, GetNativeSymbolTable) {
     EXPECT_TRUE(found_end);
 }
 
-TEST_F(ELFHandlerX64Test, SymbolTableHasDirectEntries) {
+TEST_F(ELFHandlerX64Test, SymbolTableHasStubEntries) {
     auto table = handler.getNativeSymbolTable();
     bool found = false;
     for (const auto& entry : table) {
-        if (getEntryType(entry) == "direct") {
+        if (getEntryType(entry) == "stub") {
             found = true;
             EXPECT_EQ(entry.type, SymbolType::FUNC);
             EXPECT_GT(entry.address, 0u);
@@ -77,11 +70,11 @@ TEST_F(ELFHandlerX64Test, SymbolTableHasDirectEntries) {
     EXPECT_TRUE(found);
 }
 
-TEST_F(ELFHandlerX64Test, SymbolTableHasIndirectEntries) {
+TEST_F(ELFHandlerX64Test, SymbolTableHasPointerTableEntries) {
     auto table = handler.getNativeSymbolTable();
     bool found = false;
     for (const auto& entry : table) {
-        if (getEntryType(entry) == "indirect") {
+        if (getEntryType(entry) == "pointer_table") {
             found = true;
             EXPECT_EQ(entry.type, SymbolType::OBJECT);
             EXPECT_GT(entry.address, 0u);
@@ -91,43 +84,38 @@ TEST_F(ELFHandlerX64Test, SymbolTableHasIndirectEntries) {
     EXPECT_TRUE(found);
 }
 
-TEST_F(ELFHandlerX64Test, DirectCallTargetMatchesBeginEndAddr) {
-    auto [begin, end] = handler.getBeginEndAddr();
+TEST_F(ELFHandlerX64Test, StubEntriesHaveVMPilotMarkers) {
     auto table = handler.getNativeSymbolTable();
 
     bool begin_found = false, end_found = false;
     for (const auto& entry : table) {
-        if (getEntryType(entry) != "direct") continue;
-        if (entry.name.find("VMPilot_Begin") != std::string::npos &&
-            entry.address == begin)
+        if (getEntryType(entry) != "stub") continue;
+        if (entry.name.find("VMPilot_Begin") != std::string::npos) {
             begin_found = true;
-        if (entry.name.find("VMPilot_End") != std::string::npos &&
-            entry.address == end)
+            EXPECT_GT(entry.address, 0u);
+        }
+        if (entry.name.find("VMPilot_End") != std::string::npos) {
             end_found = true;
+            EXPECT_GT(entry.address, 0u);
+        }
     }
     EXPECT_TRUE(begin_found);
     EXPECT_TRUE(end_found);
 }
 
-TEST_F(ELFHandlerX64Test, DirectAndIndirectCountsMatch) {
+TEST_F(ELFHandlerX64Test, StubAndPointerTableCountsMatch) {
     auto table = handler.getNativeSymbolTable();
-    size_t direct_count = 0, indirect_count = 0;
+    size_t stub_count = 0, pointer_table_count = 0;
     for (const auto& entry : table) {
         auto t = getEntryType(entry);
-        if (t == "direct") ++direct_count;
-        if (t == "indirect") ++indirect_count;
+        if (t == "stub") ++stub_count;
+        if (t == "pointer_table") ++pointer_table_count;
     }
     // Every PLT entry should have a matching GOT entry
-    EXPECT_EQ(direct_count, indirect_count);
+    EXPECT_EQ(stub_count, pointer_table_count);
 }
 
 // --- x86 tests ---
-
-TEST_F(ELFHandlerX86Test, GetBeginEndAddr) {
-    auto [begin, end] = handler.getBeginEndAddr();
-    EXPECT_NE(begin, static_cast<uint64_t>(-1));
-    EXPECT_NE(end, static_cast<uint64_t>(-1));
-}
 
 TEST_F(ELFHandlerX86Test, GetTextSection) {
     auto text = handler.getTextSection();
@@ -139,14 +127,14 @@ TEST_F(ELFHandlerX86Test, GetNativeSymbolTable) {
     EXPECT_FALSE(table.empty());
 }
 
-TEST_F(ELFHandlerX86Test, HasDirectAndIndirectEntries) {
+TEST_F(ELFHandlerX86Test, HasStubAndPointerTableEntries) {
     auto table = handler.getNativeSymbolTable();
-    bool has_direct = false, has_indirect = false;
+    bool has_stub = false, has_pointer_table = false;
     for (const auto& entry : table) {
         auto t = getEntryType(entry);
-        if (t == "direct") has_direct = true;
-        if (t == "indirect") has_indirect = true;
+        if (t == "stub") has_stub = true;
+        if (t == "pointer_table") has_pointer_table = true;
     }
-    EXPECT_TRUE(has_direct);
-    EXPECT_TRUE(has_indirect);
+    EXPECT_TRUE(has_stub);
+    EXPECT_TRUE(has_pointer_table);
 }
