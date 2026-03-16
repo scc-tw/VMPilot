@@ -24,6 +24,7 @@ class Segmentator {
 
    private:
     Segmentator() = default;
+
    public:
     virtual ~Segmentator() = default;
 };

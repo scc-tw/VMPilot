@@ -24,10 +24,8 @@ NativeSymbolTable FileHandlerStrategy::doGetSymbols() noexcept {
     return {};
 }
 
-std::vector<CallTarget>
-FileHandlerStrategy::doGetStubCallTargets() noexcept {
-    spdlog::error(
-        "FileHandlerStrategy::doGetStubCallTargets not implemented");
+std::vector<CallTarget> FileHandlerStrategy::doGetStubCallTargets() noexcept {
+    spdlog::error("FileHandlerStrategy::doGetStubCallTargets not implemented");
     return {};
 }
 
@@ -129,10 +127,10 @@ void HandlerRegistry::registerArchHandler(VMPilot::Common::FileArch arch,
 }
 
 std::unique_ptr<FileHandlerStrategy> HandlerRegistry::createFileHandler(
-    VMPilot::Common::FileFormat format,
-    const std::string& filename) const {
+    VMPilot::Common::FileFormat format, const std::string& filename) const {
     auto it = file_handlers_.find(format);
-    if (it != file_handlers_.end()) return it->second(filename);
+    if (it != file_handlers_.end())
+        return it->second(filename);
     return nullptr;
 }
 
@@ -140,7 +138,8 @@ std::unique_ptr<ArchHandlerStrategy> HandlerRegistry::createArchHandler(
     VMPilot::Common::FileArch arch, VMPilot::Common::FileMode mode,
     const NativeSymbolTable& symbols) const {
     auto it = arch_handlers_.find(arch);
-    if (it != arch_handlers_.end()) return it->second(mode, symbols);
+    if (it != arch_handlers_.end())
+        return it->second(mode, symbols);
     return nullptr;
 }
 
@@ -148,8 +147,7 @@ std::unique_ptr<ArchHandlerStrategy> HandlerRegistry::createArchHandler(
 
 FileHandlerRegistrar::FileHandlerRegistrar(VMPilot::Common::FileFormat format,
                                            FileHandlerFactory factory) {
-    HandlerRegistry::instance().registerFileHandler(format,
-                                                    std::move(factory));
+    HandlerRegistry::instance().registerFileHandler(format, std::move(factory));
 }
 
 ArchHandlerRegistrar::ArchHandlerRegistrar(VMPilot::Common::FileArch arch,

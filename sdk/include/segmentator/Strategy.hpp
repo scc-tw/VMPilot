@@ -78,12 +78,10 @@ class ArchHandlerStrategy {
     std::vector<std::unique_ptr<NativeFunctionBase>> getNativeFunctions();
 };
 
-
 using FileHandlerFactory =
     std::function<std::unique_ptr<FileHandlerStrategy>(const std::string&)>;
-using ArchHandlerFactory =
-    std::function<std::unique_ptr<ArchHandlerStrategy>(
-        VMPilot::Common::FileMode, const NativeSymbolTable&)>;
+using ArchHandlerFactory = std::function<std::unique_ptr<ArchHandlerStrategy>(
+    VMPilot::Common::FileMode, const NativeSymbolTable&)>;
 
 class HandlerRegistry {
    public:
@@ -95,8 +93,7 @@ class HandlerRegistry {
                              ArchHandlerFactory factory);
 
     std::unique_ptr<FileHandlerStrategy> createFileHandler(
-        VMPilot::Common::FileFormat format,
-        const std::string& filename) const;
+        VMPilot::Common::FileFormat format, const std::string& filename) const;
     std::unique_ptr<ArchHandlerStrategy> createArchHandler(
         VMPilot::Common::FileArch arch, VMPilot::Common::FileMode mode,
         const NativeSymbolTable& symbols) const;

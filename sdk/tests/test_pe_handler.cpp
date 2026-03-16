@@ -20,7 +20,8 @@ class PEHandlerX86Test : public ::testing::Test {
 // --- Helper to find entry_type attribute ---
 static std::string getEntryType(const NativeSymbolTableEntry& entry) {
     auto it = entry.additionalAttributes.find("entry_type");
-    if (it == entry.additionalAttributes.end()) return "";
+    if (it == entry.additionalAttributes.end())
+        return "";
     try {
         return std::get<std::string>(it->second);
     } catch (...) {
@@ -75,7 +76,8 @@ TEST_F(PEHandlerX64Test, StubEntriesHaveVMPilotMarkers) {
 
     bool begin_found = false, end_found = false;
     for (const auto& entry : table) {
-        if (getEntryType(entry) != "stub") continue;
+        if (getEntryType(entry) != "stub")
+            continue;
         if (entry.name.find("VMPilot_Begin") != std::string::npos) {
             begin_found = true;
             EXPECT_GT(entry.address, 0u);
@@ -164,7 +166,8 @@ TEST_F(PEHandlerX86Test, StubEntriesHaveVMPilotMarkers) {
 
     bool begin_found = false, end_found = false;
     for (const auto& entry : table) {
-        if (getEntryType(entry) != "stub") continue;
+        if (getEntryType(entry) != "stub")
+            continue;
         if (entry.name.find("VMPilot_Begin") != std::string::npos) {
             begin_found = true;
             EXPECT_GT(entry.address, 0u);

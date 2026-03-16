@@ -20,7 +20,8 @@ class ELFHandlerX86Test : public ::testing::Test {
 // --- Helper to find entry_type attribute ---
 static std::string getEntryType(const NativeSymbolTableEntry& entry) {
     auto it = entry.additionalAttributes.find("entry_type");
-    if (it == entry.additionalAttributes.end()) return "";
+    if (it == entry.additionalAttributes.end())
+        return "";
     try {
         return std::get<std::string>(it->second);
     } catch (...) {
@@ -89,7 +90,8 @@ TEST_F(ELFHandlerX64Test, StubEntriesHaveVMPilotMarkers) {
 
     bool begin_found = false, end_found = false;
     for (const auto& entry : table) {
-        if (getEntryType(entry) != "stub") continue;
+        if (getEntryType(entry) != "stub")
+            continue;
         if (entry.name.find("VMPilot_Begin") != std::string::npos) {
             begin_found = true;
             EXPECT_GT(entry.address, 0u);
@@ -108,8 +110,10 @@ TEST_F(ELFHandlerX64Test, StubAndPointerTableCountsMatch) {
     size_t stub_count = 0, pointer_table_count = 0;
     for (const auto& entry : table) {
         auto t = getEntryType(entry);
-        if (t == "stub") ++stub_count;
-        if (t == "pointer_table") ++pointer_table_count;
+        if (t == "stub")
+            ++stub_count;
+        if (t == "pointer_table")
+            ++pointer_table_count;
     }
     // Every PLT entry should have a matching GOT entry
     EXPECT_EQ(stub_count, pointer_table_count);
@@ -148,8 +152,10 @@ TEST_F(ELFHandlerX86Test, HasStubAndPointerTableEntries) {
     bool has_stub = false, has_pointer_table = false;
     for (const auto& entry : table) {
         auto t = getEntryType(entry);
-        if (t == "stub") has_stub = true;
-        if (t == "pointer_table") has_pointer_table = true;
+        if (t == "stub")
+            has_stub = true;
+        if (t == "pointer_table")
+            has_pointer_table = true;
     }
     EXPECT_TRUE(has_stub);
     EXPECT_TRUE(has_pointer_table);
@@ -160,7 +166,8 @@ TEST_F(ELFHandlerX86Test, StubEntriesHaveVMPilotMarkers) {
 
     bool begin_found = false, end_found = false;
     for (const auto& entry : table) {
-        if (getEntryType(entry) != "stub") continue;
+        if (getEntryType(entry) != "stub")
+            continue;
         if (entry.name.find("VMPilot_Begin") != std::string::npos) {
             begin_found = true;
             EXPECT_GT(entry.address, 0u);
@@ -179,8 +186,10 @@ TEST_F(ELFHandlerX86Test, StubAndPointerTableCountsMatch) {
     size_t stub_count = 0, pointer_table_count = 0;
     for (const auto& entry : table) {
         auto t = getEntryType(entry);
-        if (t == "stub") ++stub_count;
-        if (t == "pointer_table") ++pointer_table_count;
+        if (t == "stub")
+            ++stub_count;
+        if (t == "pointer_table")
+            ++pointer_table_count;
     }
     // Every PLT entry should have a matching GOT entry
     EXPECT_EQ(stub_count, pointer_table_count);

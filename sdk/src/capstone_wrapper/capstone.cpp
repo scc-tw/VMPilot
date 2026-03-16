@@ -1,7 +1,7 @@
 #include <capstone.hpp>
 
-#include <capstone/capstone.h>
 #include <capstone/arm64.h>
+#include <capstone/capstone.h>
 #include <capstone/x86.h>
 
 #include <algorithm>

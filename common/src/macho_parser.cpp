@@ -111,7 +111,8 @@ struct nlist_64 {
 
 template <typename T>
 static bool readAt(const std::vector<uint8_t>& data, size_t offset, T& out) {
-    if (offset + sizeof(T) > data.size()) return false;
+    if (offset + sizeof(T) > data.size())
+        return false;
     std::memcpy(&out, data.data() + offset, sizeof(T));
     return true;
 }
@@ -125,7 +126,8 @@ static std::string trimmedString(const char* buf, size_t max_len) {
 
 std::optional<Parser> Parser::open(const std::string& path) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file) return std::nullopt;
+    if (!file)
+        return std::nullopt;
 
     auto size = static_cast<size_t>(file.tellg());
     file.seekg(0);
@@ -138,7 +140,8 @@ std::optional<Parser> Parser::open(const std::string& path) {
 
     // Read header
     raw::mach_header_64 header{};
-    if (!readAt(parser.file_data_, 0, header)) return std::nullopt;
+    if (!readAt(parser.file_data_, 0, header))
+        return std::nullopt;
 
     if (header.magic != raw::MH_MAGIC_64) {
         // Only support 64-bit native byte order for now
@@ -156,17 +159,19 @@ std::optional<Parser> Parser::open(const std::string& path) {
 
     for (uint32_t i = 0; i < header.ncmds; ++i) {
         raw::load_command lc{};
-        if (!readAt(parser.file_data_, cmd_offset, lc)) break;
+        if (!readAt(parser.file_data_, cmd_offset, lc))
+            break;
 
         if (lc.cmd == raw::LC_SEGMENT_64) {
             raw::segment_command_64 seg{};
-            if (!readAt(parser.file_data_, cmd_offset, seg)) break;
+            if (!readAt(parser.file_data_, cmd_offset, seg))
+                break;
 
-            size_t sect_offset =
-                cmd_offset + sizeof(raw::segment_command_64);
+            size_t sect_offset = cmd_offset + sizeof(raw::segment_command_64);
             for (uint32_t j = 0; j < seg.nsects; ++j) {
                 raw::section_64 sect{};
-                if (!readAt(parser.file_data_, sect_offset, sect)) break;
+                if (!readAt(parser.file_data_, sect_offset, sect))
+                    break;
 
                 Section s;
                 s.sectname = trimmedString(sect.sectname, 16);
@@ -196,7 +201,8 @@ std::optional<Parser> Parser::open(const std::string& path) {
         for (uint32_t i = 0; i < stcmd.nsyms; ++i) {
             raw::nlist_64 nl{};
             size_t nl_offset = stcmd.symoff + i * sizeof(raw::nlist_64);
-            if (!readAt(parser.file_data_, nl_offset, nl)) break;
+            if (!readAt(parser.file_data_, nl_offset, nl))
+                break;
 
             Symbol sym;
             if (nl.n_strx < stcmd.strsize) {
@@ -221,7 +227,8 @@ std::optional<Parser> Parser::open(const std::string& path) {
         for (uint32_t i = 0; i < dscmd.nindirectsyms; ++i) {
             uint32_t idx = 0;
             size_t off = dscmd.indirectsymoff + i * sizeof(uint32_t);
-            if (!readAt(parser.file_data_, off, idx)) break;
+            if (!readAt(parser.file_data_, off, idx))
+                break;
             parser.indirect_symbols_[i] = idx;
         }
     }
@@ -240,7 +247,8 @@ std::optional<Section> Parser::findSection(std::string_view segname,
 }
 
 std::vector<uint8_t> Parser::readSectionData(const Section& section) const {
-    if (section.offset + section.size > file_data_.size()) return {};
+    if (section.offset + section.size > file_data_.size())
+        return {};
     return {file_data_.begin() + section.offset,
             file_data_.begin() + section.offset + section.size};
 }
@@ -249,13 +257,15 @@ std::vector<IndirectEntry> Parser::resolveIndirectSymbols(
     const Section& section, uint64_t entry_size) const {
     std::vector<IndirectEntry> entries;
 
-    if (entry_size == 0) return entries;
+    if (entry_size == 0)
+        return entries;
     uint32_t num_entries = static_cast<uint32_t>(section.size / entry_size);
     uint32_t base_index = section.reserved1;
 
     for (uint32_t i = 0; i < num_entries; ++i) {
         uint32_t isym_index = base_index + i;
-        if (isym_index >= indirect_symbols_.size()) break;
+        if (isym_index >= indirect_symbols_.size())
+            break;
 
         uint32_t sym_index = indirect_symbols_[isym_index];
         if (sym_index == raw::INDIRECT_SYMBOL_LOCAL ||
@@ -276,7 +286,8 @@ std::vector<IndirectEntry> Parser::resolveIndirectSymbols(
 
 std::vector<IndirectEntry> Parser::stubEntries() const {
     auto stubs = findSection("__TEXT", "__stubs");
-    if (!stubs) return {};
+    if (!stubs)
+        return {};
 
     // ARM64 stub size: 12 bytes (adrp + ldr + br)
     // x86_64 stub size: 6 bytes (jmp [rip+disp])
@@ -304,8 +315,10 @@ std::vector<IndirectEntry> Parser::stubEntries() const {
 std::vector<IndirectEntry> Parser::gotEntries() const {
     // Try __DATA_CONST,__got first (modern macOS), then __DATA,__got
     auto got = findSection("__DATA_CONST", "__got");
-    if (!got) got = findSection("__DATA", "__got");
-    if (!got) return {};
+    if (!got)
+        got = findSection("__DATA", "__got");
+    if (!got)
+        return {};
 
     uint64_t ptr_size = is_64bit_ ? 8 : 4;
     return resolveIndirectSymbols(*got, ptr_size);

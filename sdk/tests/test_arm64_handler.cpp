@@ -67,7 +67,8 @@ TEST_F(ARM64HandlerTest, CalledTwiceReturnsSameResult) {
 TEST(ARM64HandlerEdge, EmptySymbolTable) {
     NativeSymbolTable empty;
     ARM64Handler handler(VMPilot::Common::FileMode::MODE_ARM, empty);
-    std::vector<uint8_t> code = {0x00, 0x00, 0x00, 0x94, 0xC0, 0x03, 0x5F, 0xD6};
+    std::vector<uint8_t> code = {0x00, 0x00, 0x00, 0x94,
+                                 0xC0, 0x03, 0x5F, 0xD6};
     ASSERT_TRUE(handler.Load(code, 0x1000));
     auto functions = handler.getNativeFunctions();
     EXPECT_TRUE(functions.empty());
