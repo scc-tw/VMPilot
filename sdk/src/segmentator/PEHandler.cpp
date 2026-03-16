@@ -1,8 +1,10 @@
 #include <PEHandler.hpp>
 #include <utilities.hpp>
 
+#include <cstring>
 #include <unordered_map>
 
+#include <coffi/coffi.hpp>
 #include <spdlog/spdlog.h>
 
 using namespace VMPilot::SDK::Segmentator;
@@ -13,88 +15,278 @@ static FileHandlerRegistrar pe_registrar(
     });
 
 namespace {
-namespace detail {
-constexpr std::uint16_t NT_SHORT_NAME_LEN = 8;
+constexpr uint32_t PE_DIRECTORY_IMPORT = 1;
 
-struct PEParser {
-    // Placeholder for PE parsing, not implemented
-    // TODO: Add third party library for PE parsing
+#pragma pack(push, 1)
+struct PE_IMPORT_DESCRIPTOR {
+    uint32_t OriginalFirstThunk;  // RVA to ILT
+    uint32_t TimeDateStamp;
+    uint32_t ForwarderChain;
+    uint32_t Name;       // RVA to DLL name string
+    uint32_t FirstThunk; // RVA to IAT
 };
-
-struct ImageSectionHeader {
-    std::uint8_t Name[NT_SHORT_NAME_LEN];
-    union {
-        std::uint32_t PhysicalAddress;
-        std::uint32_t VirtualSize;
-    } Misc;
-    std::uint32_t VirtualAddress;
-    std::uint32_t SizeOfRawData;
-    std::uint32_t PointerToRawData;
-    std::uint32_t PointerToRelocations;
-    std::uint32_t PointerToLinenumbers;
-    std::uint16_t NumberOfRelocations;
-    std::uint16_t NumberOfLinenumbers;
-    std::uint32_t Characteristics;
-};
-}  // namespace detail
+#pragma pack(pop)
 }  // namespace
 
 struct PEFileHandlerStrategy::Impl {
-    detail::PEParser pe_handler;
-    std::unordered_map<std::string, detail::ImageSectionHeader> section_table;
+    COFFI::coffi reader;
+    uint64_t image_base = 0;
+    bool is_pe32_plus = false;
+
+    struct ImportEntry {
+        std::string func_name;
+        uint64_t iat_va;   // Virtual address of this IAT slot
+        uint64_t iat_size; // Size of IAT entry (4 or 8)
+    };
+    std::vector<ImportEntry> import_entries;
+    bool imports_parsed = false;
+
     uint64_t vmp_begin_addr = static_cast<uint64_t>(-1);
     uint64_t vmp_end_addr = static_cast<uint64_t>(-1);
     uint64_t text_base_addr = static_cast<uint64_t>(-1);
 };
 
+const char* PEFileHandlerStrategy::rvaToPtr(uint32_t rva) const noexcept {
+    auto& sections = pImpl->reader.get_sections();
+    for (size_t i = 0; i < sections.size(); ++i) {
+        auto* sec = sections[i];
+        uint32_t sec_va = sec->get_virtual_address();
+        uint32_t sec_size = sec->get_data_size();
+        if (sec_size == 0 || !sec->get_data()) continue;
+        if (rva >= sec_va && rva < sec_va + sec_size) {
+            return sec->get_data() + (rva - sec_va);
+        }
+    }
+    return nullptr;
+}
+
+void PEFileHandlerStrategy::parseImports() noexcept {
+    if (pImpl->imports_parsed) return;
+    pImpl->imports_parsed = true;
+
+    auto& dirs = pImpl->reader.get_directories();
+    if (dirs.size() <= PE_DIRECTORY_IMPORT) return;
+
+    auto* import_dir = dirs[PE_DIRECTORY_IMPORT];
+    if (!import_dir) return;
+
+    uint32_t import_rva = import_dir->get_virtual_address();
+    uint32_t import_size = import_dir->get_size();
+    if (import_rva == 0 || import_size == 0) return;
+
+    const char* import_ptr = rvaToPtr(import_rva);
+    if (!import_ptr) return;
+
+    const bool is_pe32_plus = pImpl->is_pe32_plus;
+    const uint64_t image_base = pImpl->image_base;
+    const size_t thunk_size = is_pe32_plus ? 8 : 4;
+    const uint64_t ordinal_flag =
+        is_pe32_plus ? (1ULL << 63) : (1ULL << 31);
+
+    // Iterate import descriptors (null-terminated array)
+    for (auto desc =
+             reinterpret_cast<const PE_IMPORT_DESCRIPTOR*>(import_ptr);
+         desc->Name != 0; ++desc) {
+        const char* dll_name = rvaToPtr(desc->Name);
+        if (!dll_name) continue;
+
+        // Prefer ILT (OriginalFirstThunk), fall back to IAT (FirstThunk)
+        uint32_t ilt_rva =
+            desc->OriginalFirstThunk ? desc->OriginalFirstThunk
+                                     : desc->FirstThunk;
+        uint32_t iat_rva = desc->FirstThunk;
+
+        const char* ilt_ptr = rvaToPtr(ilt_rva);
+        if (!ilt_ptr) continue;
+
+        for (size_t idx = 0;; ++idx) {
+            uint64_t ilt_entry = 0;
+            std::memcpy(&ilt_entry, ilt_ptr + idx * thunk_size, thunk_size);
+
+            if (ilt_entry == 0) break;
+
+            // Skip ordinal imports
+            if (ilt_entry & ordinal_flag) continue;
+
+            // Import by name: entry is RVA to (uint16_t hint + name)
+            uint32_t hint_name_rva = static_cast<uint32_t>(ilt_entry);
+            const char* hint_name_ptr = rvaToPtr(hint_name_rva);
+            if (!hint_name_ptr) continue;
+
+            // Skip 2-byte hint, read null-terminated name
+            const char* func_name = hint_name_ptr + 2;
+
+            uint64_t iat_va = image_base + iat_rva + idx * thunk_size;
+
+            pImpl->import_entries.push_back(
+                {std::string(func_name), iat_va, thunk_size});
+        }
+    }
+
+    spdlog::info("PE: parsed {} import entries",
+                 pImpl->import_entries.size());
+}
+
 std::unique_ptr<PEFileHandlerStrategy::Impl>
-VMPilot::SDK::Segmentator::make_pe_impl([[maybe_unused]]  // NOLINT
-                                        const std::string& file_name) {
+VMPilot::SDK::Segmentator::make_pe_impl(const std::string& file_name) {
     auto impl = std::make_unique<PEFileHandlerStrategy::Impl>();
-    // Placeholder for PE parsing, not implemented
+
+    if (!impl->reader.load(file_name)) {
+        throw std::runtime_error("Failed to parse PE file: " + file_name);
+    }
+
+    impl->is_pe32_plus = impl->reader.is_PE32_plus();
+
+    auto* win_hdr = impl->reader.get_win_header();
+    if (win_hdr) {
+        impl->image_base = win_hdr->get_image_base();
+    }
 
     return impl;
 }
 
 PEFileHandlerStrategy::PEFileHandlerStrategy(const std::string& file_name)
-    : pImpl(make_pe_impl(file_name)) {
-    spdlog::error("PEFileHandlerStrategy not implemented");
-}
+    : pImpl(make_pe_impl(file_name)) {}
 
-PEFileHandlerStrategy::~PEFileHandlerStrategy() {}
+PEFileHandlerStrategy::~PEFileHandlerStrategy() = default;
 
 std::pair<uint64_t, uint64_t>
 PEFileHandlerStrategy::doGetBeginEndAddr() noexcept {
-    spdlog::error("PEFileHandlerStrategy::doGetBeginEndAddr not implemented");
-    return std::make_pair(static_cast<uint64_t>(-1), static_cast<uint64_t>(-1));
+    if (pImpl->vmp_begin_addr != static_cast<uint64_t>(-1) &&
+        pImpl->vmp_end_addr != static_cast<uint64_t>(-1)) {
+        return {pImpl->vmp_begin_addr, pImpl->vmp_end_addr};
+    }
+
+    // Prefer thunk addresses (direct call targets) since that's what
+    // call instructions in .text actually target.
+    auto direct = doGetDirectCallTargets();
+
+    const auto& begin_sigs = VMPilot::Common::BEGIN_VMPILOT_SIGNATURES;
+    const auto& end_sigs = VMPilot::Common::END_VMPILOT_SIGNATURES;
+
+    auto matchesAny = [](const std::string& name,
+                         const std::vector<std::string>& sigs) {
+        for (const auto& sig : sigs)
+            if (name == sig) return true;
+        return false;
+    };
+
+    for (const auto& target : direct) {
+        if (matchesAny(target.name, begin_sigs))
+            pImpl->vmp_begin_addr = target.address;
+        if (matchesAny(target.name, end_sigs))
+            pImpl->vmp_end_addr = target.address;
+    }
+
+    // Fall back to IAT addresses if no thunks found
+    if (pImpl->vmp_begin_addr == static_cast<uint64_t>(-1) ||
+        pImpl->vmp_end_addr == static_cast<uint64_t>(-1)) {
+        parseImports();
+        for (const auto& entry : pImpl->import_entries) {
+            if (pImpl->vmp_begin_addr == static_cast<uint64_t>(-1) &&
+                matchesAny(entry.func_name, begin_sigs))
+                pImpl->vmp_begin_addr = entry.iat_va;
+            if (pImpl->vmp_end_addr == static_cast<uint64_t>(-1) &&
+                matchesAny(entry.func_name, end_sigs))
+                pImpl->vmp_end_addr = entry.iat_va;
+        }
+    }
+
+    return {pImpl->vmp_begin_addr, pImpl->vmp_end_addr};
 }
 
 std::vector<uint8_t> PEFileHandlerStrategy::doGetTextSection() noexcept {
-    spdlog::error("PEFileHandlerStrategy::doGetTextSection not implemented");
-    return std::vector<uint8_t>();
+    auto& sections = pImpl->reader.get_sections();
+    for (size_t i = 0; i < sections.size(); ++i) {
+        auto* sec = sections[i];
+        if (sec->get_name() == ".text") {
+            auto size = sec->get_data_size();
+            const char* data = sec->get_data();
+            if (!data || size == 0) return {};
+            return std::vector<uint8_t>(data, data + size);
+        }
+    }
+    spdlog::error("Could not find .text section");
+    return {};
 }
 
 uint64_t PEFileHandlerStrategy::doGetTextBaseAddr() noexcept {
-    spdlog::error("PEFileHandlerStrategy::doGetTextBaseAddr not implemented");
+    if (pImpl->text_base_addr != static_cast<uint64_t>(-1)) {
+        return pImpl->text_base_addr;
+    }
+
+    auto& sections = pImpl->reader.get_sections();
+    for (size_t i = 0; i < sections.size(); ++i) {
+        auto* sec = sections[i];
+        if (sec->get_name() == ".text") {
+            pImpl->text_base_addr =
+                pImpl->image_base + sec->get_virtual_address();
+            return pImpl->text_base_addr;
+        }
+    }
+
+    spdlog::error("Could not find .text section");
     return static_cast<uint64_t>(-1);
 }
 
-std::pair<uint64_t, uint64_t>
-PEFileHandlerStrategy::doGetBeginEndAddrIntl() noexcept {
-    spdlog::error(
-        "PEFileHandlerStrategy::doGetBeginEndAddrIntl not implemented");
-    return std::make_pair(static_cast<uint64_t>(-1), static_cast<uint64_t>(-1));
+NativeSymbolTable PEFileHandlerStrategy::doGetSymbols() noexcept {
+    return {};
 }
 
-std::vector<uint8_t> PEFileHandlerStrategy::doGetTextSectionIntl() noexcept {
-    spdlog::error(
-        "PEFileHandlerStrategy::doGetTextSectionIntl not implemented");
-    return std::vector<uint8_t>();
+std::vector<CallTarget>
+PEFileHandlerStrategy::doGetDirectCallTargets() noexcept {
+    parseImports();
+
+    // Build reverse lookup: IAT VA -> function name
+    std::unordered_map<uint64_t, std::string> iat_lookup;
+    for (const auto& entry : pImpl->import_entries) {
+        iat_lookup[entry.iat_va] = entry.func_name;
+    }
+
+    // Scan .text section for MSVC import thunks: FF 25 <disp32>
+    // These are `jmp qword/dword ptr [rip+disp]` (x64) or
+    // `jmp dword ptr [addr]` (x86) instructions that jump through the IAT.
+    auto text = doGetTextSection();
+    uint64_t text_base = doGetTextBaseAddr();
+    if (text.empty() || text_base == static_cast<uint64_t>(-1)) return {};
+
+    constexpr size_t THUNK_SIZE = 6;  // FF 25 + 4-byte operand
+    std::vector<CallTarget> targets;
+
+    for (size_t pos = 0; pos + THUNK_SIZE <= text.size(); ++pos) {
+        if (text[pos] != 0xFF || text[pos + 1] != 0x25) continue;
+
+        int32_t operand;
+        std::memcpy(&operand, &text[pos + 2], 4);
+
+        uint64_t thunk_va = text_base + pos;
+        uint64_t target_va;
+
+        if (pImpl->is_pe32_plus) {
+            // x64: RIP-relative — target = thunk_va + 6 + disp
+            target_va = thunk_va + THUNK_SIZE +
+                        static_cast<uint64_t>(static_cast<int64_t>(operand));
+        } else {
+            // x86: absolute address
+            target_va = static_cast<uint64_t>(static_cast<uint32_t>(operand));
+        }
+
+        auto it = iat_lookup.find(target_va);
+        if (it != iat_lookup.end()) {
+            targets.push_back({it->second, thunk_va, THUNK_SIZE});
+        }
+    }
+
+    return targets;
 }
 
-std::vector<uint8_t> PEFileHandlerStrategy::getSectionData(
-    [[maybe_unused]]  // NOLINT
-    const std::string& sectionName) noexcept {
-    spdlog::error("PEFileHandlerStrategy::getSectionData not implemented");
-    return std::vector<uint8_t>();
+std::vector<CallTarget>
+PEFileHandlerStrategy::doGetIndirectCallTargets() noexcept {
+    parseImports();
+
+    std::vector<CallTarget> targets;
+    for (const auto& entry : pImpl->import_entries) {
+        targets.push_back({entry.func_name, entry.iat_va, entry.iat_size});
+    }
+    return targets;
 }
