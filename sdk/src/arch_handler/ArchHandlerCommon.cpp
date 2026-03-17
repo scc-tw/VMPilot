@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <unordered_set>
 
 #include <spdlog/spdlog.h>
 
@@ -111,6 +112,14 @@ std::vector<NativeFunctionBase> extractNativeFunctions(
         return false;
     };
 
+    // Build set of stub addresses so we skip import thunks themselves
+    // (e.g. PE `jmp [rip+disp]` stubs living in .text).
+    std::unordered_set<uint64_t> stub_addrs;
+    for (const auto& sym : ctx.symbols) {
+        if (sym.getAttribute<std::string>("entry_type", "") == "stub")
+            stub_addrs.insert(sym.address);
+    }
+
     // Scan for pairs of VMPilot_Begin / VMPilot_End calls
     struct Region {
         size_t begin_idx;
@@ -124,6 +133,10 @@ std::vector<NativeFunctionBase> extractNativeFunctions(
         // VMPilot_Begin is always a call.
         // VMPilot_End may be a jmp (tail-call optimization under -O2/-O3).
         if (!insn.isCall() && !insn.isJump())
+            continue;
+
+        // Skip import stubs — they are trampolines, not real call sites
+        if (stub_addrs.count(insn.address))
             continue;
 
         auto sym = callbacks.resolve_call(insn, lookup);
