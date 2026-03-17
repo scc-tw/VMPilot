@@ -18,7 +18,7 @@ CPMAddPackage(
     GIT_TAG "v3.4.0"
 )
 
-# Build protobuf from submodule.
+# Build abseil-cpp + protobuf from submodules.
 # Save and strip warnings-as-errors so third-party C code compiles cleanly.
 set(_saved_c_flags "${CMAKE_C_FLAGS}")
 set(_saved_cxx_flags "${CMAKE_CXX_FLAGS}")
@@ -27,13 +27,18 @@ string(REPLACE "/WX" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 string(REPLACE "-Werror" "" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
 string(REPLACE "-Werror" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 
+# Abseil — pinned submodule (LTS 2026-01-07), built before protobuf
+# so that absl::strings target already exists and protobuf skips FetchContent.
+add_subdirectory(${CMAKE_SOURCE_DIR}/third_party/abseil-cpp
+                 ${CMAKE_BINARY_DIR}/third_party/abseil-cpp
+                 EXCLUDE_FROM_ALL)
+
 set(protobuf_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(protobuf_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(protobuf_INSTALL OFF CACHE BOOL "" FORCE)
 set(protobuf_BUILD_PROTOC_BINARIES ON CACHE BOOL "" FORCE)
 set(protobuf_WITH_ZLIB OFF CACHE BOOL "" FORCE)
 set(protobuf_MSVC_STATIC_RUNTIME OFF CACHE BOOL "" FORCE)
-set(protobuf_ABSL_PROVIDER "module" CACHE STRING "" FORCE)
 add_subdirectory(${CMAKE_SOURCE_DIR}/third_party/protobuf
                  ${CMAKE_BINARY_DIR}/third_party/protobuf
                  EXCLUDE_FROM_ALL)
