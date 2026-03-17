@@ -8,6 +8,7 @@ set(INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/serializer
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/bytecode_compiler
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/capstone_wrapper
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/reference_analyzer
     ${CMAKE_SOURCE_DIR}/common/include
     ${CMAKE_SOURCE_DIR}/third_party/expected/include
     ${CMAKE_BINARY_DIR}/_deps/elfio-src/

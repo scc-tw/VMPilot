@@ -132,6 +132,12 @@ Core::AtomicWidth atomicWidthForCmpxchg(uint32_t insn_id) {
     return Core::AtomicWidth::None;  // use operand size
 }
 
+/// True if reg is a 64-bit ARM64 X register (X0-X28, X29/FP, X30/LR).
+bool isARM64XReg(unsigned reg) {
+    return (reg >= ARM64_REG_X0 && reg <= ARM64_REG_X28) ||
+           reg == ARM64_REG_FP || reg == ARM64_REG_LR;
+}
+
 // --- ARM64 atomic classification ---
 
 struct ARM64AtomicInfo {
@@ -186,7 +192,7 @@ void parseARM64Suffix(const std::string& mnemonic, size_t base_len,
             if (op.type == Capstone::OpType::REG) {
                 // ARM64 X registers have IDs >= ARM64_REG_X0
                 // W registers have IDs >= ARM64_REG_W0
-                if (op.reg >= ARM64_REG_X0 && op.reg <= ARM64_REG_X28) {
+                if (isARM64XReg(op.reg)) {
                     width = Core::AtomicWidth::Atomic64;
                 }
                 break;
@@ -213,7 +219,7 @@ ARM64AtomicInfo classifyARM64Atomic(const Capstone::Instruction& insn) {
             info.width = Core::AtomicWidth::Atomic32;
             for (const auto& op : insn.operands) {
                 if (op.type == Capstone::OpType::REG &&
-                    op.reg >= ARM64_REG_X0 && op.reg <= ARM64_REG_X28) {
+                    isARM64XReg(op.reg)) {
                     info.width = Core::AtomicWidth::Atomic64;
                     break;
                 }
@@ -234,7 +240,7 @@ ARM64AtomicInfo classifyARM64Atomic(const Capstone::Instruction& insn) {
             info.width = Core::AtomicWidth::Atomic32;
             for (const auto& op : insn.operands) {
                 if (op.type == Capstone::OpType::REG &&
-                    op.reg >= ARM64_REG_X0 && op.reg <= ARM64_REG_X28) {
+                    isARM64XReg(op.reg)) {
                     info.width = Core::AtomicWidth::Atomic64;
                     break;
                 }
@@ -488,11 +494,9 @@ void analyzeARM64Insns(
             if (op.type != Capstone::OpType::MEM)
                 continue;
 
-            // ARM64 SP register is typically reg 31 in capstone
-            // Skip if base is SP (stack pointer)
-            // We use the capstone ARM64 register ID for SP
-            constexpr unsigned ARM64_REG_SP_ID = 2;  // ARM64_REG_SP
-            if (op.mem.base == ARM64_REG_SP_ID)
+            // Skip stack-relative: SP and FP (frame pointer)
+            if (op.mem.base == ARM64_REG_SP ||
+                op.mem.base == ARM64_REG_FP)
                 continue;
 
             // Try to resolve base register via ADRP+ADD pattern
@@ -525,16 +529,30 @@ void analyzeARM64Insns(
             ref.kind = classifyBySection(sk);
             ref.source = Core::DataRefSource::InsnAnalysis;
             ref.access_size = op.size;
-            // ARM64: For store instructions (str), operand 1 is the MEM dest
+            // ARM64 write detection: str/stp are plain stores;
+            // stlr/stxr/stlxr are atomic stores;
+            // cas/swp/ldadd/ldclr/ldset/ldeor etc. are RMW (both read+write)
             ref.is_write =
                 (insn.mnemonic.substr(0, 3) == "str" ||
-                 insn.mnemonic.substr(0, 3) == "stp");
+                 insn.mnemonic.substr(0, 3) == "stp" ||
+                 insn.mnemonic.substr(0, 4) == "stlr" ||
+                 insn.mnemonic.substr(0, 4) == "stxr" ||
+                 insn.mnemonic.substr(0, 5) == "stlxr");
 
             // Apply atomic info if classified
             if (arm64_atomic.op != Core::AtomicOp::None) {
                 ref.atomic_op = arm64_atomic.op;
                 ref.atomic_ordering = arm64_atomic.ordering;
                 ref.atomic_width = arm64_atomic.width;
+                // Atomic RMW ops (CAS/SWP/LDADD/LD* ops) are writes too
+                if (arm64_atomic.op == Core::AtomicOp::CompareSwap ||
+                    arm64_atomic.op == Core::AtomicOp::Swap ||
+                    arm64_atomic.op == Core::AtomicOp::FetchAdd ||
+                    arm64_atomic.op == Core::AtomicOp::RMW ||
+                    arm64_atomic.op == Core::AtomicOp::StoreExclusive ||
+                    arm64_atomic.op == Core::AtomicOp::StoreRelease) {
+                    ref.is_write = true;
+                }
             }
 
             auto sym_it = sym_lookup.find(target_va);
