@@ -72,6 +72,32 @@ uint64_t ELFFileHandlerStrategy::doGetTextBaseAddr() noexcept {
     return pImpl->text_base_addr;
 }
 
+std::vector<uint8_t> ELFFileHandlerStrategy::doGetReadOnlyData() noexcept {
+    const auto it = pImpl->section_table.find(".rodata");
+    if (it == pImpl->section_table.end()) {
+        return {};
+    }
+    auto section = it->second.getSection();
+    if (!section || section->get_size() == 0) {
+        return {};
+    }
+    std::vector<uint8_t> data(section->get_size());
+    std::memcpy(data.data(), section->get_data(), section->get_size());
+    return data;
+}
+
+uint64_t ELFFileHandlerStrategy::doGetReadOnlyBaseAddr() noexcept {
+    const auto it = pImpl->section_table.find(".rodata");
+    if (it == pImpl->section_table.end()) {
+        return static_cast<uint64_t>(-1);
+    }
+    auto section = it->second.getSection();
+    if (!section) {
+        return static_cast<uint64_t>(-1);
+    }
+    return section->get_address();
+}
+
 std::unordered_map<uint64_t, ELFFileHandlerStrategy::RelaInfo>
 ELFFileHandlerStrategy::buildRelocationMap() noexcept {
     std::unordered_map<uint64_t, RelaInfo> result;

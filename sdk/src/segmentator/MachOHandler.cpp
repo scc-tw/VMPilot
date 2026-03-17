@@ -63,6 +63,22 @@ uint64_t MachOFileHandlerStrategy::doGetTextBaseAddr() noexcept {
     return pImpl->text_base_addr;
 }
 
+std::vector<uint8_t> MachOFileHandlerStrategy::doGetReadOnlyData() noexcept {
+    auto sect = pImpl->parser.findSection("__TEXT", "__const");
+    if (!sect) {
+        return {};
+    }
+    return pImpl->parser.readSectionData(*sect);
+}
+
+uint64_t MachOFileHandlerStrategy::doGetReadOnlyBaseAddr() noexcept {
+    auto sect = pImpl->parser.findSection("__TEXT", "__const");
+    if (!sect) {
+        return static_cast<uint64_t>(-1);
+    }
+    return sect->addr;
+}
+
 NativeSymbolTable MachOFileHandlerStrategy::doGetSymbols() noexcept {
     NativeSymbolTable table;
 

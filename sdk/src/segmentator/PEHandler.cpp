@@ -197,6 +197,32 @@ uint64_t PEFileHandlerStrategy::doGetTextBaseAddr() noexcept {
     return static_cast<uint64_t>(-1);
 }
 
+std::vector<uint8_t> PEFileHandlerStrategy::doGetReadOnlyData() noexcept {
+    auto& sections = pImpl->reader.get_sections();
+    for (size_t i = 0; i < sections.get_count(); ++i) {
+        auto* sec = sections[i];
+        if (sec->get_name() == ".rdata") {
+            auto size = sec->get_data_size();
+            const char* data = sec->get_data();
+            if (!data || size == 0)
+                return {};
+            return std::vector<uint8_t>(data, data + size);
+        }
+    }
+    return {};
+}
+
+uint64_t PEFileHandlerStrategy::doGetReadOnlyBaseAddr() noexcept {
+    auto& sections = pImpl->reader.get_sections();
+    for (size_t i = 0; i < sections.get_count(); ++i) {
+        auto* sec = sections[i];
+        if (sec->get_name() == ".rdata") {
+            return pImpl->image_base + sec->get_virtual_address();
+        }
+    }
+    return static_cast<uint64_t>(-1);
+}
+
 NativeSymbolTable PEFileHandlerStrategy::doGetSymbols() noexcept {
     return {};
 }
