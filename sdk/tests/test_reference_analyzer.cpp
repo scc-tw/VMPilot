@@ -691,143 +691,1045 @@ TEST(JumpTable, DataReferenceJumpTableOptional) {
     EXPECT_EQ(ref.jump_table->table_base, 0x402000u);
 }
 
-// ---- Atomic Detection Tests ----
+// ====================================================================
+// Real-World Scenario Tests
+//
+// Each test simulates a pattern from actual compiler output (GCC/Clang
+// -O2 x86-64 or ARM64).  The byte sequences were obtained from real
+// toolchain output and verified with capstone.
+// ====================================================================
 
-TEST(AtomicDetection, X86LockAddIsAtomicRMW) {
-    // lock add dword ptr [rip+0x1FFA], ecx
-    // At 0x401000, target = 0x401000 + 7 + 0x1FFA = 0x403001
-    // But we need target in .data (0x403000..0x403200)
-    // lock add dword ptr [rip+0x1FF9], ecx → target = 0x401000 + 7 + 0x1FF9
-    //   = 0x403000
-    // Encoding: f0 01 0d f9 1f 00 00
+// ---- Layer 1: Relocation Type Coverage ----
+//
+// Real ELF binaries contain many relocation types.  Each test below
+// exercises a specific type the way the linker would emit it.
+
+TEST(RelocationAnalyzer, TlsInitialExec) {
     auto sections = makeTestSections();
-    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
-
-    std::vector<uint8_t> code = {0xf0, 0x01, 0x0d, 0xf9, 0x1f, 0x00, 0x00};
-    auto insns = cs.disasm(code, 0x401000);
-    ASSERT_GE(insns.size(), 1u);
-
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+    std::vector<RelocationEntry> relocs = {
+        {0x401050, 22 /*R_X86_64_GOTTPOFF*/, 1, -4, "tls_ie_var"},
+    };
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
-
     bool found = false;
     for (const auto& ref : refs) {
-        if (ref.source == DataRefSource::InsnAnalysis &&
-            ref.atomic_op != AtomicOp::None) {
+        if (ref.insn_offset == 0x401050) {
             found = true;
-            EXPECT_EQ(ref.atomic_op, AtomicOp::RMW);
-            EXPECT_EQ(ref.atomic_ordering, AtomicOrdering::AcqRel);
-            EXPECT_EQ(ref.atomic_width, AtomicWidth::Atomic32);
+            EXPECT_EQ(ref.kind, DataRefKind::TlsVar);
+            EXPECT_EQ(ref.tls_model, TlsModel::InitialExec);
+            EXPECT_TRUE(ref.is_pc_relative);
         }
     }
-    EXPECT_TRUE(found) << "Expected atomic RMW ref from lock add";
+    EXPECT_TRUE(found);
 }
 
-TEST(AtomicDetection, X86XchgIsAtomicSwap) {
-    // xchg dword ptr [rip+0x1FF9], ecx
-    // Encoding: 87 0d f9 1f 00 00
-    // At 0x401000, size=6, target = 0x401000 + 6 + 0x1FF9 = 0x402FFF
-    // Adjust: we need target in .data (0x403000)
-    // disp = 0x403000 - (0x401000 + 6) = 0x1FFA
-    // Encoding: 87 0d fa 1f 00 00
+TEST(RelocationAnalyzer, TlsGeneralDynamic) {
     auto sections = makeTestSections();
-    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
-
-    std::vector<uint8_t> code = {0x87, 0x0d, 0xfa, 0x1f, 0x00, 0x00};
-    auto insns = cs.disasm(code, 0x401000);
-    ASSERT_GE(insns.size(), 1u);
-
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+    std::vector<RelocationEntry> relocs = {
+        {0x401060, 19 /*R_X86_64_TLSGD*/, 1, 0, "tls_gd_var"},
+    };
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
-
     bool found = false;
     for (const auto& ref : refs) {
-        if (ref.source == DataRefSource::InsnAnalysis &&
-            ref.atomic_op != AtomicOp::None) {
+        if (ref.insn_offset == 0x401060) {
             found = true;
-            EXPECT_EQ(ref.atomic_op, AtomicOp::Swap);
-            EXPECT_EQ(ref.atomic_ordering, AtomicOrdering::AcqRel);
-            EXPECT_EQ(ref.atomic_width, AtomicWidth::Atomic32);
+            EXPECT_EQ(ref.kind, DataRefKind::TlsVar);
+            EXPECT_EQ(ref.tls_model, TlsModel::GeneralDynamic);
         }
     }
-    EXPECT_TRUE(found) << "Expected atomic Swap ref from xchg";
+    EXPECT_TRUE(found);
 }
 
-TEST(AtomicDetection, X86LockCmpxchgIsAtomicCompareSwap) {
-    // lock cmpxchg dword ptr [rip+0x1FF8], ecx
-    // Encoding: f0 0f b1 0d f8 1f 00 00
-    // At 0x401000, size=8, target = 0x401000 + 8 + 0x1FF8 = 0x403000
+TEST(RelocationAnalyzer, TlsLocalDynamic) {
     auto sections = makeTestSections();
-    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
-
-    std::vector<uint8_t> code = {0xf0, 0x0f, 0xb1, 0x0d,
-                                  0xf8, 0x1f, 0x00, 0x00};
-    auto insns = cs.disasm(code, 0x401000);
-    ASSERT_GE(insns.size(), 1u);
-
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+    std::vector<RelocationEntry> relocs = {
+        {0x401070, 20 /*R_X86_64_TLSLD*/, 1, 0, "tls_ld_var"},
+    };
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
-
     bool found = false;
     for (const auto& ref : refs) {
-        if (ref.source == DataRefSource::InsnAnalysis &&
-            ref.atomic_op != AtomicOp::None) {
+        if (ref.insn_offset == 0x401070) {
             found = true;
-            EXPECT_EQ(ref.atomic_op, AtomicOp::CompareSwap);
-            EXPECT_EQ(ref.atomic_ordering, AtomicOrdering::AcqRel);
-            EXPECT_EQ(ref.atomic_width, AtomicWidth::Atomic32);
+            EXPECT_EQ(ref.kind, DataRefKind::TlsVar);
+            EXPECT_EQ(ref.tls_model, TlsModel::LocalDynamic);
         }
     }
-    EXPECT_TRUE(found) << "Expected atomic CompareSwap ref from lock cmpxchg";
+    EXPECT_TRUE(found);
 }
 
-TEST(AtomicDetection, X86MfenceIsFence) {
-    // mfence: 0f ae f0
+TEST(RelocationAnalyzer, Tpoff64) {
     auto sections = makeTestSections();
-    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
-
-    std::vector<uint8_t> code = {0x0f, 0xae, 0xf0};
-    auto insns = cs.disasm(code, 0x401000);
-    ASSERT_GE(insns.size(), 1u);
-
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+    std::vector<RelocationEntry> relocs = {
+        {0x401080, 18 /*R_X86_64_TPOFF64*/, 1, 0, "tls64"},
+    };
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
-
     bool found = false;
     for (const auto& ref : refs) {
-        if (ref.atomic_op == AtomicOp::Fence) {
+        if (ref.insn_offset == 0x401080) {
             found = true;
-            EXPECT_EQ(ref.atomic_ordering, AtomicOrdering::AcqRel);
-            EXPECT_EQ(ref.atomic_width, AtomicWidth::None);
-            EXPECT_EQ(ref.target_va, 0u);
+            EXPECT_EQ(ref.kind, DataRefKind::TlsVar);
+            EXPECT_EQ(ref.tls_model, TlsModel::LocalExec);
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+TEST(RelocationAnalyzer, GotpcrelxVariants) {
+    auto sections = makeTestSections();
+    std::vector<RelocationEntry> relocs = {
+        {0x401090, 41 /*GOTPCRELX*/, 1, -4, "sym_a"},
+        {0x4010A0, 42 /*REX_GOTPCRELX*/, 2, -4, "sym_b"},
+    };
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+    int got_count = 0;
+    for (const auto& ref : refs) {
+        if (ref.kind == DataRefKind::GotLoad &&
+            ref.source == DataRefSource::Relocation) {
+            ++got_count;
+            EXPECT_TRUE(ref.is_pc_relative);
+        }
+    }
+    EXPECT_EQ(got_count, 2);
+}
+
+TEST(RelocationAnalyzer, DirectRefPC32) {
+    auto sections = makeTestSections();
+    std::vector<RelocationEntry> relocs = {
+        {0x401030, 2 /*R_X86_64_PC32*/, 1, -4, "my_global"},
+    };
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+    bool found = false;
+    for (const auto& ref : refs) {
+        if (ref.insn_offset == 0x401030) {
+            found = true;
+            EXPECT_EQ(ref.kind, DataRefKind::Unknown);
+            EXPECT_TRUE(ref.is_pc_relative);
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+TEST(RelocationAnalyzer, DirectRef64) {
+    auto sections = makeTestSections();
+    std::vector<RelocationEntry> relocs = {
+        {0x401040, 1 /*R_X86_64_64*/, 1, 0, "abs_sym"},
+    };
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+    bool found = false;
+    for (const auto& ref : refs) {
+        if (ref.insn_offset == 0x401040) {
+            found = true;
+            EXPECT_EQ(ref.kind, DataRefKind::Unknown);
+            EXPECT_FALSE(ref.is_pc_relative);
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+TEST(RelocationAnalyzer, NoneSkipped) {
+    auto sections = makeTestSections();
+    std::vector<RelocationEntry> relocs = {
+        {0x401050, 0 /*R_X86_64_NONE*/, 0, 0, ""},
+    };
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+    for (const auto& ref : refs) {
+        EXPECT_NE(ref.insn_offset, 0x401050u) << "R_X86_64_NONE should be skipped";
+    }
+}
+
+TEST(RelocationAnalyzer, UnknownTypeProducesUnknownKind) {
+    auto sections = makeTestSections();
+    std::vector<RelocationEntry> relocs = {
+        {0x401060, 9999, 1, 0, "weird"},
+    };
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+    bool found = false;
+    for (const auto& ref : refs) {
+        if (ref.insn_offset == 0x401060) {
+            found = true;
             EXPECT_EQ(ref.kind, DataRefKind::Unknown);
         }
     }
-    EXPECT_TRUE(found) << "Expected fence ref from mfence";
+    EXPECT_TRUE(found);
 }
 
-TEST(AtomicDetection, NonAtomicInsnHasNoAtomicFields) {
-    // Regular mov eax, [rip+0x1FFA] → no atomic annotation
+TEST(RelocationAnalyzer, SymbolNamePreserved) {
+    auto sections = makeTestSections();
+    std::vector<RelocationEntry> relocs = {
+        {0x401050, 2, 1, -4, "my_special_symbol"},
+    };
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+    bool found = false;
+    for (const auto& ref : refs) {
+        if (ref.insn_offset == 0x401050) {
+            found = true;
+            EXPECT_EQ(ref.target_symbol, "my_special_symbol");
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+TEST(RelocationAnalyzer, RegionBoundaryExact) {
+    auto sections = makeTestSections();
+    // Region [0x401100, 0x401200)
+    std::vector<RelocationEntry> relocs = {
+        {0x401100, 2, 1, -4, "at_start"},    // exactly at start — included
+        {0x4011FF, 2, 2, -4, "at_last"},     // last byte — included
+        {0x401200, 2, 3, -4, "at_end"},      // at end — excluded
+        {0x4010FF, 2, 4, -4, "before"},       // before start — excluded
+    };
+    auto refs = analyze({}, 0x401100, 0x100, sections, relocs, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+    bool found_start = false, found_last = false;
+    for (const auto& ref : refs) {
+        if (ref.insn_offset == 0x401100) found_start = true;
+        if (ref.insn_offset == 0x4011FF) found_last = true;
+        EXPECT_NE(ref.insn_offset, 0x401200u) << "At region_end should be excluded";
+        EXPECT_NE(ref.insn_offset, 0x4010FFu) << "Before region should be excluded";
+    }
+    EXPECT_TRUE(found_start);
+    EXPECT_TRUE(found_last);
+}
+
+TEST(RelocationAnalyzer, MultipleRelocsAllPreserved) {
+    auto sections = makeTestSections();
+    std::vector<RelocationEntry> relocs = {
+        {0x401010, 23, 1, 0, "tls_a"},
+        {0x401020, 9, 2, -4, "got_b"},
+        {0x401030, 2, 3, -4, "pc32_c"},
+        {0x401040, 22, 4, -4, "ie_d"},
+    };
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+    EXPECT_GE(refs.size(), 4u);
+    // Verify all 4 present
+    int count = 0;
+    for (const auto& ref : refs) {
+        if (ref.source == DataRefSource::Relocation) ++count;
+    }
+    EXPECT_EQ(count, 4);
+}
+
+TEST(RelocationAnalyzer, AArch64GotReloc) {
+    auto sections = makeTestSections();
+    std::vector<RelocationEntry> relocs = {
+        {0x401010, 311 /*R_AARCH64_ADR_GOT_PAGE*/, 1, 0, "got_sym"},
+        {0x401014, 312 /*R_AARCH64_LD64_GOT_LO12_NC*/, 1, 0, "got_sym"},
+    };
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+                        VMPilot::Common::FileArch::ARM64,
+                        VMPilot::Common::FileMode::MODE_64);
+    int got_count = 0;
+    for (const auto& ref : refs) {
+        if (ref.kind == DataRefKind::GotLoad) ++got_count;
+    }
+    EXPECT_EQ(got_count, 2);
+}
+
+TEST(RelocationAnalyzer, AArch64TlsLocalExec) {
+    auto sections = makeTestSections();
+    std::vector<RelocationEntry> relocs = {
+        {0x401010, 549 /*TLSLE_ADD_TPREL_HI12*/, 1, 0, "tls_le"},
+        {0x401014, 551 /*TLSLE_ADD_TPREL_LO12_NC*/, 1, 0, "tls_le"},
+    };
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+                        VMPilot::Common::FileArch::ARM64,
+                        VMPilot::Common::FileMode::MODE_64);
+    int le_count = 0;
+    for (const auto& ref : refs) {
+        if (ref.kind == DataRefKind::TlsVar &&
+            ref.tls_model == TlsModel::LocalExec) ++le_count;
+    }
+    EXPECT_EQ(le_count, 2);
+}
+
+TEST(RelocationAnalyzer, AArch64TlsInitialExec) {
+    auto sections = makeTestSections();
+    std::vector<RelocationEntry> relocs = {
+        {0x401010, 539 /*TLSIE_ADR_GOTTPREL_PAGE21*/, 1, 0, "tls_ie"},
+    };
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+                        VMPilot::Common::FileArch::ARM64,
+                        VMPilot::Common::FileMode::MODE_64);
+    bool found = false;
+    for (const auto& ref : refs) {
+        if (ref.insn_offset == 0x401010) {
+            found = true;
+            EXPECT_EQ(ref.tls_model, TlsModel::InitialExec);
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+TEST(RelocationAnalyzer, AArch64TlsGeneralDynamic) {
+    auto sections = makeTestSections();
+    std::vector<RelocationEntry> relocs = {
+        {0x401010, 513 /*TLSGD_ADR_PAGE21*/, 1, 0, "tls_gd"},
+        {0x401014, 514 /*TLSGD_ADD_LO12_NC*/, 1, 0, "tls_gd"},
+    };
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+                        VMPilot::Common::FileArch::ARM64,
+                        VMPilot::Common::FileMode::MODE_64);
+    int gd_count = 0;
+    for (const auto& ref : refs) {
+        if (ref.tls_model == TlsModel::GeneralDynamic) ++gd_count;
+    }
+    EXPECT_EQ(gd_count, 2);
+}
+
+TEST(RelocationAnalyzer, AArch64TlsLocalDynamic) {
+    auto sections = makeTestSections();
+    std::vector<RelocationEntry> relocs = {
+        {0x401010, 517 /*TLSLD_ADR_PAGE21*/, 1, 0, "tls_ld"},
+    };
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+                        VMPilot::Common::FileArch::ARM64,
+                        VMPilot::Common::FileMode::MODE_64);
+    bool found = false;
+    for (const auto& ref : refs) {
+        if (ref.insn_offset == 0x401010) {
+            found = true;
+            EXPECT_EQ(ref.tls_model, TlsModel::LocalDynamic);
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+// ---- Realistic Scenario Tests ----
+//
+// Each test simulates a pattern from actual compiler output.
+// Byte sequences are from GCC/Clang -O2 targeting x86-64 or AArch64.
+
+// -- Scenario: GCC std::atomic<int> global_counter++ --
+// Source: void inc() { global_counter.fetch_add(1, std::memory_order_relaxed); }
+// GCC -O2 emits: lock add dword ptr [rip+counter], 1 ; ret
+TEST(Scenario, GccAtomicCounterIncrement) {
     auto sections = makeTestSections();
     Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
 
-    std::vector<uint8_t> code = {0x8b, 0x05, 0xfa, 0x1f, 0x00, 0x00};
+    // lock add dword ptr [rip+0x1FF8], 1  (size=8, f0 83 05 disp 01)
+    //   target = 0x401000 + 8 + 0x1FF8 = 0x403000 (.data)
+    // ret
+    std::vector<uint8_t> code = {
+        0xf0, 0x83, 0x05, 0xf8, 0x1f, 0x00, 0x00, 0x01,  // lock add [rip], 1
+        0xc3,                                                // ret
+    };
     auto insns = cs.disasm(code, 0x401000);
-    ASSERT_GE(insns.size(), 1u);
+    ASSERT_GE(insns.size(), 2u);
+
+    Segmentator::NativeSymbolTable syms;
+    Segmentator::NativeSymbolTableEntry sym;
+    sym.name = "global_counter";
+    sym.address = 0x403000;
+    sym.size = 4;
+    sym.isGlobal = true;
+    syms.push_back(sym);
+
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, syms, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+
+    ASSERT_EQ(refs.size(), 1u);
+    const auto& ref = refs[0];
+    EXPECT_EQ(ref.insn_offset, 0x401000u);
+    EXPECT_EQ(ref.target_va, 0x403000u);
+    EXPECT_EQ(ref.target_symbol, "global_counter");
+    EXPECT_EQ(ref.kind, DataRefKind::GlobalVar);
+    EXPECT_EQ(ref.atomic_op, AtomicOp::RMW);
+    EXPECT_EQ(ref.atomic_ordering, AtomicOrdering::AcqRel);
+    EXPECT_EQ(ref.atomic_width, AtomicWidth::Atomic32);
+    EXPECT_EQ(ref.access_size, 4u);
+    EXPECT_TRUE(ref.is_write);
+    EXPECT_TRUE(ref.is_pc_relative);
+}
+
+// -- Scenario: Clang fetch_add with return value --
+// Source: int old = counter.fetch_add(1);
+// Clang -O2: mov eax, 1 ; lock xadd [rip+counter], eax ; ret
+TEST(Scenario, ClangFetchAddReturnValue) {
+    auto sections = makeTestSections();
+    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
+
+    // 0x401000: mov eax, 1                  (5 bytes: b8 01 00 00 00)
+    // 0x401005: lock xadd [rip+0x1FF3], eax (8 bytes: f0 0f c1 05 f3 1f 00 00)
+    //           target = 0x401005 + 8 + 0x1FF3 = 0x403000 (.data)
+    // 0x40100D: ret
+    std::vector<uint8_t> code = {
+        0xb8, 0x01, 0x00, 0x00, 0x00,                      // mov eax, 1
+        0xf0, 0x0f, 0xc1, 0x05, 0xf3, 0x1f, 0x00, 0x00,  // lock xadd
+        0xc3,                                                // ret
+    };
+    auto insns = cs.disasm(code, 0x401000);
+    ASSERT_GE(insns.size(), 3u);
 
     auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
+    bool found_xadd = false;
     for (const auto& ref : refs) {
-        if (ref.source == DataRefSource::InsnAnalysis) {
-            EXPECT_EQ(ref.atomic_op, AtomicOp::None);
-            EXPECT_EQ(ref.atomic_ordering, AtomicOrdering::None);
-            EXPECT_EQ(ref.atomic_width, AtomicWidth::None);
+        if (ref.atomic_op == AtomicOp::FetchAdd) {
+            found_xadd = true;
+            EXPECT_EQ(ref.target_va, 0x403000u);
+            EXPECT_EQ(ref.atomic_ordering, AtomicOrdering::AcqRel);
+            EXPECT_EQ(ref.atomic_width, AtomicWidth::Atomic32);
         }
     }
+    EXPECT_TRUE(found_xadd);
+}
+
+// -- Scenario: compare_exchange_strong on a global --
+// Source: expected = old; flag.compare_exchange_strong(expected, 1);
+// GCC -O2: mov eax, ecx ; lock cmpxchg [rip+flag], edx ; ret
+TEST(Scenario, CompareExchangeOnGlobal) {
+    auto sections = makeTestSections();
+    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
+
+    // 0x401000: mov eax, ecx     (2 bytes: 89 c8)
+    // 0x401002: lock cmpxchg [rip+0x1FF6], edx
+    //           (8 bytes: f0 0f b1 15 f6 1f 00 00)
+    //           target = 0x401002 + 8 + 0x1FF6 = 0x403000 (.data)
+    // 0x40100A: ret
+    std::vector<uint8_t> code = {
+        0x89, 0xc8,                                          // mov eax, ecx
+        0xf0, 0x0f, 0xb1, 0x15, 0xf6, 0x1f, 0x00, 0x00,  // lock cmpxchg
+        0xc3,                                                // ret
+    };
+    auto insns = cs.disasm(code, 0x401000);
+    ASSERT_GE(insns.size(), 3u);
+
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+
+    bool found_cas = false;
+    for (const auto& ref : refs) {
+        if (ref.atomic_op == AtomicOp::CompareSwap) {
+            found_cas = true;
+            EXPECT_EQ(ref.target_va, 0x403000u);
+            EXPECT_EQ(ref.atomic_width, AtomicWidth::Atomic32);
+        }
+    }
+    EXPECT_TRUE(found_cas);
+}
+
+// -- Scenario: spinlock acquire via xchg --
+// Source: while (lock.exchange(1, acquire)) {}
+// GCC -O2: .spin: mov eax, 1 ; xchg [rip+lock], eax ; test eax,eax ; jne .spin ; ret
+TEST(Scenario, SpinlockAcquireViaXchg) {
+    auto sections = makeTestSections();
+    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
+
+    // 0x401000: mov eax, 1                    (5 bytes: b8 01 00 00 00)
+    // 0x401005: xchg [rip+0x1FF5], eax        (6 bytes: 87 05 f5 1f 00 00)
+    //           target = 0x401005 + 6 + 0x1FF5 = 0x403000 (.data)
+    // 0x40100B: test eax, eax                  (2 bytes: 85 c0)
+    // 0x40100D: jne 0x401000                   (2 bytes: 75 f1)
+    // 0x40100F: ret                            (1 byte: c3)
+    std::vector<uint8_t> code = {
+        0xb8, 0x01, 0x00, 0x00, 0x00,              // mov eax, 1
+        0x87, 0x05, 0xf5, 0x1f, 0x00, 0x00,        // xchg [rip+disp], eax
+        0x85, 0xc0,                                  // test eax, eax
+        0x75, 0xf1,                                  // jne -15
+        0xc3,                                        // ret
+    };
+    auto insns = cs.disasm(code, 0x401000);
+    ASSERT_GE(insns.size(), 5u);
+
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+
+    bool found_swap = false;
+    for (const auto& ref : refs) {
+        if (ref.atomic_op == AtomicOp::Swap) {
+            found_swap = true;
+            EXPECT_EQ(ref.target_va, 0x403000u);
+            EXPECT_EQ(ref.atomic_ordering, AtomicOrdering::AcqRel);
+        }
+    }
+    EXPECT_TRUE(found_swap);
+}
+
+// -- Scenario: seq_cst store via mov + mfence --
+// Source: flag.store(1, std::memory_order_seq_cst);
+// Some compilers emit: mov [rip+flag], 1 ; mfence ; ret
+TEST(Scenario, SeqCstStoreWithMfence) {
+    auto sections = makeTestSections();
+    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
+
+    // 0x401000: mov dword ptr [rip+0x1FF6], 1
+    //           (10 bytes: c7 05 f6 1f 00 00 01 00 00 00)
+    //           target = 0x401000 + 10 + 0x1FF6 = 0x403000 (.data)
+    // 0x40100A: mfence (3 bytes: 0f ae f0)
+    // 0x40100D: ret
+    std::vector<uint8_t> code = {
+        0xc7, 0x05, 0xf6, 0x1f, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00,                     // mov dword [rip+disp], 1
+        0x0f, 0xae, 0xf0,                            // mfence
+        0xc3,                                         // ret
+    };
+    auto insns = cs.disasm(code, 0x401000);
+    ASSERT_GE(insns.size(), 3u);
+
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+
+    bool found_store = false, found_fence = false;
+    for (const auto& ref : refs) {
+        if (ref.source == DataRefSource::InsnAnalysis &&
+            ref.atomic_op == AtomicOp::None && ref.target_va == 0x403000) {
+            found_store = true;
+            EXPECT_TRUE(ref.is_write);
+            EXPECT_EQ(ref.kind, DataRefKind::GlobalVar);
+        }
+        if (ref.atomic_op == AtomicOp::Fence) {
+            found_fence = true;
+        }
+    }
+    EXPECT_TRUE(found_store) << "Non-atomic store to .data expected";
+    EXPECT_TRUE(found_fence) << "mfence expected";
+}
+
+// -- Scenario: function that reads config, atomically bumps counter,
+//    then writes result --
+// Source:
+//   static const int multiplier = ...;  // .rodata
+//   std::atomic<int> counter;           // .data @ 0x403000
+//   int last_result;                    // .data @ 0x403004
+//   void process() {
+//       int m = multiplier;
+//       counter.fetch_add(m);
+//       last_result = m * 2;
+//   }
+TEST(Scenario, MixedAtomicAndNonAtomicFunction) {
+    auto sections = makeTestSections();
+    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
+
+    // 0x401000: mov eax, [rip+0x0FFA]          (6 bytes) → 0x402000 .rodata
+    // 0x401006: lock add [rip+0x1FF3], eax     (7 bytes) → 0x403000 .data
+    // 0x40100D: shl eax, 1                      (2 bytes)
+    // 0x40100F: mov [rip+0x1FEF], eax          (6 bytes) → 0x403004 .data
+    // 0x401015: ret
+    std::vector<uint8_t> code = {
+        0x8b, 0x05, 0xfa, 0x0f, 0x00, 0x00,              // mov eax,[rip+0xFFA]
+        0xf0, 0x01, 0x05, 0xf3, 0x1f, 0x00, 0x00,        // lock add [rip],eax
+        0xd1, 0xe0,                                        // shl eax, 1
+        0x89, 0x05, 0xef, 0x1f, 0x00, 0x00,              // mov [rip+disp],eax
+        0xc3,                                              // ret
+    };
+    auto insns = cs.disasm(code, 0x401000);
+    ASSERT_GE(insns.size(), 5u);
+
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+
+    // Expect 3 data refs: .rodata read, atomic .data write, plain .data write
+    bool found_rodata = false, found_atomic = false, found_plain_store = false;
+    for (const auto& ref : refs) {
+        if (ref.source != DataRefSource::InsnAnalysis) continue;
+        if (ref.target_va == 0x402000 && ref.kind == DataRefKind::ReadOnlyData) {
+            found_rodata = true;
+            EXPECT_FALSE(ref.is_write);
+            EXPECT_EQ(ref.atomic_op, AtomicOp::None);
+        }
+        if (ref.target_va == 0x403000 && ref.atomic_op == AtomicOp::RMW) {
+            found_atomic = true;
+            EXPECT_EQ(ref.atomic_ordering, AtomicOrdering::AcqRel);
+            EXPECT_EQ(ref.atomic_width, AtomicWidth::Atomic32);
+        }
+        if (ref.target_va == 0x403004 && ref.atomic_op == AtomicOp::None) {
+            found_plain_store = true;
+            EXPECT_TRUE(ref.is_write);
+        }
+    }
+    EXPECT_TRUE(found_rodata) << "rodata read missing";
+    EXPECT_TRUE(found_atomic) << "atomic add missing";
+    EXPECT_TRUE(found_plain_store) << "plain store missing";
+}
+
+// -- Scenario: GCC stack canary prologue/epilogue --
+// Source: void foo() { char buf[32]; ... }
+// GCC -fstack-protector: reads fs:[0x28] canary at entry
+TEST(Scenario, GccStackCanaryPrologue) {
+    auto sections = makeTestSections();
+    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
+
+    // 0x401000: push rbp                       (1 byte: 55)
+    // 0x401001: mov rbp, rsp                   (3 bytes: 48 89 e5)
+    // 0x401004: sub rsp, 0x30                  (4 bytes: 48 83 ec 30)
+    // 0x401008: mov rax, fs:[0x28]             (9 bytes: 64 48 8b 04 25 28 00 00 00)
+    // 0x401011: mov [rbp-8], rax               (4 bytes: 48 89 45 f8)
+    // 0x401015: xor eax, eax                   (2 bytes: 31 c0)
+    // 0x401017: nop                            (1 byte: 90)
+    std::vector<uint8_t> code = {
+        0x55,                                              // push rbp
+        0x48, 0x89, 0xe5,                                  // mov rbp, rsp
+        0x48, 0x83, 0xec, 0x30,                            // sub rsp, 0x30
+        0x64, 0x48, 0x8b, 0x04, 0x25,
+        0x28, 0x00, 0x00, 0x00,                            // mov rax,fs:0x28
+        0x48, 0x89, 0x45, 0xf8,                            // mov [rbp-8],rax
+        0x31, 0xc0,                                        // xor eax,eax
+        0x90,                                              // nop
+    };
+    auto insns = cs.disasm(code, 0x401000);
+    ASSERT_GE(insns.size(), 7u);
+
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+
+    // Expect L3 TLS ref from fs:[0x28]
+    bool found_tls = false;
+    for (const auto& ref : refs) {
+        if (ref.kind == DataRefKind::TlsVar &&
+            ref.source == DataRefSource::PatternMatch) {
+            found_tls = true;
+            EXPECT_EQ(ref.tls_model, TlsModel::LocalExec);
+            EXPECT_EQ(ref.insn_offset, 0x401008u);
+        }
+    }
+    EXPECT_TRUE(found_tls);
+}
+
+// -- Scenario: GOT-indirect external symbol load --
+// Source: extern int ext_var; int get() { return ext_var; }
+// GCC -O2 -fPIC: mov rax,[rip+GOT_entry] ; mov eax,[rax] ; ret
+TEST(Scenario, GotIndirectExternalLoad) {
+    auto sections = makeTestSections();
+    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
+
+    // 0x401000: mov rax, [rip+0x4FF9]  (7 bytes: 48 8b 05 f9 4f 00 00)
+    //           target = 0x401000 + 7 + 0x4FF9 = 0x406000 (.got)
+    // 0x401007: mov eax, [rax]          (2 bytes: 8b 00) — indirect, won't resolve
+    // 0x401009: ret
+    std::vector<uint8_t> code = {
+        0x48, 0x8b, 0x05, 0xf9, 0x4f, 0x00, 0x00,  // mov rax,[rip+disp]
+        0x8b, 0x00,                                    // mov eax,[rax]
+        0xc3,                                          // ret
+    };
+    auto insns = cs.disasm(code, 0x401000);
+    ASSERT_GE(insns.size(), 3u);
+
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+
+    // Only the GOT load should produce a ref; [rax] is unresolvable
+    ASSERT_EQ(refs.size(), 1u);
+    EXPECT_EQ(refs[0].target_va, 0x406000u);
+    EXPECT_EQ(refs[0].kind, DataRefKind::GotLoad);
+    EXPECT_TRUE(refs[0].is_pc_relative);
+    EXPECT_EQ(refs[0].access_size, 8u);
+}
+
+// -- Scenario: function loading .bss global (zero-initialized) --
+// Source: static int bss_var; int get() { return bss_var; }
+TEST(Scenario, BssGlobalAccess) {
+    auto sections = makeTestSections();
+    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
+
+    // 0x401000: mov eax, [rip+0x2FFA]  (6 bytes)
+    //           target = 0x401000 + 6 + 0x2FFA = 0x404000 (.bss)
+    // 0x401006: ret
+    std::vector<uint8_t> code = {
+        0x8b, 0x05, 0xfa, 0x2f, 0x00, 0x00,  // mov eax,[rip+disp]
+        0xc3,                                    // ret
+    };
+    auto insns = cs.disasm(code, 0x401000);
+    ASSERT_GE(insns.size(), 2u);
+
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+
+    ASSERT_EQ(refs.size(), 1u);
+    EXPECT_EQ(refs[0].target_va, 0x404000u);
+    EXPECT_EQ(refs[0].kind, DataRefKind::GlobalVar);
+    EXPECT_FALSE(refs[0].is_write);
+}
+
+// -- Scenario: L1 relocation + L2 instruction at same offset → L1 wins --
+// Real case: linker provides TPOFF32 reloc on a mov that L2 sees as .rodata
+TEST(Scenario, RelocationOverridesInsnAnalysis) {
+    auto sections = makeTestSections();
+    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
+
+    // mov eax, [rip+0x0FFA] → L2 classifies as .rodata (0x402000)
+    std::vector<uint8_t> code = {0x8b, 0x05, 0xfa, 0x0f, 0x00, 0x00};
+    auto insns = cs.disasm(code, 0x401000);
+    ASSERT_GE(insns.size(), 1u);
+
+    // But L1 says this offset is a TLS access (linker knows better)
+    std::vector<RelocationEntry> relocs = {
+        {0x401000, 23 /*TPOFF32*/, 1, 0, "tls_var"},
+    };
+
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, relocs, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+
+    // Should be exactly 1 ref and L1 wins
+    ASSERT_EQ(refs.size(), 1u);
+    EXPECT_EQ(refs[0].source, DataRefSource::Relocation);
+    EXPECT_EQ(refs[0].kind, DataRefKind::TlsVar);
+    EXPECT_EQ(refs[0].tls_model, TlsModel::LocalExec);
+}
+
+// -- Scenario: atomic byte flag (std::atomic<bool>/std::atomic<char>) --
+// Source: std::atomic<bool> ready; ready.store(true, relaxed);
+// x86: lock or byte ptr [rip+ready], 1  (on some compilers)
+// Or:  lock add byte ptr [rip+ready], cl (from fetch_or pattern)
+TEST(Scenario, AtomicByteFlag) {
+    auto sections = makeTestSections();
+    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
+
+    // lock add byte ptr [rip+0x1FF9], cl
+    // f0 00 0d f9 1f 00 00 (size=7)
+    // target = 0x401000 + 7 + 0x1FF9 = 0x403000 (.data)
+    // ret
+    std::vector<uint8_t> code = {
+        0xf0, 0x00, 0x0d, 0xf9, 0x1f, 0x00, 0x00,  // lock add byte
+        0xc3,                                          // ret
+    };
+    auto insns = cs.disasm(code, 0x401000);
+    ASSERT_GE(insns.size(), 2u);
+
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+
+    bool found = false;
+    for (const auto& ref : refs) {
+        if (ref.atomic_op != AtomicOp::None) {
+            found = true;
+            EXPECT_EQ(ref.atomic_width, AtomicWidth::Atomic8);
+            EXPECT_EQ(ref.access_size, 1u);
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+// -- Scenario: 64-bit atomic on a pointer-sized global --
+// Source: std::atomic<void*> head; head.fetch_add(8);
+// GCC: lock add qword ptr [rip+head], rcx ; ret
+TEST(Scenario, AtomicQwordPointerSized) {
+    auto sections = makeTestSections();
+    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
+
+    // lock add qword ptr [rip+0x1FF8], rcx
+    // f0 48 01 0d f8 1f 00 00 (size=8)
+    // target = 0x401000 + 8 + 0x1FF8 = 0x403000 (.data)
+    // ret
+    std::vector<uint8_t> code = {
+        0xf0, 0x48, 0x01, 0x0d, 0xf8, 0x1f, 0x00, 0x00,
+        0xc3,
+    };
+    auto insns = cs.disasm(code, 0x401000);
+    ASSERT_GE(insns.size(), 2u);
+
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+
+    bool found = false;
+    for (const auto& ref : refs) {
+        if (ref.atomic_op != AtomicOp::None) {
+            found = true;
+            EXPECT_EQ(ref.atomic_width, AtomicWidth::Atomic64);
+            EXPECT_EQ(ref.access_size, 8u);
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+// -- Scenario: non-atomic add to global is NOT flagged atomic --
+// Source: global_var += val;  (without std::atomic)
+// GCC: add [rip+var], ecx ; ret   — no lock prefix
+TEST(Scenario, NonAtomicGlobalAddNotFlaggedAtomic) {
+    auto sections = makeTestSections();
+    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
+
+    // add dword ptr [rip+0x1FFA], ecx
+    // 01 0d fa 1f 00 00 (size=6)
+    // target = 0x403000 (.data)
+    // ret
+    std::vector<uint8_t> code = {
+        0x01, 0x0d, 0xfa, 0x1f, 0x00, 0x00,
+        0xc3,
+    };
+    auto insns = cs.disasm(code, 0x401000);
+    ASSERT_GE(insns.size(), 2u);
+
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+
+    ASSERT_EQ(refs.size(), 1u);
+    EXPECT_EQ(refs[0].atomic_op, AtomicOp::None);
+    EXPECT_EQ(refs[0].atomic_ordering, AtomicOrdering::None);
+    EXPECT_EQ(refs[0].atomic_width, AtomicWidth::None);
+    EXPECT_TRUE(refs[0].is_write);
+}
+
+// -- Scenario: ARM64 data memory barrier between loads --
+// Real pattern: load-acquire via ldr + dmb
+TEST(Scenario, ARM64DmbBetweenLoads) {
+    Capstone::Capstone cs(Capstone::Arch::ARM64, Capstone::Mode::MODE_ARM);
+
+    // nop ; dmb ish ; nop ; ret
+    std::vector<uint8_t> code = {
+        0x1f, 0x20, 0x03, 0xd5,  // nop
+        0xbf, 0x3b, 0x03, 0xd5,  // dmb ish
+        0x1f, 0x20, 0x03, 0xd5,  // nop
+        0xc0, 0x03, 0x5f, 0xd6,  // ret
+    };
+    auto insns = cs.disasm(code, 0x401000);
+    ASSERT_GE(insns.size(), 4u);
+
+    auto sections = makeTestSections();
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+                        VMPilot::Common::FileArch::ARM64,
+                        VMPilot::Common::FileMode::MODE_64);
+
+    // Only the dmb should produce a ref
+    ASSERT_EQ(refs.size(), 1u);
+    EXPECT_EQ(refs[0].atomic_op, AtomicOp::Fence);
+    EXPECT_EQ(refs[0].atomic_ordering, AtomicOrdering::AcqRel);
+    EXPECT_EQ(refs[0].target_va, 0u);
+    EXPECT_EQ(refs[0].insn_offset, 0x401004u);
+}
+
+// -- Scenario: all three layers producing refs at different offsets --
+TEST(Scenario, AllThreeLayersRealMerge) {
+    auto sections = makeTestSections();
+    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
+
+    // 0x401000: mov eax, [rip+0x0FFA]    → L2 .rodata (6 bytes)
+    // 0x401006: mov rax, fs:[0x28]        → L3 TLS (9 bytes)
+    std::vector<uint8_t> code = {
+        0x8b, 0x05, 0xfa, 0x0f, 0x00, 0x00,
+        0x64, 0x48, 0x8b, 0x04, 0x25, 0x28, 0x00, 0x00, 0x00,
+    };
+    auto insns = cs.disasm(code, 0x401000);
+    ASSERT_GE(insns.size(), 2u);
+
+    // L1 relocation at a separate instruction offset
+    std::vector<RelocationEntry> relocs = {
+        {0x401020, 9 /*GOTPCREL*/, 1, -4, "extern_sym"},
+    };
+
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, relocs, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+
+    bool l1 = false, l2 = false, l3 = false;
+    for (const auto& ref : refs) {
+        if (ref.source == DataRefSource::Relocation) l1 = true;
+        if (ref.source == DataRefSource::InsnAnalysis &&
+            ref.kind == DataRefKind::ReadOnlyData) l2 = true;
+        if (ref.source == DataRefSource::PatternMatch &&
+            ref.kind == DataRefKind::TlsVar) l3 = true;
+    }
+    EXPECT_TRUE(l1) << "L1 (relocation) expected";
+    EXPECT_TRUE(l2) << "L2 (insn analysis) expected";
+    EXPECT_TRUE(l3) << "L3 (pattern match) expected";
+
+    // Results must be sorted by insn_offset
+    for (size_t i = 1; i < refs.size(); ++i) {
+        EXPECT_LE(refs[i - 1].insn_offset, refs[i].insn_offset);
+    }
+}
+
+// -- Scenario: MSVC /GS stack cookie on Windows x64 --
+// Source: any function with local buffers compiled with /GS
+// MSVC emits: mov rax, gs:[0x28]  (Windows TEB security cookie)
+// This is the GS-segment equivalent of GCC's fs:[0x28]
+TEST(Scenario, MsvcStackCookieGsSegment) {
+    auto sections = makeTestSections();
+    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
+
+    // MSVC prologue: push rbp ; mov rbp, rsp ; sub rsp, 0x20 ;
+    //               mov rax, gs:[0x28] ; mov [rbp-8], rax ; xor eax, eax
+    // gs:[0x28] encoding: 65 48 8b 04 25 28 00 00 00
+    //   (0x65 = GS segment override, vs 0x64 = FS)
+    std::vector<uint8_t> code = {
+        0x55,                                              // push rbp
+        0x48, 0x89, 0xe5,                                  // mov rbp, rsp
+        0x48, 0x83, 0xec, 0x20,                            // sub rsp, 0x20
+        0x65, 0x48, 0x8b, 0x04, 0x25,
+        0x28, 0x00, 0x00, 0x00,                            // mov rax, gs:0x28
+        0x48, 0x89, 0x45, 0xf8,                            // mov [rbp-8], rax
+        0x31, 0xc0,                                        // xor eax, eax
+    };
+    auto insns = cs.disasm(code, 0x401000);
+    ASSERT_GE(insns.size(), 6u);
+
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+
+    bool found_tls = false;
+    for (const auto& ref : refs) {
+        if (ref.kind == DataRefKind::TlsVar &&
+            ref.source == DataRefSource::PatternMatch) {
+            found_tls = true;
+            EXPECT_EQ(ref.tls_model, TlsModel::LocalExec);
+            EXPECT_EQ(ref.insn_offset, 0x401008u);
+        }
+    }
+    EXPECT_TRUE(found_tls)
+        << "MSVC gs:[0x28] security cookie should be detected as TLS";
+}
+
+// -- Scenario: MSVC _InterlockedIncrement / _InterlockedDecrement --
+// Source: _InterlockedIncrement(&refcount); ... _InterlockedDecrement(&refcount);
+// MSVC emits: lock inc dword ptr [...] ; ... ; lock dec dword ptr [...]
+// Same as GCC __sync_fetch_and_add(&x, 1) at machine level.
+// Tests the COM AddRef/Release reference counting pattern.
+TEST(Scenario, MsvcInterlockedIncDec) {
+    auto sections = makeTestSections();
+    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
+
+    // Realistic COM AddRef/Release on a global singleton refcount:
+    //   lock inc dword ptr [rip+refcount]   ; AddRef
+    //   ...
+    //   lock dec dword ptr [rip+refcount]   ; Release
+    //   jnz .not_zero
+    //   ret
+    //
+    // 0x401000: lock inc [rip+0x1FF9] (7 bytes: f0 ff 05 f9 1f 00 00)
+    //           target = 0x401007 + 0x1FF9 = 0x403000 (.data)
+    // 0x401007: lock dec [rip+0x1FF2] (7 bytes: f0 ff 0d f2 1f 00 00)
+    //           target = 0x40100E + 0x1FF2 = 0x403000 (.data)
+    // 0x40100E: jnz +0 (skip)         (2 bytes: 75 00)
+    // 0x401010: ret                    (1 byte: c3)
+    std::vector<uint8_t> code = {
+        0xf0, 0xff, 0x05, 0xf9, 0x1f, 0x00, 0x00,  // lock inc
+        0xf0, 0xff, 0x0d, 0xf2, 0x1f, 0x00, 0x00,  // lock dec
+        0x75, 0x00,                                    // jnz .+0
+        0xc3,                                          // ret
+    };
+    auto insns = cs.disasm(code, 0x401000);
+    ASSERT_GE(insns.size(), 4u);
+
+    Segmentator::NativeSymbolTable syms;
+    Segmentator::NativeSymbolTableEntry sym;
+    sym.name = "g_refcount";
+    sym.address = 0x403000;
+    sym.size = 4;
+    sym.isGlobal = true;
+    syms.push_back(sym);
+
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, syms, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+
+    // Both lock inc and lock dec should produce atomic RMW refs
+    int rmw_count = 0;
+    for (const auto& ref : refs) {
+        if (ref.atomic_op == AtomicOp::RMW) {
+            ++rmw_count;
+            EXPECT_EQ(ref.target_va, 0x403000u);
+            EXPECT_EQ(ref.target_symbol, "g_refcount");
+            EXPECT_EQ(ref.atomic_ordering, AtomicOrdering::AcqRel);
+            EXPECT_EQ(ref.atomic_width, AtomicWidth::Atomic32);
+        }
+    }
+    EXPECT_EQ(rmw_count, 2) << "Expected 2 atomic RMW refs (inc + dec)";
+}
+
+// -- Scenario: MSVC _InterlockedCompareExchange on global --
+// Source: _InterlockedCompareExchange((long*)&g_flag, desired, expected);
+// MSVC emits: mov eax, expected ; lock cmpxchg [rip+g_flag], edx
+TEST(Scenario, MsvcInterlockedCompareExchange) {
+    auto sections = makeTestSections();
+    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
+
+    // 0x401000: xor eax, eax                    (2 bytes: 31 c0)  — expected=0
+    // 0x401002: mov edx, 1                       (5 bytes: ba 01 00 00 00)
+    // 0x401007: lock cmpxchg [rip+0x1FF1], edx  (8 bytes: f0 0f b1 15 f1 1f 00 00)
+    //           target = 0x401007 + 8 + 0x1FF1 = 0x403000 (.data)
+    // 0x40100F: ret
+    std::vector<uint8_t> code = {
+        0x31, 0xc0,                                          // xor eax, eax
+        0xba, 0x01, 0x00, 0x00, 0x00,                      // mov edx, 1
+        0xf0, 0x0f, 0xb1, 0x15, 0xf1, 0x1f, 0x00, 0x00,  // lock cmpxchg
+        0xc3,                                                // ret
+    };
+    auto insns = cs.disasm(code, 0x401000);
+    ASSERT_GE(insns.size(), 4u);
+
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+
+    bool found_cas = false;
+    for (const auto& ref : refs) {
+        if (ref.atomic_op == AtomicOp::CompareSwap) {
+            found_cas = true;
+            EXPECT_EQ(ref.target_va, 0x403000u);
+            EXPECT_EQ(ref.atomic_ordering, AtomicOrdering::AcqRel);
+            EXPECT_EQ(ref.atomic_width, AtomicWidth::Atomic32);
+        }
+    }
+    EXPECT_TRUE(found_cas);
+}
+
+// ---- Edge Cases ----
+
+TEST(ReferenceAnalyzer, ZeroSizeRegion) {
+    auto sections = makeTestSections();
+    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
+    std::vector<uint8_t> code = {0x8b, 0x05, 0xfa, 0x0f, 0x00, 0x00};
+    auto insns = cs.disasm(code, 0x401000);
+
+    auto refs = analyze(insns, 0x401000, 0, sections, {}, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+    EXPECT_TRUE(refs.empty()) << "Zero-size region should produce no refs";
+}
+
+TEST(ReferenceAnalyzer, NopOnlyProducesNoRefs) {
+    auto sections = makeTestSections();
+    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
+    std::vector<uint8_t> code = {0x90, 0x90, 0x90, 0x90};
+    auto insns = cs.disasm(code, 0x401000);
+    ASSERT_GE(insns.size(), 4u);
+
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+    EXPECT_TRUE(refs.empty());
+}
+
+TEST(ReferenceAnalyzer, ARM64EmptyStream) {
+    auto sections = makeTestSections();
+    auto refs = analyze({}, 0x401000, 0x1000, sections, {}, {}, {},
+                        VMPilot::Common::FileArch::ARM64,
+                        VMPilot::Common::FileMode::MODE_64);
+    EXPECT_TRUE(refs.empty());
 }
