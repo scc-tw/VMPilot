@@ -4,6 +4,8 @@
 #include <cstdio>
 
 using VMPilot::SDK::Segmentator::segment;
+using VMPilot::SDK::Segmentator::SegmentError;
+using VMPilot::SDK::Segmentator::to_string;
 
 int main(int argc, char* argv[]) {
     if (argc != 2) {
@@ -13,8 +15,12 @@ int main(int argc, char* argv[]) {
 
     auto result = segment(argv[1]);
     if (!result) {
-        printf("No protected regions found.\n");
-        return 0;
+        if (result.error() == SegmentError::NoRegionsFound) {
+            printf("No protected regions found.\n");
+            return 0;
+        }
+        fprintf(stderr, "Error: %s\n", to_string(result.error()));
+        return 1;
     }
 
     size_t total_regions = 0;
