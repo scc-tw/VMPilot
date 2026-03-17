@@ -3,9 +3,9 @@
 #pragma once
 
 #include <CompilationOutput.hpp>
+#include <CompilationUnit.hpp>
 #include <CompileError.hpp>
 #include <CompilerBackend.hpp>
-#include <segmentator.hpp>
 
 #include <tl/expected.hpp>
 
@@ -32,9 +32,9 @@ public:
                             CompileConfig config,
                             size_t num_threads = 0);
 
-    /// Build CompilationUnits from segmentation results and compile in parallel.
+    /// Compile pre-built units in parallel.
     [[nodiscard]] tl::expected<CompilationResult, std::string>
-    compile(const Segmentator::SegmentationResult& result) noexcept;
+    compile(const std::vector<Core::CompilationUnit>& units) noexcept;
 
 private:
     std::unique_ptr<CompilerBackend> backend_;

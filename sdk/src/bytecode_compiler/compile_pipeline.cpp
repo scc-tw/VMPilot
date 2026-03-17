@@ -2,7 +2,6 @@
 #include <Serializer.hpp>
 #include <segmentator.hpp>
 
-#include <cstdlib>
 #include <filesystem>
 #include <string>
 
@@ -22,7 +21,10 @@ compile_binary(const std::string& binary_path,
             Segmentator::to_string(seg_result.error()));
     }
 
-    // 2. Debug mode: serialize to temp directory
+    // 2. Build CompilationUnits (single conversion point)
+    auto units = Serializer::build_units(seg_result.value());
+
+    // 3. Debug mode: serialize to temp directory
     std::string temp_dir;
     if (config.debug_mode) {
         try {
@@ -34,8 +36,7 @@ compile_binary(const std::string& binary_path,
                 std::string("Failed to create temp directory: ") + e.what());
         }
 
-        auto dump_result =
-            Serializer::dump(seg_result.value(), temp_dir);
+        auto dump_result = Serializer::dump(units, temp_dir);
         if (!dump_result.has_value()) {
             return tl::unexpected(
                 std::string("Serialization failed: ") +
@@ -43,17 +44,16 @@ compile_binary(const std::string& binary_path,
         }
     }
 
-    // 3. Create backend
+    // 4. Create backend and compile
     auto backend = create_backend(backend_name, config);
     if (!backend) {
         return tl::unexpected(
             std::string("Unknown backend: ") + backend_name);
     }
 
-    // 4. Compile
     CompilationOrchestrator orchestrator(
         std::move(backend), config);
-    auto comp_result = orchestrator.compile(seg_result.value());
+    auto comp_result = orchestrator.compile(units);
 
     // 5. Cleanup: delete temp directory in non-debug mode
     if (!config.debug_mode && !temp_dir.empty()) {

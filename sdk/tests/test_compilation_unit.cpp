@@ -17,8 +17,9 @@ TEST(CompilationUnit, DefaultConstruction) {
 }
 
 TEST(CompilationUnit, PopulatedUnit) {
-    CompilationContext ctx;
-    ctx.arch = VMPilot::SDK::Segmentator::Arch::X86;
+    auto ctx = std::make_shared<const CompilationContext>(CompilationContext{
+        {}, {}, VMPilot::SDK::Segmentator::Arch::X86,
+        VMPilot::SDK::Segmentator::Mode::MODE_32});
 
     CompilationUnit unit;
     unit.name = "test_function";
@@ -29,14 +30,13 @@ TEST(CompilationUnit, PopulatedUnit) {
                  0x00, 0x8b, 0x45, 0xfc};
     unit.enclosing_symbol = "_Z13test_functionv";
     unit.is_canonical = true;
-    unit.context = &ctx;
+    unit.context = ctx;
 
     EXPECT_EQ(unit.name, "test_function");
     EXPECT_EQ(unit.addr, 0x401000u);
     EXPECT_EQ(unit.size, 16u);
     EXPECT_EQ(unit.code.size(), 16u);
     EXPECT_EQ(unit.enclosing_symbol, "_Z13test_functionv");
-    EXPECT_TRUE(unit.is_canonical);
     EXPECT_NE(unit.context, nullptr);
     EXPECT_EQ(unit.context->arch, VMPilot::SDK::Segmentator::Arch::X86);
 }

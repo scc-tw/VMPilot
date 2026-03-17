@@ -5,6 +5,7 @@
 #include <CompilationContext.hpp>
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -20,9 +21,9 @@ struct CompilationUnit {
     std::string enclosing_symbol;   // mangled symbol
     bool is_canonical = false;
 
-    /// Non-owning pointer to the shared compilation context.
-    /// Must outlive this unit.  Read-only — safe for concurrent access.
-    const Segmentator::CompilationContext* context = nullptr;
+    /// Shared compilation context.  Read-only, safe for concurrent access.
+    /// Shared across all units from the same binary — lifetime-safe via shared_ptr.
+    std::shared_ptr<const Segmentator::CompilationContext> context;
 };
 
 }  // namespace VMPilot::SDK::Core

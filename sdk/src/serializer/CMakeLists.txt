@@ -21,6 +21,7 @@ add_custom_command(
 # ---- Serializer library ----
 set(SRC_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/Serializer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/SerializationTraits.cpp
     ${PROTO_SRC}
 )
 
