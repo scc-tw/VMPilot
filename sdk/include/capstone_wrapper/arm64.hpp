@@ -8,9 +8,6 @@
 
 namespace Capstone::ARM64 {
 
-// Note: Operand types use X86::OpType (shared across architectures
-// in the current wrapper design).
-
 // --- Register classification ---
 
 /// Returns the register ID for the first argument register (X0 in AAPCS64).

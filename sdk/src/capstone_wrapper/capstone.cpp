@@ -11,7 +11,7 @@ namespace Capstone {
 
 // --- MemOp ---
 
-bool X86::MemOp::isRipRelative() const noexcept {
+bool MemOp::isRipRelative() const noexcept {
     return base == X86_REG_RIP;
 }
 
@@ -22,26 +22,26 @@ static bool hasGroup(const std::vector<uint8_t>& groups, uint8_t group) {
 }
 
 bool Instruction::isCall() const noexcept {
-    return hasGroup(groups, X86_GRP_CALL);
+    return hasGroup(groups, CS_GRP_CALL);
 }
 
 bool Instruction::isJump() const noexcept {
-    return hasGroup(groups, X86_GRP_JUMP);
+    return hasGroup(groups, CS_GRP_JUMP);
 }
 
 bool Instruction::isRet() const noexcept {
-    return hasGroup(groups, X86_GRP_RET);
+    return hasGroup(groups, CS_GRP_RET);
 }
 
 uint64_t Instruction::getDirectTarget() const noexcept {
-    if (operands.size() == 1 && operands[0].type == X86::OpType::IMM) {
+    if (operands.size() == 1 && operands[0].type == OpType::IMM) {
         return static_cast<uint64_t>(operands[0].imm);
     }
     return 0;
 }
 
 uint64_t Instruction::getRipRelativeTarget() const noexcept {
-    if (operands.size() == 1 && operands[0].type == X86::OpType::MEM &&
+    if (operands.size() == 1 && operands[0].type == OpType::MEM &&
         operands[0].mem.isRipRelative()) {
         // RIP-relative: effective addr = next instruction addr + displacement
         // next instruction addr = this instruction's address + size
@@ -182,19 +182,19 @@ std::vector<Instruction> Capstone::disasm(const std::vector<uint8_t>& code,
                 inst.operands.reserve(x86.op_count);
                 for (uint8_t j = 0; j < x86.op_count; ++j) {
                     const auto& src = x86.operands[j];
-                    X86::Operand op;
+                    Operand op;
                     op.size = src.size;
                     switch (src.type) {
                         case X86_OP_REG:
-                            op.type = X86::OpType::REG;
+                            op.type = OpType::REG;
                             op.reg = src.reg;
                             break;
                         case X86_OP_IMM:
-                            op.type = X86::OpType::IMM;
+                            op.type = OpType::IMM;
                             op.imm = src.imm;
                             break;
                         case X86_OP_MEM:
-                            op.type = X86::OpType::MEM;
+                            op.type = OpType::MEM;
                             op.mem.segment = src.mem.segment;
                             op.mem.base = src.mem.base;
                             op.mem.index = src.mem.index;
@@ -202,7 +202,7 @@ std::vector<Instruction> Capstone::disasm(const std::vector<uint8_t>& code,
                             op.mem.disp = src.mem.disp;
                             break;
                         default:
-                            op.type = X86::OpType::INVALID;
+                            op.type = OpType::INVALID;
                             break;
                     }
                     inst.operands.push_back(std::move(op));
@@ -212,25 +212,25 @@ std::vector<Instruction> Capstone::disasm(const std::vector<uint8_t>& code,
                 inst.operands.reserve(arm64.op_count);
                 for (uint8_t j = 0; j < arm64.op_count; ++j) {
                     const auto& src = arm64.operands[j];
-                    X86::Operand op;
+                    Operand op;
                     op.size = 0;
                     switch (src.type) {
                         case ARM64_OP_REG:
-                            op.type = X86::OpType::REG;
+                            op.type = OpType::REG;
                             op.reg = src.reg;
                             break;
                         case ARM64_OP_IMM:
-                            op.type = X86::OpType::IMM;
+                            op.type = OpType::IMM;
                             op.imm = src.imm;
                             break;
                         case ARM64_OP_MEM:
-                            op.type = X86::OpType::MEM;
+                            op.type = OpType::MEM;
                             op.mem.base = src.mem.base;
                             op.mem.index = src.mem.index;
                             op.mem.disp = src.mem.disp;
                             break;
                         default:
-                            op.type = X86::OpType::INVALID;
+                            op.type = OpType::INVALID;
                             break;
                     }
                     inst.operands.push_back(std::move(op));

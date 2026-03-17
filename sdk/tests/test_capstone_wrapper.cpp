@@ -87,8 +87,8 @@ TEST_F(CapstoneX64Test, OperandDetail) {
     auto insns = cs.disasm({0x48, 0xC7, 0xC0, 0x42, 0x00, 0x00, 0x00}, 0);
     ASSERT_EQ(insns.size(), 1u);
     ASSERT_GE(insns[0].operands.size(), 2u);
-    EXPECT_EQ(insns[0].operands[0].type, Capstone::X86::OpType::REG);
-    EXPECT_EQ(insns[0].operands[1].type, Capstone::X86::OpType::IMM);
+    EXPECT_EQ(insns[0].operands[0].type, Capstone::OpType::REG);
+    EXPECT_EQ(insns[0].operands[1].type, Capstone::OpType::IMM);
     EXPECT_EQ(insns[0].operands[1].imm, 0x42);
 }
 

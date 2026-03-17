@@ -30,8 +30,8 @@ using CallResolver = std::function<std::optional<std::string>(
 
 /// Callback: given the index of a call instruction and the instruction list,
 /// extract the VA of the first string argument (from preceding instructions).
-/// Returns 0 if unresolvable.
-using ArgExtractor = std::function<uint64_t(
+/// Returns std::nullopt if unresolvable.
+using ArgExtractor = std::function<std::optional<uint64_t>(
     size_t call_idx,
     const std::vector<Capstone::Instruction>& instructions)>;
 

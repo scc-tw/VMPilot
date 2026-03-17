@@ -22,35 +22,35 @@ bool isCalleeSaved(unsigned reg) {
 
 bool isADRP(const Instruction& insn) {
     return insn.id == ARM64_INS_ADRP && insn.operands.size() >= 2 &&
-           insn.operands[0].type == X86::OpType::REG &&
-           insn.operands[1].type == X86::OpType::IMM;
+           insn.operands[0].type == OpType::REG &&
+           insn.operands[1].type == OpType::IMM;
 }
 
 bool isADR(const Instruction& insn) {
     return insn.id == ARM64_INS_ADR && insn.operands.size() >= 2 &&
-           insn.operands[0].type == X86::OpType::REG &&
-           insn.operands[1].type == X86::OpType::IMM;
+           insn.operands[0].type == OpType::REG &&
+           insn.operands[1].type == OpType::IMM;
 }
 
 bool isRegPlusImmADD(const Instruction& insn) {
     return insn.id == ARM64_INS_ADD && insn.operands.size() >= 3 &&
-           insn.operands[0].type == X86::OpType::REG &&
-           insn.operands[1].type == X86::OpType::REG &&
-           insn.operands[2].type == X86::OpType::IMM;
+           insn.operands[0].type == OpType::REG &&
+           insn.operands[1].type == OpType::REG &&
+           insn.operands[2].type == OpType::IMM;
 }
 
 bool isRegToRegMov(const Instruction& insn) {
     // MOV xd, xm — direct MOV instruction
     if (insn.id == ARM64_INS_MOV && insn.operands.size() >= 2 &&
-        insn.operands[0].type == X86::OpType::REG &&
-        insn.operands[1].type == X86::OpType::REG) {
+        insn.operands[0].type == OpType::REG &&
+        insn.operands[1].type == OpType::REG) {
         return true;
     }
     // ORR xd, xzr, xm — MOV alias encoding
     if (insn.id == ARM64_INS_ORR && insn.operands.size() >= 3 &&
-        insn.operands[0].type == X86::OpType::REG &&
-        insn.operands[1].type == X86::OpType::REG &&
-        insn.operands[2].type == X86::OpType::REG &&
+        insn.operands[0].type == OpType::REG &&
+        insn.operands[1].type == OpType::REG &&
+        insn.operands[2].type == OpType::REG &&
         insn.operands[1].reg == ARM64_REG_XZR) {
         return true;
     }
@@ -67,9 +67,9 @@ unsigned getMovSource(const Instruction& insn) {
 
 bool isRegMinusImmSUB(const Instruction& insn) {
     return insn.id == ARM64_INS_SUB && insn.operands.size() >= 3 &&
-           insn.operands[0].type == X86::OpType::REG &&
-           insn.operands[1].type == X86::OpType::REG &&
-           insn.operands[2].type == X86::OpType::IMM;
+           insn.operands[0].type == OpType::REG &&
+           insn.operands[1].type == OpType::REG &&
+           insn.operands[2].type == OpType::IMM;
 }
 
 // --- Operand analysis ---
@@ -78,7 +78,7 @@ bool writesToReg(const Instruction& insn, unsigned reg) {
     if (insn.operands.empty())
         return false;
     const auto& dst = insn.operands[0];
-    return dst.type == X86::OpType::REG && dst.reg == reg;
+    return dst.type == OpType::REG && dst.reg == reg;
 }
 
 }  // namespace Capstone::ARM64

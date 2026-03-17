@@ -25,13 +25,13 @@ static std::string resolveStringArg(
     if (!ctx || ctx->rodata_sections.empty() || !arg_extractor)
         return {};
 
-    uint64_t va = arg_extractor(call_idx, instructions);
-    if (va == 0)
+    auto va = arg_extractor(call_idx, instructions);
+    if (!va)
         return {};
 
     for (const auto& section : ctx->rodata_sections) {
-        if (section.contains(va))
-            return section.readCString(va);
+        if (section.contains(*va))
+            return section.readCString(*va);
     }
     return {};
 }

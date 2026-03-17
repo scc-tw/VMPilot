@@ -43,8 +43,6 @@ enum class Mode : uint32_t {
     MODE_BIG_ENDIAN = 1U << 31,
 };
 
-namespace X86 {
-
 enum class OpType : uint8_t {
     INVALID = 0,
     REG,
@@ -71,8 +69,6 @@ struct Operand {
     uint8_t size = 0;
 };
 
-}  // namespace X86
-
 class Instruction {
    public:
     uint32_t id = 0;
@@ -82,8 +78,8 @@ class Instruction {
     std::string mnemonic;
     std::string op_str;
 
-    // x86-specific operand details
-    std::vector<X86::Operand> operands;
+    // Architecture-neutral operand details
+    std::vector<Operand> operands;
 
     // Instruction group membership
     std::vector<uint8_t> groups;
