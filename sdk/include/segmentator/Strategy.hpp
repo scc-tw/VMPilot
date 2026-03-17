@@ -7,6 +7,7 @@
 #include <ModeEnum.hpp>
 #include <NativeFunctionBase.hpp>
 #include <NativeSymbolTable.hpp>
+#include <ReadOnlySection.hpp>
 
 #include <cstdint>
 #include <functional>
@@ -34,12 +35,10 @@ class FileHandlerStrategy {
     virtual std::vector<uint8_t> doGetTextSection() noexcept;
     virtual uint64_t doGetTextBaseAddr() noexcept;
 
-    /// Read-only data section content and base address.
-    /// (ELF: .rodata, PE: .rdata, Mach-O: __TEXT,__const)
-    /// Used by BytecodeCompiler to resolve jump tables and
-    /// RIP-relative data references from within protected regions.
-    virtual std::vector<uint8_t> doGetReadOnlyData() noexcept;
-    virtual uint64_t doGetReadOnlyBaseAddr() noexcept;
+    /// Read-only data sections for string/data resolution.
+    /// (ELF: .rodata, PE: .rdata, Mach-O: __TEXT,__const + __TEXT,__cstring)
+    /// Used by __FUNCTION__ extraction and BytecodeCompiler.
+    virtual std::vector<ReadOnlySection> doGetReadOnlySections() noexcept;
 
     /// Collect function symbols from the binary
     /// (ELF: .dynsym, PE: export table, Mach-O: LC_SYMTAB)
@@ -57,8 +56,7 @@ class FileHandlerStrategy {
     virtual ~FileHandlerStrategy() = default;
     std::vector<uint8_t> getTextSection();
     uint64_t getTextBaseAddr();
-    std::vector<uint8_t> getReadOnlyData();
-    uint64_t getReadOnlyBaseAddr();
+    std::vector<ReadOnlySection> getReadOnlySections();
 
     /// Assemble a complete symbol table from the three sources above.
     /// Not virtual — subclasses override doGetSymbols/Direct/Indirect instead.

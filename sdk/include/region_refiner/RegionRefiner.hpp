@@ -4,10 +4,39 @@
 
 #include <NativeFunctionBase.hpp>
 
+#include <cstdint>
 #include <memory>
+#include <optional>
+#include <string>
 #include <vector>
 
 namespace VMPilot::SDK::RegionRefiner {
+
+/// One physical copy of a protected region in the binary.
+struct RegionSite {
+    std::string source_name;                     // __FUNCTION__ name
+    std::optional<std::string> enclosing_symbol;  // mangled
+    bool is_canonical = false;
+    uint64_t addr = 0;
+    uint64_t size = 0;
+};
+
+/// A logical protected region grouping all physical copies.
+struct ProtectedRegion {
+    std::string source_name;          // __FUNCTION__ name
+    std::vector<RegionSite> sites;    // all physical copies
+    size_t canonical_index = 0;       // index of original body
+};
+
+/**
+ * @brief Group refined regions by source name into ProtectedRegions.
+ *
+ * Identifies canonical vs inlined copies using enclosing symbol
+ * demangling.  Takes a const ref (doesn't consume ownership).
+ */
+std::vector<ProtectedRegion> group(
+    const std::vector<std::unique_ptr<Segmentator::NativeFunctionBase>>&
+        regions) noexcept;
 
 /**
  * @brief Refine a set of protected regions by removing overlaps.

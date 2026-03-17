@@ -63,20 +63,21 @@ uint64_t MachOFileHandlerStrategy::doGetTextBaseAddr() noexcept {
     return pImpl->text_base_addr;
 }
 
-std::vector<uint8_t> MachOFileHandlerStrategy::doGetReadOnlyData() noexcept {
-    auto sect = pImpl->parser.findSection("__TEXT", "__const");
-    if (!sect) {
-        return {};
+std::vector<ReadOnlySection>
+MachOFileHandlerStrategy::doGetReadOnlySections() noexcept {
+    std::vector<ReadOnlySection> sections;
+    // Mach-O has multiple read-only sections in __TEXT:
+    //   __const   — constant data (arrays, structs)
+    //   __cstring — C string literals (__FUNCTION__, string constants)
+    for (const char* name : {"__const", "__cstring"}) {
+        auto sect = pImpl->parser.findSection("__TEXT", name);
+        if (sect) {
+            auto data = pImpl->parser.readSectionData(*sect);
+            if (!data.empty())
+                sections.push_back({std::move(data), sect->addr});
+        }
     }
-    return pImpl->parser.readSectionData(*sect);
-}
-
-uint64_t MachOFileHandlerStrategy::doGetReadOnlyBaseAddr() noexcept {
-    auto sect = pImpl->parser.findSection("__TEXT", "__const");
-    if (!sect) {
-        return static_cast<uint64_t>(-1);
-    }
-    return sect->addr;
+    return sections;
 }
 
 NativeSymbolTable MachOFileHandlerStrategy::doGetSymbols() noexcept {

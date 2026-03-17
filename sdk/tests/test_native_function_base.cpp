@@ -71,3 +71,49 @@ TEST(NativeFunctionBase, EmptyCode) {
     EXPECT_TRUE(nf.getCode().empty());
     EXPECT_TRUE(nf.getName().empty());
 }
+
+TEST(NativeFunctionBase, EnclosingSymbolDefaultNullopt) {
+    NativeFunctionBase nf(0x1000, 1, "test", {0x90});
+    EXPECT_FALSE(nf.getEnclosingSymbol().has_value());
+}
+
+TEST(NativeFunctionBase, SetGetEnclosingSymbol) {
+    NativeFunctionBase nf(0x1000, 1, "test", {0x90});
+    nf.setEnclosingSymbol("_Z3fooi");
+    ASSERT_TRUE(nf.getEnclosingSymbol().has_value());
+    EXPECT_EQ(*nf.getEnclosingSymbol(), "_Z3fooi");
+}
+
+TEST(NativeFunctionBase, EnclosingSymbolCopyConstructor) {
+    NativeFunctionBase original(0x1000, 1, "test", {0x90});
+    original.setEnclosingSymbol("_Z3fooi");
+    NativeFunctionBase copy(original);
+    ASSERT_TRUE(copy.getEnclosingSymbol().has_value());
+    EXPECT_EQ(*copy.getEnclosingSymbol(), "_Z3fooi");
+}
+
+TEST(NativeFunctionBase, EnclosingSymbolMoveConstructor) {
+    NativeFunctionBase original(0x1000, 1, "test", {0x90});
+    original.setEnclosingSymbol("_Z3fooi");
+    NativeFunctionBase moved(std::move(original));
+    ASSERT_TRUE(moved.getEnclosingSymbol().has_value());
+    EXPECT_EQ(*moved.getEnclosingSymbol(), "_Z3fooi");
+}
+
+TEST(NativeFunctionBase, EnclosingSymbolCopyAssignment) {
+    NativeFunctionBase a(0x1000, 1, "a", {0x90});
+    NativeFunctionBase b(0x2000, 1, "b", {0xCC});
+    b.setEnclosingSymbol("main");
+    a = b;
+    ASSERT_TRUE(a.getEnclosingSymbol().has_value());
+    EXPECT_EQ(*a.getEnclosingSymbol(), "main");
+}
+
+TEST(NativeFunctionBase, EnclosingSymbolMoveAssignment) {
+    NativeFunctionBase a(0x1000, 1, "a", {0x90});
+    NativeFunctionBase b(0x2000, 1, "b", {0xCC});
+    b.setEnclosingSymbol("main");
+    a = std::move(b);
+    ASSERT_TRUE(a.getEnclosingSymbol().has_value());
+    EXPECT_EQ(*a.getEnclosingSymbol(), "main");
+}

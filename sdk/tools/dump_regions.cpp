@@ -134,12 +134,10 @@ int main(int argc, char* argv[]) {
     ctx.arch = metadata.arch;
     ctx.mode = metadata.mode;
 
-    auto rodata = fh->getReadOnlyData();
-    auto rodata_base = fh->getReadOnlyBaseAddr();
-    if (!rodata.empty() && rodata_base != static_cast<uint64_t>(-1)) {
-        ctx.rodata_sections.push_back({std::move(rodata), rodata_base});
-        fprintf(stderr, ".rodata: 0x%" PRIx64 "  %zu bytes\n", rodata_base,
-                ctx.rodata_sections.back().data.size());
+    ctx.rodata_sections = fh->getReadOnlySections();
+    for (const auto& sec : ctx.rodata_sections) {
+        fprintf(stderr, ".rodata: 0x%" PRIx64 "  %zu bytes\n", sec.base_addr,
+                sec.data.size());
     }
 
     ah->setCompilationContext(std::move(ctx));
@@ -158,14 +156,39 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    // 6. Print
-    printf("Found %zu protected region(s):\n\n", refined.size());
-    for (size_t i = 0; i < refined.size(); ++i) {
-        const auto& r = refined[i];
-        uint64_t end = r->getAddr() + r->getSize();
-        printf("  [%zu] 0x%" PRIx64 " - 0x%" PRIx64 "  (%" PRIu64
-               " bytes)  \"%s\"\n",
-               i, r->getAddr(), end, r->getSize(), r->getName().c_str());
+    // 6. Group and print
+    auto groups =
+        VMPilot::SDK::RegionRefiner::group(refined);
+
+    size_t total_regions = 0;
+    for (const auto& g : groups)
+        total_regions += g.sites.size();
+
+    printf("Found %zu protected region(s) in %zu group(s):\n\n",
+           total_regions, groups.size());
+
+    for (size_t gi = 0; gi < groups.size(); ++gi) {
+        const auto& g = groups[gi];
+        size_t inlined = g.sites.size() - 1;
+        printf("  Group [%zu] \"%s\"  (%zu cop%s%s)\n", gi,
+               g.source_name.c_str(), g.sites.size(),
+               g.sites.size() == 1 ? "y" : "ies",
+               inlined > 0
+                   ? (", " + std::to_string(inlined) + " inlined").c_str()
+                   : "");
+
+        for (size_t si = 0; si < g.sites.size(); ++si) {
+            const auto& s = g.sites[si];
+            uint64_t end = s.addr + s.size;
+            printf("    [%s] 0x%" PRIx64 " - 0x%" PRIx64
+                   "  (%" PRIu64 " bytes)",
+                   s.is_canonical ? "canonical" : "inline  ",
+                   s.addr, end, s.size);
+            if (s.enclosing_symbol)
+                printf("  in %s", s.enclosing_symbol->c_str());
+            printf("\n");
+        }
+        printf("\n");
     }
 
     return 0;

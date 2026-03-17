@@ -19,6 +19,12 @@ bool isCalleeSaved(unsigned reg) {
         case X86_REG_EBP:
         case X86_REG_RSP:
         case X86_REG_ESP:
+        // ESI/EDI are callee-saved in x86-32 System V ABI.
+        // In x86-64, RSI/RDI are caller-saved argument registers,
+        // but the resolver traces RDI (not EDI) in 64-bit code,
+        // so adding ESI/EDI here is safe for both modes.
+        case X86_REG_ESI:
+        case X86_REG_EDI:
         case X86_REG_R12:
         case X86_REG_R12D:
         case X86_REG_R13:
@@ -137,6 +143,37 @@ bool writesToReg(const Instruction& insn, unsigned reg) {
         return false;
     const auto& dst = insn.operands[0];
     return dst.type == OpType::REG && dst.reg == reg;
+}
+
+bool isPcThunkForReg(const std::string& name, unsigned reg) {
+    // Pattern: __x86.get_pc_thunk.XX  (GCC PIC thunks)
+    auto pos = name.rfind(".get_pc_thunk.");
+    if (pos == std::string::npos)
+        return false;
+    // Extract the register suffix after the last '.'
+    auto dot = name.rfind('.');
+    if (dot == std::string::npos || dot + 1 >= name.size())
+        return false;
+    auto suffix = name.substr(dot + 1);
+
+    // Map suffix to capstone register ID
+    unsigned target = 0;
+    if (suffix == "ax")
+        target = X86_REG_EAX;
+    else if (suffix == "bx")
+        target = X86_REG_EBX;
+    else if (suffix == "cx")
+        target = X86_REG_ECX;
+    else if (suffix == "dx")
+        target = X86_REG_EDX;
+    else if (suffix == "si")
+        target = X86_REG_ESI;
+    else if (suffix == "di")
+        target = X86_REG_EDI;
+    else if (suffix == "bp")
+        target = X86_REG_EBP;
+
+    return target != 0 && target == reg;
 }
 
 }  // namespace Capstone::X86
