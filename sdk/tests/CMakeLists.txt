@@ -51,7 +51,7 @@ add_executable(test_bytecode_compiler test_bytecode_compiler.cpp)
 target_link_libraries(test_bytecode_compiler GTest::gtest_main VMPilot_SDK_LIB)
 
 add_executable(test_segmentator_integration test_segmentator_integration.cpp)
-target_link_libraries(test_segmentator_integration GTest::gtest_main VMPilot_SDK_Segmentator VMPilot_SDK_RegionRefiner VMPilot_SDK_LIB capstone_wrapper opcode_table)
+target_link_libraries(test_segmentator_integration GTest::gtest_main VMPilot_SDK_LIB)
 
 add_executable(test_thread_pool test_thread_pool.cpp)
 target_link_libraries(test_thread_pool GTest::gtest_main opcode_table)
@@ -72,7 +72,6 @@ endif()
 target_link_libraries(test_compile_pipeline
     GTest::gtest_main
     VMPilot_SDK_LIB
-    opcode_table
 )
 
 add_executable(test_macho_handler test_macho_handler.cpp)
