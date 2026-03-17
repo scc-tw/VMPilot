@@ -1,4 +1,5 @@
 #include <PEHandler.hpp>
+#include <HandlerRegistry.hpp>
 #include <utilities.hpp>
 
 #include <cstring>

@@ -1,4 +1,5 @@
 #include <MachOHandler.hpp>
+#include <HandlerRegistry.hpp>
 #include <utilities.hpp>
 
 #include <macho_parser.hpp>

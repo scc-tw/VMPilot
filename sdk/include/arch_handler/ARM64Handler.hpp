@@ -1,24 +1,24 @@
-#ifndef __SDK_X86_HANDLER_HPP__
-#define __SDK_X86_HANDLER_HPP__
+#ifndef __SDK_ARM64_HANDLER_HPP__
+#define __SDK_ARM64_HANDLER_HPP__
 #pragma once
 
-#include <Strategy.hpp>
+#include <ArchHandlerStrategy.hpp>
 
 #include <cstdint>
 #include <memory>
-#include <string>
-#include <utility>
+#include <vector>
 
 namespace VMPilot::SDK::Segmentator {
-class X86Handler : public ArchHandlerStrategy {
+
+class ARM64Handler : public ArchHandlerStrategy {
    public:
-    X86Handler(Mode mode, const NativeSymbolTable& symbols);
-    virtual ~X86Handler();
+    ARM64Handler(Mode mode, const NativeSymbolTable& symbols);
+    virtual ~ARM64Handler();
 
    private:
     struct Impl;
     std::unique_ptr<Impl> pImpl;
-    friend std::unique_ptr<Impl> make_x86_handler_impl(
+    friend std::unique_ptr<Impl> make_arm64_handler_impl(
         Mode mode, const NativeSymbolTable& symbols);
 
    protected:
@@ -29,9 +29,9 @@ class X86Handler : public ArchHandlerStrategy {
     doGetNativeFunctions() noexcept override;
 };
 
-std::unique_ptr<X86Handler::Impl> make_x86_handler_impl(
+std::unique_ptr<ARM64Handler::Impl> make_arm64_handler_impl(
     Mode mode, const NativeSymbolTable& symbols);
 
 }  // namespace VMPilot::SDK::Segmentator
 
-#endif  // __SDK_X86_HANDLER_HPP__
+#endif  // __SDK_ARM64_HANDLER_HPP__

@@ -2,7 +2,7 @@
 #define __SDK_MACHO_HANDLER_HPP__
 #pragma once
 
-#include <Strategy.hpp>
+#include <FileHandlerStrategy.hpp>
 
 #include <cstdint>
 #include <memory>

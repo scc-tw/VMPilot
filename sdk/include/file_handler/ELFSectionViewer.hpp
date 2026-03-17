@@ -2,6 +2,8 @@
 #define __ELF_SECTION_VIEWER_HPP__
 #pragma once
 
+#include <cstdint>
+
 #include <elfio/elf_types.hpp>
 #include <elfio/elfio.hpp>
 
