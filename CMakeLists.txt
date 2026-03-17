@@ -10,9 +10,7 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 elseif (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror -pedantic")
 elseif (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-# Windows MSVC is a bit different, there might some error in the header files,
-# so we disable the Wx flags
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W4 /utf-8")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W4 /WX /utf-8")
 endif()
 
 # Enable debug symbols, sanitizer, and disable optimization for debug build
