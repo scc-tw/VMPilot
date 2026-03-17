@@ -92,6 +92,7 @@ void detectARM64TlsPatterns(
     const std::vector<Capstone::Instruction>& insns,
     uint64_t region_addr, uint64_t region_size,
     const AddrToName& sym_lookup,
+    const SectionLookup& sections,
     std::vector<Core::DataReference>& refs) {
     const uint64_t region_end = region_addr + region_size;
 
@@ -100,9 +101,8 @@ void detectARM64TlsPatterns(
         if (insn.address < region_addr || insn.address >= region_end)
             continue;
 
-        // Pattern: mrs Xn, TPIDR_EL0 → TLS LocalExec
+        // Pattern 1: mrs Xn, TPIDR_EL0 → TLS LocalExec (Linux ARM64)
         if (insn.mnemonic == "mrs") {
-            // Check op_str for tpidr_el0
             std::string lower_ops = insn.op_str;
             std::transform(lower_ops.begin(), lower_ops.end(),
                            lower_ops.begin(), ::tolower);
@@ -116,7 +116,7 @@ void detectARM64TlsPatterns(
             }
         }
 
-        // Pattern: call __tls_get_addr (ARM64: bl __tls_get_addr)
+        // Pattern 2: bl __tls_get_addr → TLS GeneralDynamic (Linux ARM64)
         if (insn.isCall()) {
             uint64_t target = insn.getDirectTarget();
             if (target != 0) {
@@ -129,6 +129,56 @@ void detectARM64TlsPatterns(
                     ref.tls_model = Core::TlsModel::GeneralDynamic;
                     ref.source = Core::DataRefSource::PatternMatch;
                     refs.push_back(std::move(ref));
+                }
+            }
+        }
+
+        // Pattern 3: macOS TLV (Thread Local Variable) resolver call
+        //
+        //   adrp  x0, <__thread_vars page>
+        //   add   x0, x0, <__thread_vars offset>
+        //   ldr   x11, [x0]           ; load TLV resolver thunk
+        //   blr   x11                  ; call resolver → x0 = &tls_var
+        //   ldr/str wN, [x0]          ; access TLS value
+        //
+        // Detect: blr xN where we can trace back through ldr+adrp+add
+        // to a Tls-classified section (__DATA,__thread_vars).
+        if (insn.mnemonic == "blr" && insn.operands.size() == 1 &&
+            insn.operands[0].type == Capstone::OpType::REG && idx >= 1) {
+            unsigned call_reg = insn.operands[0].reg;
+
+            // Look backward for "ldr call_reg, [base_reg]"
+            for (size_t back = idx; back > 0 && back > idx - 5; --back) {
+                const auto& prev = insns[back - 1];
+                if (prev.operands.size() < 2)
+                    continue;
+                if (prev.operands[0].type != Capstone::OpType::REG ||
+                    prev.operands[0].reg != call_reg)
+                    continue;
+                if (prev.operands[1].type != Capstone::OpType::MEM)
+                    continue;
+
+                // Resolve the base register of the ldr
+                unsigned base_reg = prev.operands[1].mem.base;
+                if (base_reg == 0)
+                    continue;
+                size_t from = back > 1 ? back - 2 : 0;
+                uint64_t base_va =
+                    Segmentator::resolveRegValue<Segmentator::ARM64ArchTraits>(
+                        base_reg, from, insns, 0);
+                if (base_va == 0)
+                    continue;
+
+                uint64_t target_va = base_va + prev.operands[1].mem.disp;
+                if (sections.classify(target_va) == Core::SectionKind::Tls) {
+                    Core::DataReference ref;
+                    ref.insn_offset = insn.address;
+                    ref.target_va = target_va;
+                    ref.kind = Core::DataRefKind::TlsVar;
+                    ref.tls_model = Core::TlsModel::LocalDynamic;
+                    ref.source = Core::DataRefSource::PatternMatch;
+                    refs.push_back(std::move(ref));
+                    break;
                 }
             }
         }
@@ -461,7 +511,7 @@ std::vector<Core::DataReference> analyzePatterns(
                                    rodata_sections, is_64bit, refs);
     } else if (arch == FileArch::ARM64) {
         detectARM64TlsPatterns(insns, region_addr, region_size, sym_lookup,
-                               refs);
+                               sections, refs);
         detectARM64JumpTablePatterns(insns, region_addr, region_size, sections,
                                      rodata_sections, refs);
     }

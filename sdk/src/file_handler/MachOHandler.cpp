@@ -161,7 +161,8 @@ MachOFileHandlerStrategy::doGetAllSections() noexcept {
             info.kind = Core::SectionKind::Bss;
         else if (sec.segname == "__DATA" &&
                  (sec.sectname == "__thread_data" ||
-                  sec.sectname == "__thread_bss"))
+                  sec.sectname == "__thread_bss" ||
+                  sec.sectname == "__thread_vars"))
             info.kind = Core::SectionKind::Tls;
         else if ((sec.segname == "__DATA" || sec.segname == "__DATA_CONST") &&
                  sec.sectname == "__got")
