@@ -1,6 +1,7 @@
 #include <ARM64Handler.hpp>
 
 #include "ArchHandlerCommon.hpp"
+#include "ARM64Traits.hpp"
 #include "RegValueResolver.hpp"
 
 #include <arm64.hpp>
@@ -45,75 +46,37 @@ bool ARM64Handler::doLoad(const std::vector<uint8_t>& code,
     return !pImpl->instructions.empty();
 }
 
-// --- ARM64 arch traits for generic backward constant propagation ---
-struct ARM64ArchTraits {
-    static bool isCalleeSaved(unsigned reg) {
-        return Capstone::ARM64::isCalleeSaved(reg);
+// --- ARM64CallbackTraits method definitions ---
+
+std::optional<std::string> ARM64CallbackTraits::resolveCall(
+    const Capstone::Instruction& insn, const AddrToSymbol& lookup) {
+    uint64_t target = insn.getDirectTarget();
+    if (target != 0) {
+        auto it = lookup.find(target);
+        if (it != lookup.end())
+            return it->second;
     }
-    static bool writesToReg(const Capstone::Instruction& insn, unsigned reg) {
-        return Capstone::ARM64::writesToReg(insn, reg);
-    }
-    static WriteClassification classifyWrite(const Capstone::Instruction& insn,
-                                             unsigned /*reg*/) {
-        namespace CA = Capstone::ARM64;
+    return std::nullopt;
+}
 
-        // --- Terminal patterns ---
-        if (CA::isADRP(insn))
-            return ResolvedConstant{
-                static_cast<uint64_t>(insn.operands[1].imm)};
-
-        if (CA::isADR(insn))
-            return ResolvedConstant{
-                static_cast<uint64_t>(insn.operands[1].imm)};
-
-        // --- Forwarding patterns ---
-        if (CA::isRegToRegMov(insn))
-            return RegisterForward{CA::getMovSource(insn)};
-
-        if (CA::isRegPlusImmADD(insn))
-            return ArithmeticAdjust{insn.operands[1].reg,
-                                    insn.operands[2].imm};
-
-        if (CA::isRegMinusImmSUB(insn))
-            return ArithmeticAdjust{insn.operands[1].reg,
-                                    -insn.operands[2].imm};
-
-        return Unresolvable{};
-    }
-};
-
-// --- ARM64 callback traits for extractNativeFunctions ---
-struct ARM64CallbackTraits {
-    static std::optional<std::string> resolveCall(
-        const Capstone::Instruction& insn, const AddrToSymbol& lookup) {
-        uint64_t target = insn.getDirectTarget();
-        if (target != 0) {
-            auto it = lookup.find(target);
-            if (it != lookup.end())
-                return it->second;
-        }
+std::optional<uint64_t> ARM64CallbackTraits::extractStringArg(
+    size_t call_idx,
+    const std::vector<Capstone::Instruction>& instructions,
+    const AddrToSymbol& /*lookup*/) {
+    if (call_idx == 0)
         return std::nullopt;
-    }
 
-    static std::optional<uint64_t> extractStringArg(
-        size_t call_idx,
-        const std::vector<Capstone::Instruction>& instructions,
-        const AddrToSymbol& /*lookup*/) {
-        if (call_idx == 0)
-            return std::nullopt;
+    constexpr size_t kMaxWindow = 20;
+    const size_t start =
+        (call_idx > kMaxWindow) ? call_idx - kMaxWindow : 0;
 
-        constexpr size_t kMaxWindow = 20;
-        const size_t start =
-            (call_idx > kMaxWindow) ? call_idx - kMaxWindow : 0;
-
-        // Resolve X0 (AAPCS64 first argument register) at the call site.
-        uint64_t va = resolveRegValue<ARM64ArchTraits>(
-            Capstone::ARM64::firstArgReg(), call_idx - 1, instructions, start);
-        if (va != 0)
-            return va;
-        return std::nullopt;
-    }
-};
+    // Resolve X0 (AAPCS64 first argument register) at the call site.
+    uint64_t va = resolveRegValue<ARM64ArchTraits>(
+        Capstone::ARM64::firstArgReg(), call_idx - 1, instructions, start);
+    if (va != 0)
+        return va;
+    return std::nullopt;
+}
 
 std::vector<NativeFunctionBase>
 ARM64Handler::doGetNativeFunctions() noexcept {

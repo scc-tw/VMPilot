@@ -65,6 +65,9 @@ target_link_libraries(test_readonly_section GTest::gtest_main)
 add_executable(test_string_extraction test_string_extraction.cpp)
 target_link_libraries(test_string_extraction GTest::gtest_main VMPilot_SDK_Segmentator capstone_wrapper opcode_table)
 
+add_executable(test_segment_api test_segment_api.cpp)
+target_link_libraries(test_segment_api GTest::gtest_main VMPilot_SDK_Segmentator VMPilot_SDK_RegionRefiner capstone_wrapper opcode_table)
+
 # Register with CTest
 include(GoogleTest)
 gtest_discover_tests(test_native_function_base)
@@ -82,3 +85,4 @@ gtest_discover_tests(test_arm64_handler)
 gtest_discover_tests(test_pe_handler)
 gtest_discover_tests(test_segmentator_integration)
 gtest_discover_tests(test_string_extraction)
+gtest_discover_tests(test_segment_api)
