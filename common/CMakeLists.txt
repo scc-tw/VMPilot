@@ -1,8 +1,11 @@
 add_subdirectory(crypto)
 
+find_package(Threads REQUIRED)
+
 set (INCLUDE_DIRS ${INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CRYPTO_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/third_party/expected/include
 )
 include_directories (${INCLUDE_DIRS})
 
@@ -16,11 +19,13 @@ set (SRC_FILES ${SRC_FILES}
     ${CMAKE_CURRENT_SOURCE_DIR}/src/file_type_parser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/utilities.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/macho_parser.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/thread_pool.cpp
 )
 
 # Add the library dependencies dir BLAKE3
 set (LIBS ${LIBS}
     crypto
+    Threads::Threads
 )
 
 add_library(${LIB_NAME} STATIC ${SRC_FILES})

@@ -4,24 +4,24 @@
 
 using namespace VMPilot::SDK::BytecodeCompiler;
 
-TEST(CompilerFactory, CreateX86) {
-    auto compiler = CompilerFactory::CreateCompiler(Arch::X86);
-    ASSERT_NE(compiler, nullptr);
-    EXPECT_EQ(compiler->GetArch(), Arch::X86);
+static const std::string TEST_KEY =
+    "01234567890123456789012345678901";
+
+TEST(BackendFactory, CreateSimple) {
+    CompileConfig config{TEST_KEY, false};
+    auto backend = create_backend("simple", config);
+    ASSERT_NE(backend, nullptr);
+    EXPECT_EQ(backend->name(), "simple");
 }
 
-TEST(CompilerFactory, CreateX86_64) {
-    auto compiler = CompilerFactory::CreateCompiler(Arch::X86_64);
-    ASSERT_NE(compiler, nullptr);
-    EXPECT_EQ(compiler->GetArch(), Arch::X86_64);
+TEST(BackendFactory, CreateUnknown) {
+    CompileConfig config{TEST_KEY, false};
+    auto backend = create_backend("unknown", config);
+    EXPECT_EQ(backend, nullptr);
 }
 
-TEST(CompilerFactory, CreateArmReturnsNull) {
-    auto compiler = CompilerFactory::CreateCompiler(Arch::ARM);
-    EXPECT_EQ(compiler, nullptr);
-}
-
-TEST(CompilerFactory, CreateArm64ReturnsNull) {
-    auto compiler = CompilerFactory::CreateCompiler(Arch::ARM64);
-    EXPECT_EQ(compiler, nullptr);
+TEST(CompileConfigDefaults, DebugModeDefaultFalse) {
+    CompileConfig config;
+    EXPECT_FALSE(config.debug_mode);
+    EXPECT_TRUE(config.opcode_key.empty());
 }
