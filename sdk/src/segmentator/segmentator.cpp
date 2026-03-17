@@ -1,7 +1,7 @@
 #include <segmentator.hpp>
 
 #include <CompilationContext.hpp>
-#include <Strategy.hpp>
+#include <HandlerRegistry.hpp>
 #include <file_type_parser.hpp>
 
 #include <spdlog/spdlog.h>

@@ -6,7 +6,7 @@ set(SRC_FILES
 
 set(INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../../include/region_refiner
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/segmentator
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/core
     ${spdlog_SOURCE_DIR}/include
 )
 

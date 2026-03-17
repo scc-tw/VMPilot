@@ -1,5 +1,6 @@
 #include <ELFHandler.hpp>
 #include <ELFSectionViewer.hpp>
+#include <HandlerRegistry.hpp>
 #include <utilities.hpp>
 
 #include <cstdint>

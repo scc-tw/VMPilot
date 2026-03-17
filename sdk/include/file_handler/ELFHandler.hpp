@@ -2,7 +2,7 @@
 #define __SDK_ELF_HANDLER_HPP__
 #pragma once
 
-#include <Strategy.hpp>
+#include <FileHandlerStrategy.hpp>
 
 #include <cstdint>
 #include <memory>

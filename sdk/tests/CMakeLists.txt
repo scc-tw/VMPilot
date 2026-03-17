@@ -1,5 +1,8 @@
 set(INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/core
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/file_handler
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/arch_handler
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/segmentator
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/region_refiner
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/capstone_wrapper

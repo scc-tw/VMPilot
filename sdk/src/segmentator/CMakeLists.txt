@@ -1,6 +1,9 @@
 set (INCLUDE_DIRS
     ${INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/../../include/
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/core/
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/file_handler/
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/arch_handler/
     ${CMAKE_CURRENT_SOURCE_DIR}/../../include/segmentator/
     ${CMAKE_CURRENT_SOURCE_DIR}/../../include/region_refiner/
     ${CMAKE_SOURCE_DIR}/common/include/
@@ -11,15 +14,14 @@ set (TARGER_NAME VMPilot_SDK_Segmentator)
 
 set (SRC_FILES ${SRC_FILES}
     ${CMAKE_CURRENT_SOURCE_DIR}/segmentator.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ELFHandler.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/PEHandler.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/MachOHandler.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/Strategy.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ArchHandlerCommon.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/X86Handler.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ARM64Handler.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/NativeFunctionBase.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/NativeSymbolTable.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/HandlerRegistry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../file_handler/ELFHandler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../file_handler/PEHandler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../file_handler/MachOHandler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../file_handler/ELFSectionViewer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../arch_handler/ArchHandlerCommon.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../arch_handler/X86Handler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../arch_handler/ARM64Handler.cpp
 )
 
 include_directories(${INCLUDE_DIRS})

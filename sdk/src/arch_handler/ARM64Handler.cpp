@@ -1,6 +1,7 @@
 #include <ARM64Handler.hpp>
 
 #include <ArchHandlerCommon.hpp>
+#include <HandlerRegistry.hpp>
 #include <ARM64Traits.hpp>
 #include <RegValueResolver.hpp>
 

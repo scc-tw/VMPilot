@@ -1,4 +1,4 @@
-#include <Strategy.hpp>
+#include <HandlerRegistry.hpp>
 
 #include <string>
 #include <utility>
