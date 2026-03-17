@@ -101,6 +101,39 @@ std::vector<NativeFunc> VMPilot::SDK::RegionRefiner::refine(
 
 // --- Demangling helpers for canonical detection ---
 
+/// Try to extract the bare function name from an Itanium-mangled symbol.
+/// Handles simple cases like _Z3fooi → "foo" and _ZN5MyApp3barEv → "bar".
+static std::string itaniumExtractName(const std::string& mangled) {
+    if (mangled.size() < 3 || mangled[0] != '_' || mangled[1] != 'Z')
+        return {};
+
+    size_t pos = 2;
+    bool nested = (pos < mangled.size() && mangled[pos] == 'N');
+    if (nested)
+        ++pos;
+
+    // Parse <length><name> components; keep the last one.
+    std::string last_name;
+    while (pos < mangled.size()) {
+        if (mangled[pos] == 'E')
+            break;  // end of nested name
+        if (!std::isdigit(static_cast<unsigned char>(mangled[pos])))
+            break;
+
+        size_t len = 0;
+        while (pos < mangled.size() &&
+               std::isdigit(static_cast<unsigned char>(mangled[pos]))) {
+            len = len * 10 + (mangled[pos] - '0');
+            ++pos;
+        }
+        if (pos + len > mangled.size())
+            break;
+        last_name = mangled.substr(pos, len);
+        pos += len;
+    }
+    return last_name;
+}
+
 static std::string demangle(const std::string& mangled) {
 #if HAS_CXXABI
     int status = 0;
@@ -112,6 +145,11 @@ static std::string demangle(const std::string& mangled) {
         return result;
     }
 #endif
+    // Fallback: try simple Itanium ABI name extraction (e.g. on MSVC)
+    std::string name = itaniumExtractName(mangled);
+    if (!name.empty())
+        return name;
+
     return mangled;  // fallback: return as-is
 }
 
