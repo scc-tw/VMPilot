@@ -11,7 +11,10 @@
 ///   6. Diagnostics: full diagnostic report
 
 #include <compile_pipeline.hpp>
+#include <ReferenceAnalyzer.hpp>
 #include <Serializer.hpp>
+#include <SectionInfo.hpp>
+#include <capstone.hpp>
 #include <diagnostic_collector.hpp>
 #include <instruction_t.hpp>
 #include <segmentator.hpp>
@@ -25,6 +28,91 @@
 using namespace VMPilot::SDK;
 using VMPilot::Common::DiagnosticCollector;
 using VMPilot::Common::DiagnosticCode;
+
+static const char* refKindStr(Core::DataRefKind k) {
+    switch (k) {
+        case Core::DataRefKind::Unknown:      return "Unknown";
+        case Core::DataRefKind::GlobalVar:    return "GlobalVar";
+        case Core::DataRefKind::ReadOnlyData: return "ReadOnly";
+        case Core::DataRefKind::GotLoad:      return "GOT";
+        case Core::DataRefKind::TlsVar:       return "TLS";
+        case Core::DataRefKind::JumpTable:    return "JumpTable";
+        default:                               return "?";
+    }
+}
+
+static const char* refSourceStr(Core::DataRefSource s) {
+    switch (s) {
+        case Core::DataRefSource::Relocation:   return "reloc";
+        case Core::DataRefSource::InsnAnalysis:  return "insn";
+        case Core::DataRefSource::PatternMatch:  return "pattern";
+        default:                                  return "?";
+    }
+}
+
+static const char* tlsModelStr(Core::TlsModel m) {
+    switch (m) {
+        case Core::TlsModel::None:           return "";
+        case Core::TlsModel::LocalExec:      return "LocalExec";
+        case Core::TlsModel::InitialExec:    return "InitialExec";
+        case Core::TlsModel::LocalDynamic:   return "LocalDynamic";
+        case Core::TlsModel::GeneralDynamic: return "GeneralDynamic";
+        default:                              return "?";
+    }
+}
+
+static const char* atomicOpStr(Core::AtomicOp op) {
+    switch (op) {
+        case Core::AtomicOp::None:           return "";
+        case Core::AtomicOp::LoadExclusive:  return "LdExcl";
+        case Core::AtomicOp::StoreExclusive: return "StExcl";
+        case Core::AtomicOp::CompareSwap:    return "CAS";
+        case Core::AtomicOp::Swap:           return "Swap";
+        case Core::AtomicOp::FetchAdd:       return "FetchAdd";
+        case Core::AtomicOp::RMW:            return "RMW";
+        case Core::AtomicOp::LoadAcquire:    return "LdAcq";
+        case Core::AtomicOp::StoreRelease:   return "StRel";
+        case Core::AtomicOp::Fence:          return "Fence";
+        default:                              return "?";
+    }
+}
+
+static const char* atomicOrderStr(Core::AtomicOrdering o) {
+    switch (o) {
+        case Core::AtomicOrdering::None:    return "";
+        case Core::AtomicOrdering::Relaxed: return "relaxed";
+        case Core::AtomicOrdering::Acquire: return "acquire";
+        case Core::AtomicOrdering::Release: return "release";
+        case Core::AtomicOrdering::AcqRel:  return "acq_rel";
+        default:                             return "?";
+    }
+}
+
+static const char* atomicWidthStr(Core::AtomicWidth w) {
+    switch (w) {
+        case Core::AtomicWidth::None:      return "";
+        case Core::AtomicWidth::Atomic8:   return "8";
+        case Core::AtomicWidth::Atomic16:  return "16";
+        case Core::AtomicWidth::Atomic32:  return "32";
+        case Core::AtomicWidth::Atomic64:  return "64";
+        case Core::AtomicWidth::Atomic128: return "128";
+        default:                            return "?";
+    }
+}
+
+static const char* sectionKindStr(Core::SectionKind k) {
+    switch (k) {
+        case Core::SectionKind::Text:    return "Text";
+        case Core::SectionKind::Rodata:  return "Rodata";
+        case Core::SectionKind::Data:    return "Data";
+        case Core::SectionKind::Bss:     return "Bss";
+        case Core::SectionKind::Tls:     return "Tls";
+        case Core::SectionKind::Got:     return "Got";
+        case Core::SectionKind::Plt:     return "Plt";
+        case Core::SectionKind::Unknown: return "Unknown";
+        default:                          return "?";
+    }
+}
 
 static std::string hexdump(const std::vector<uint8_t>& data, size_t max = 64) {
     std::ostringstream ss;
@@ -68,18 +156,51 @@ int main(int argc, char* argv[]) {
     printf("Mode:          %s\n", Segmentator::to_string(seg->context.mode));
     printf("Symbols:       %zu\n", seg->context.symbols.size());
     printf("RO sections:   %zu\n", seg->context.rodata_sections.size());
+    printf("All sections:  %zu\n", seg->context.all_sections.size());
     printf("Regions:       %zu (after refine)\n",
            seg->refined_regions.size());
     printf("\n");
+
+    // Section map — critical for understanding ReferenceAnalyzer classification
+    if (!seg->context.all_sections.empty()) {
+        printf("  Section Map (what ReferenceAnalyzer sees):\n");
+        for (const auto& sec : seg->context.all_sections) {
+            printf("    0x%" PRIx64 " - 0x%" PRIx64 "  %-7s  %s\n",
+                   sec.base_addr, sec.base_addr + sec.size,
+                   sectionKindStr(sec.kind), sec.name.c_str());
+        }
+        printf("\n");
+    }
+
+    // Set up capstone for disassembly
+    Capstone::Arch cs_arch = Capstone::Arch::X86;
+    Capstone::Mode cs_mode = Capstone::Mode::MODE_64;
+    using FileArch = VMPilot::Common::FileArch;
+    using FileMode = VMPilot::Common::FileMode;
+    if (seg->context.arch == FileArch::ARM64) {
+        cs_arch = Capstone::Arch::ARM64;
+        cs_mode = Capstone::Mode::MODE_ARM;
+    } else if (seg->context.mode == FileMode::MODE_32) {
+        cs_mode = Capstone::Mode::MODE_32;
+    }
+    Capstone::Capstone cs(cs_arch, cs_mode);
 
     for (size_t i = 0; i < seg->refined_regions.size(); ++i) {
         const auto& r = seg->refined_regions[i];
         printf("  Region [%zu] \"%s\"\n", i, r.getName().c_str());
         printf("    addr: 0x%" PRIx64 "  size: %" PRIu64 "\n",
                r.getAddr(), r.getSize());
-        printf("    code: %s\n", hexdump(r.getCode()).c_str());
         if (r.getEnclosingSymbol().has_value())
             printf("    enclosing: %s\n", r.getEnclosingSymbol()->c_str());
+
+        // Disassembly of the protected region
+        auto insns = cs.disasm(r.getCode(), r.getAddr());
+        printf("    disasm: (%zu insns)\n", insns.size());
+        for (const auto& insn : insns) {
+            printf("      0x%" PRIx64 ":  %-8s %s\n",
+                   insn.address, insn.mnemonic.c_str(),
+                   insn.op_str.c_str());
+        }
         printf("\n");
     }
 
@@ -106,8 +227,23 @@ int main(int argc, char* argv[]) {
         printf("\n");
     }
 
-    // ── Stage 3: Build units ──
+    // ── Stage 3: Build units + reference analysis ──
     auto units = Serializer::build_units(*seg, diag);
+
+    // Run reference analysis (same as compile_pipeline.cpp step 2.5)
+    for (auto& unit : units) {
+        auto unit_insns = cs.disasm(unit.code, unit.addr);
+        unit.data_references = ReferenceAnalyzer::analyze(
+            unit_insns, unit.addr, unit.size,
+            unit.context ? unit.context->all_sections
+                         : std::vector<Core::SectionInfo>{},
+            seg->text_relocations,
+            unit.context ? unit.context->symbols
+                         : Segmentator::NativeSymbolTable{},
+            unit.context ? unit.context->rodata_sections
+                         : std::vector<Segmentator::ReadOnlySection>{},
+            seg->context.arch, seg->context.mode);
+    }
 
     printf("===========================================================\n");
     printf("  Stage 3: Build units (%zu units)\n", units.size());
@@ -124,8 +260,38 @@ int main(int argc, char* argv[]) {
                u.enclosing_symbol.c_str());
         printf("    context:   %s\n", u.context ? "present" : "NULL");
         printf("    code:      %s\n", hexdump(u.code).c_str());
-        if (!u.data_references.empty())
-            printf("    data refs: %zu\n", u.data_references.size());
+        printf("    data refs: %zu\n", u.data_references.size());
+        for (size_t j = 0; j < u.data_references.size(); ++j) {
+            const auto& ref = u.data_references[j];
+            printf("      [%zu] 0x%" PRIx64 " → 0x%" PRIx64
+                   "  %-9s  src=%-7s  %uB  %s%s",
+                   j, ref.insn_offset, ref.target_va,
+                   refKindStr(ref.kind), refSourceStr(ref.source),
+                   ref.access_size,
+                   ref.is_write ? "W" : "R",
+                   ref.is_pc_relative ? " PC-rel" : "");
+            if (!ref.target_symbol.empty())
+                printf("  sym=%s", ref.target_symbol.c_str());
+            if (ref.tls_model != Core::TlsModel::None)
+                printf("  tls=%s", tlsModelStr(ref.tls_model));
+            if (ref.atomic_op != Core::AtomicOp::None) {
+                printf("  atomic{%s %s",
+                       atomicOpStr(ref.atomic_op),
+                       atomicOrderStr(ref.atomic_ordering));
+                if (ref.atomic_width != Core::AtomicWidth::None)
+                    printf(" %sbit", atomicWidthStr(ref.atomic_width));
+                printf("}");
+            }
+            if (ref.jump_table.has_value()) {
+                printf("  jt{base=0x%" PRIx64 " %u×%uB %s %zu targets}",
+                       ref.jump_table->table_base,
+                       ref.jump_table->entry_count,
+                       ref.jump_table->entry_size,
+                       ref.jump_table->relative_entries ? "rel" : "abs",
+                       ref.jump_table->targets.size());
+            }
+            printf("\n");
+        }
         printf("\n");
     }
 

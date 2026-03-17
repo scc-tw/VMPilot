@@ -22,6 +22,7 @@ add_compile_definitions(
     TEST_DATA_MULTI_REGION="${CMAKE_SOURCE_DIR}/data/multi_region/bin"
     TEST_DATA_INLINE_HEAVY="${CMAKE_SOURCE_DIR}/data/inline_heavy/bin"
     TEST_DATA_NESTED_PROTECT="${CMAKE_SOURCE_DIR}/data/nested_protect/bin"
+    TEST_DATA_DATA_REFS="${CMAKE_SOURCE_DIR}/data/data_refs/bin"
 )
 
 # --- Test targets ---

@@ -37,6 +37,9 @@ using VMPilot::Common::DiagnosticCode;
 #ifndef TEST_DATA_NESTED_PROTECT
 #define TEST_DATA_NESTED_PROTECT ""
 #endif
+#ifndef TEST_DATA_DATA_REFS
+#define TEST_DATA_DATA_REFS ""
+#endif
 
 static const std::string TEST_KEY =
     "01234567890123456789012345678901";
@@ -332,6 +335,104 @@ TEST_F(NestedProtectTest, RoundTrip) {
     for (size_t i = 0; i < original.size(); ++i) {
         EXPECT_EQ(original[i].code, (*loaded)[i].code)
             << "Code mismatch for unit " << original[i].name;
+    }
+
+    fs::remove_all(tmp);
+}
+
+// ---------------------------------------------------------------------------
+// data_refs: Binary with globals, rodata, bss, atomics, TLS, cross-DSO, jump table
+// ---------------------------------------------------------------------------
+
+class DataRefsTest : public ::testing::Test {
+protected:
+    std::string binary = findBinary(TEST_DATA_DATA_REFS, "data_refs");
+};
+
+TEST_F(DataRefsTest, TwoProtectedRegions) {
+    if (binary.empty()) GTEST_SKIP() << "No data_refs binary found";
+
+    DiagnosticCollector diag;
+    auto seg = Segmentator::segment(binary, diag);
+    ASSERT_TRUE(seg.has_value()) << diag.summary();
+
+    // Should find data_ref_showcase and jump_table_showcase
+    EXPECT_GE(seg->groups.size(), 2u)
+        << "Expected 2 groups (data_ref_showcase + jump_table_showcase)";
+
+    // Verify both groups have non-trivial code
+    for (const auto& g : seg->groups) {
+        ASSERT_GE(g.sites.size(), 1u);
+        EXPECT_GT(g.sites[0].size, 20u)
+            << "Region '" << g.source_name << "' too small";
+    }
+}
+
+TEST_F(DataRefsTest, FullPipelineCompiles) {
+    if (binary.empty()) GTEST_SKIP() << "No data_refs binary found";
+
+    DiagnosticCollector diag;
+    BytecodeCompiler::CompileConfig config{TEST_KEY, false};
+    auto result = BytecodeCompiler::compile_binary(binary, config, diag);
+    ASSERT_TRUE(result.has_value()) << diag.summary();
+
+    EXPECT_GE(result->total_units, 2u);
+    EXPECT_EQ(result->failed_units, 0u);
+
+    VMPilot::Common::Instruction instr_helper;
+    for (const auto& out : result->outputs) {
+        EXPECT_FALSE(out.bytecodes.empty()) << out.name;
+        for (const auto& inst : out.bytecodes) {
+            EXPECT_TRUE(instr_helper.check(inst)) << out.name;
+        }
+    }
+}
+
+TEST_F(DataRefsTest, RoundTripPreservesDataRefs) {
+    if (binary.empty()) GTEST_SKIP() << "No data_refs binary found";
+
+    DiagnosticCollector diag;
+    auto seg = Segmentator::segment(binary, diag);
+    ASSERT_TRUE(seg.has_value());
+
+    auto original = Serializer::build_units(*seg, diag);
+    ASSERT_GE(original.size(), 2u);
+
+    auto tmp = fs::temp_directory_path() / "vmpilot_datarefs_roundtrip";
+    fs::remove_all(tmp);
+
+    ASSERT_TRUE(Serializer::dump(original, tmp.string(), diag).has_value());
+    auto loaded = Serializer::load(tmp.string(), diag);
+    ASSERT_TRUE(loaded.has_value());
+    EXPECT_EQ(original.size(), loaded->size());
+
+    auto by_addr = [](const Core::CompilationUnit& a,
+                      const Core::CompilationUnit& b) {
+        return a.addr < b.addr;
+    };
+    std::sort(original.begin(), original.end(), by_addr);
+    std::sort(loaded->begin(), loaded->end(), by_addr);
+
+    for (size_t i = 0; i < original.size(); ++i) {
+        EXPECT_EQ(original[i].name, (*loaded)[i].name);
+        EXPECT_EQ(original[i].code, (*loaded)[i].code);
+        // Data references must survive round-trip
+        EXPECT_EQ(original[i].data_references.size(),
+                  (*loaded)[i].data_references.size())
+            << "data_references count mismatch for " << original[i].name;
+        for (size_t j = 0;
+             j < original[i].data_references.size() &&
+             j < (*loaded)[i].data_references.size();
+             ++j) {
+            const auto& o = original[i].data_references[j];
+            const auto& l = (*loaded)[i].data_references[j];
+            EXPECT_EQ(o.insn_offset, l.insn_offset);
+            EXPECT_EQ(o.target_va, l.target_va);
+            EXPECT_EQ(o.kind, l.kind);
+            EXPECT_EQ(o.atomic_op, l.atomic_op);
+            EXPECT_EQ(o.atomic_ordering, l.atomic_ordering);
+            EXPECT_EQ(o.atomic_width, l.atomic_width);
+        }
     }
 
     fs::remove_all(tmp);

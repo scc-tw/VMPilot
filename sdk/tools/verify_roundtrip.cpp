@@ -131,6 +131,30 @@ int main(int argc, char* argv[]) {
                     load.enclosing_symbol.c_str());
             ok = false;
         }
+        if (orig.data_references.size() != load.data_references.size()) {
+            fprintf(stderr,
+                    "  FAIL [%zu]: data_references count mismatch: %zu vs %zu\n",
+                    i, orig.data_references.size(),
+                    load.data_references.size());
+            ok = false;
+        } else {
+            for (size_t j = 0; j < orig.data_references.size(); ++j) {
+                const auto& o = orig.data_references[j];
+                const auto& l = load.data_references[j];
+                if (o.insn_offset != l.insn_offset ||
+                    o.target_va != l.target_va ||
+                    o.kind != l.kind ||
+                    o.atomic_op != l.atomic_op ||
+                    o.atomic_ordering != l.atomic_ordering ||
+                    o.atomic_width != l.atomic_width) {
+                    fprintf(stderr,
+                            "  FAIL [%zu]: data_references[%zu] mismatch\n",
+                            i, j);
+                    ok = false;
+                    break;
+                }
+            }
+        }
         if (!load.context) {
             fprintf(stderr, "  FAIL [%zu]: loaded unit has null context\n", i);
             ok = false;
