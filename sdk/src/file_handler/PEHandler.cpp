@@ -285,6 +285,41 @@ std::string PEFileHandlerStrategy::doGetCompilerInfo() noexcept {
            std::to_string(minor);
 }
 
+std::vector<VMPilot::SDK::Core::SectionInfo>
+PEFileHandlerStrategy::doGetAllSections() noexcept {
+    namespace Core = VMPilot::SDK::Core;
+    std::vector<Core::SectionInfo> result;
+
+    auto& sections = pImpl->reader.get_sections();
+    for (size_t i = 0; i < sections.get_count(); ++i) {
+        auto* sec = sections[i];
+        if (!sec || sec->get_data_size() == 0)
+            continue;
+
+        Core::SectionInfo info;
+        info.base_addr = pImpl->image_base + sec->get_virtual_address();
+        info.size = sec->get_data_size();
+        info.name = sec->get_name();
+
+        if (info.name == ".text")
+            info.kind = Core::SectionKind::Text;
+        else if (info.name == ".rdata")
+            info.kind = Core::SectionKind::Rodata;
+        else if (info.name == ".data")
+            info.kind = Core::SectionKind::Data;
+        else if (info.name == ".bss")
+            info.kind = Core::SectionKind::Bss;
+        else if (info.name == ".tls")
+            info.kind = Core::SectionKind::Tls;
+        else
+            info.kind = Core::SectionKind::Unknown;
+
+        result.push_back(std::move(info));
+    }
+
+    return result;
+}
+
 std::vector<CallTarget>
 PEFileHandlerStrategy::doGetPointerTableTargets() noexcept {
     parseImports();

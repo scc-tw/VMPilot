@@ -32,6 +32,7 @@ class MachOFileHandlerStrategy : public FileHandlerStrategy {
     virtual std::vector<CallTarget> doGetPointerTableTargets() noexcept
         override;
     virtual std::string doGetCompilerInfo() noexcept override;
+    virtual std::vector<Core::SectionInfo> doGetAllSections() noexcept override;
 };
 
 std::unique_ptr<MachOFileHandlerStrategy::Impl> make_macho_impl(

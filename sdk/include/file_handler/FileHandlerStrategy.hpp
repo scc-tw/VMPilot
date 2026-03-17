@@ -2,9 +2,11 @@
 #define __SDK_FILE_HANDLER_STRATEGY_HPP__
 #pragma once
 
+#include <DataReference.hpp>
 #include <NativeFunctionBase.hpp>
 #include <NativeSymbolTable.hpp>
 #include <ReadOnlySection.hpp>
+#include <SectionInfo.hpp>
 
 #include <cstdint>
 #include <functional>
@@ -52,6 +54,12 @@ class FileHandlerStrategy {
     /// (ELF: .comment section, PE: linker version, MachO: CPU type fallback)
     virtual std::string doGetCompilerInfo() noexcept;
 
+    /// Return all sections with classified kinds for reference analysis.
+    virtual std::vector<Core::SectionInfo> doGetAllSections() noexcept;
+
+    /// Return .rela.text / .rel.text relocation entries for reference analysis.
+    virtual std::vector<Core::RelocationEntry> doGetTextRelocations() noexcept;
+
    public:
     virtual ~FileHandlerStrategy() = default;
     std::vector<uint8_t> getTextSection();
@@ -64,6 +72,12 @@ class FileHandlerStrategy {
 
     /// Return compiler/linker identification string.
     std::string getCompilerInfo();
+
+    /// Return all sections with classified kinds.
+    std::vector<Core::SectionInfo> getAllSections();
+
+    /// Return text relocation entries.
+    std::vector<Core::RelocationEntry> getTextRelocations();
 };
 
 using FileHandlerFactory =

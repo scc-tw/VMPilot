@@ -45,6 +45,16 @@ std::string FileHandlerStrategy::doGetCompilerInfo() noexcept {
     return {};
 }
 
+std::vector<VMPilot::SDK::Core::SectionInfo>
+FileHandlerStrategy::doGetAllSections() noexcept {
+    return {};
+}
+
+std::vector<VMPilot::SDK::Core::RelocationEntry>
+FileHandlerStrategy::doGetTextRelocations() noexcept {
+    return {};
+}
+
 std::vector<uint8_t> FileHandlerStrategy::getTextSection() {
     return doGetTextSection();
 }
@@ -59,6 +69,16 @@ std::vector<ReadOnlySection> FileHandlerStrategy::getReadOnlySections() {
 
 std::string FileHandlerStrategy::getCompilerInfo() {
     return doGetCompilerInfo();
+}
+
+std::vector<VMPilot::SDK::Core::SectionInfo>
+FileHandlerStrategy::getAllSections() {
+    return doGetAllSections();
+}
+
+std::vector<VMPilot::SDK::Core::RelocationEntry>
+FileHandlerStrategy::getTextRelocations() {
+    return doGetTextRelocations();
 }
 
 NativeSymbolTable FileHandlerStrategy::getNativeSymbolTable() {

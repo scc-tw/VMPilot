@@ -132,6 +132,51 @@ std::string MachOFileHandlerStrategy::doGetCompilerInfo() noexcept {
     }
 }
 
+std::vector<VMPilot::SDK::Core::SectionInfo>
+MachOFileHandlerStrategy::doGetAllSections() noexcept {
+    namespace Core = VMPilot::SDK::Core;
+    std::vector<Core::SectionInfo> result;
+
+    for (const auto& sec : pImpl->parser.sections()) {
+        if (sec.size == 0)
+            continue;
+
+        Core::SectionInfo info;
+        info.base_addr = sec.addr;
+        info.size = sec.size;
+        info.name = sec.segname + "," + sec.sectname;
+
+        // Classify by segment+section name
+        if (sec.segname == "__TEXT" && sec.sectname == "__text")
+            info.kind = Core::SectionKind::Text;
+        else if (sec.segname == "__TEXT" &&
+                 (sec.sectname == "__const" || sec.sectname == "__cstring" ||
+                  sec.sectname == "__literal4" || sec.sectname == "__literal8"))
+            info.kind = Core::SectionKind::Rodata;
+        else if ((sec.segname == "__DATA" || sec.segname == "__DATA_CONST") &&
+                 sec.sectname == "__data")
+            info.kind = Core::SectionKind::Data;
+        else if (sec.segname == "__DATA" &&
+                 (sec.sectname == "__bss" || sec.sectname == "__common"))
+            info.kind = Core::SectionKind::Bss;
+        else if (sec.segname == "__DATA" &&
+                 (sec.sectname == "__thread_data" ||
+                  sec.sectname == "__thread_bss"))
+            info.kind = Core::SectionKind::Tls;
+        else if ((sec.segname == "__DATA" || sec.segname == "__DATA_CONST") &&
+                 sec.sectname == "__got")
+            info.kind = Core::SectionKind::Got;
+        else if (sec.segname == "__TEXT" && sec.sectname == "__stubs")
+            info.kind = Core::SectionKind::Plt;
+        else
+            info.kind = Core::SectionKind::Unknown;
+
+        result.push_back(std::move(info));
+    }
+
+    return result;
+}
+
 std::vector<CallTarget>
 MachOFileHandlerStrategy::doGetPointerTableTargets() noexcept {
     std::vector<CallTarget> targets;

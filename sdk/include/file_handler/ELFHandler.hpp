@@ -33,6 +33,9 @@ class ELFFileHandlerStrategy : public FileHandlerStrategy {
     virtual std::vector<CallTarget> doGetPointerTableTargets() noexcept
         override;
     virtual std::string doGetCompilerInfo() noexcept override;
+    virtual std::vector<Core::SectionInfo> doGetAllSections() noexcept override;
+    virtual std::vector<Core::RelocationEntry>
+        doGetTextRelocations() noexcept override;
 
    private:
     /// dynsym index -> (rela.plt index, GOT address)

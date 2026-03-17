@@ -3,6 +3,7 @@
 #pragma once
 
 #include <CompilationContext.hpp>
+#include <DataReference.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -24,6 +25,9 @@ struct CompilationUnit {
     /// Shared compilation context.  Read-only, safe for concurrent access.
     /// Shared across all units from the same binary — lifetime-safe via shared_ptr.
     std::shared_ptr<const Segmentator::CompilationContext> context;
+
+    /// Data references discovered by ReferenceAnalyzer (globals, TLS, GOT loads).
+    std::vector<Core::DataReference> data_references;
 };
 
 }  // namespace VMPilot::SDK::Core

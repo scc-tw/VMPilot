@@ -14,11 +14,41 @@ message SymbolEntry {
   bool is_global = 5;
 }
 
+message SectionInfo {
+  uint64 base_addr = 1;
+  uint64 size = 2;
+  uint32 kind = 3;
+  string name = 4;
+}
+
+message RelocationEntry {
+  uint64 offset = 1;
+  uint32 type = 2;
+  uint32 symbol_index = 3;
+  int64 addend = 4;
+  string symbol_name = 5;
+}
+
+message DataReference {
+  uint64 insn_offset = 1;
+  uint64 target_va = 2;
+  string target_symbol = 3;
+  uint32 kind = 4;
+  uint32 tls_model = 5;
+  uint32 source = 6;
+  uint32 access_size = 7;
+  bool is_write = 8;
+  bool is_pc_relative = 9;
+  uint32 atomic_width = 10;
+  RelocationEntry relocation = 11;
+}
+
 message CompilationContext {
   uint32 arch = 1;
   uint32 mode = 2;
   repeated SymbolEntry symbols = 3;
   repeated ReadOnlySection rodata_sections = 4;
+  repeated SectionInfo all_sections = 5;
 }
 
 message CompilationUnit {
@@ -30,4 +60,5 @@ message CompilationUnit {
   bool is_canonical = 6;
   string context_file = 7;
   bytes context_hash = 8;       // SHA-256 of context.pb
+  repeated DataReference data_references = 9;
 }

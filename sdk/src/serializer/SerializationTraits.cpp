@@ -1,5 +1,7 @@
 #include <SerializationTraits.hpp>
 
+#include <DataReference.hpp>
+#include <SectionInfo.hpp>
 #include <VMPilot_crypto.hpp>
 #include <vmpilot.pb.h>
 
@@ -30,6 +32,14 @@ SerializationTraits<Segmentator::CompilationContext>::to_bytes(
         auto* r = pb.add_rodata_sections();
         r->set_base_addr(sec.base_addr);
         r->set_data(sec.data.data(), sec.data.size());
+    }
+
+    for (const auto& sec : ctx.all_sections) {
+        auto* s = pb.add_all_sections();
+        s->set_base_addr(sec.base_addr);
+        s->set_size(sec.size);
+        s->set_kind(static_cast<uint32_t>(sec.kind));
+        s->set_name(sec.name);
     }
 
     std::string bytes;
@@ -71,12 +81,46 @@ SerializationTraits<Segmentator::CompilationContext>::from_bytes(
         ctx.rodata_sections.push_back(std::move(sec));
     }
 
+    for (int i = 0; i < pb.all_sections_size(); ++i) {
+        const auto& s = pb.all_sections(i);
+        Core::SectionInfo sec;
+        sec.base_addr = s.base_addr();
+        sec.size = s.size();
+        sec.kind = static_cast<Core::SectionKind>(s.kind());
+        sec.name = s.name();
+        ctx.all_sections.push_back(std::move(sec));
+    }
+
     return ctx;
 }
 
 // ---------------------------------------------------------------------------
 // CompilationUnit
 // ---------------------------------------------------------------------------
+
+namespace {
+
+void serializeRelocationEntry(vmpilot::RelocationEntry* pb,
+                               const Core::RelocationEntry& entry) {
+    pb->set_offset(entry.offset);
+    pb->set_type(entry.type);
+    pb->set_symbol_index(entry.symbol_index);
+    pb->set_addend(entry.addend);
+    pb->set_symbol_name(entry.symbol_name);
+}
+
+Core::RelocationEntry deserializeRelocationEntry(
+    const vmpilot::RelocationEntry& pb) {
+    Core::RelocationEntry entry;
+    entry.offset = pb.offset();
+    entry.type = pb.type();
+    entry.symbol_index = pb.symbol_index();
+    entry.addend = pb.addend();
+    entry.symbol_name = pb.symbol_name();
+    return entry;
+}
+
+}  // namespace
 
 tl::expected<std::string, std::string>
 SerializationTraits<Core::CompilationUnit>::to_bytes(
@@ -105,6 +149,21 @@ SerializationTraits<Core::CompilationUnit>::to_bytes(
         }
     }
 
+    for (const auto& ref : unit.data_references) {
+        auto* r = pb.add_data_references();
+        r->set_insn_offset(ref.insn_offset);
+        r->set_target_va(ref.target_va);
+        r->set_target_symbol(ref.target_symbol);
+        r->set_kind(static_cast<uint32_t>(ref.kind));
+        r->set_tls_model(static_cast<uint32_t>(ref.tls_model));
+        r->set_source(static_cast<uint32_t>(ref.source));
+        r->set_access_size(ref.access_size);
+        r->set_is_write(ref.is_write);
+        r->set_is_pc_relative(ref.is_pc_relative);
+        r->set_atomic_width(static_cast<uint32_t>(ref.atomic_width));
+        serializeRelocationEntry(r->mutable_relocation(), ref.relocation);
+    }
+
     std::string bytes;
     if (!pb.SerializeToString(&bytes))
         return tl::unexpected(
@@ -129,6 +188,23 @@ SerializationTraits<Core::CompilationUnit>::from_bytes(
     unit.enclosing_symbol = pb.enclosing_symbol();
     unit.is_canonical = pb.is_canonical();
     unit.context = std::move(ctx);
+
+    for (int i = 0; i < pb.data_references_size(); ++i) {
+        const auto& r = pb.data_references(i);
+        Core::DataReference ref;
+        ref.insn_offset = r.insn_offset();
+        ref.target_va = r.target_va();
+        ref.target_symbol = r.target_symbol();
+        ref.kind = static_cast<Core::DataRefKind>(r.kind());
+        ref.tls_model = static_cast<Core::TlsModel>(r.tls_model());
+        ref.source = static_cast<Core::DataRefSource>(r.source());
+        ref.access_size = r.access_size();
+        ref.is_write = r.is_write();
+        ref.is_pc_relative = r.is_pc_relative();
+        ref.atomic_width = static_cast<Core::AtomicWidth>(r.atomic_width());
+        ref.relocation = deserializeRelocationEntry(r.relocation());
+        unit.data_references.push_back(std::move(ref));
+    }
 
     return unit;
 }
