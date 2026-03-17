@@ -1,9 +1,8 @@
 #include <segmentator.hpp>
 
 #include <CompilationContext.hpp>
+#include <Strategy.hpp>
 #include <file_type_parser.hpp>
-
-#include <new>
 
 #include <spdlog/spdlog.h>
 
@@ -31,8 +30,20 @@ static void registerBuiltinHandlers() {
     registerARM64Handler();
 }
 
-std::optional<SegmentationResult> VMPilot::SDK::Segmentator::segment(
-    const std::string& filename) noexcept {
+const char* VMPilot::SDK::Segmentator::to_string(SegmentError e) noexcept {
+    switch (e) {
+        case SegmentError::FileNotFound:       return "file not found or corrupt";
+        case SegmentError::UnsupportedFormat:   return "unsupported binary format";
+        case SegmentError::UnsupportedArch:     return "unsupported architecture";
+        case SegmentError::TextSectionMissing:  return "failed to read .text section";
+        case SegmentError::DisassemblyFailed:   return "disassembly failed";
+        case SegmentError::NoRegionsFound:      return "no protected regions found";
+    }
+    return "unknown error";
+}
+
+tl::expected<SegmentationResult, SegmentError>
+VMPilot::SDK::Segmentator::segment(const std::string& filename) noexcept {
     registerBuiltinHandlers();
 
     // 1. Detect format & arch
@@ -41,7 +52,7 @@ std::optional<SegmentationResult> VMPilot::SDK::Segmentator::segment(
         metadata = VMPilot::Common::get_file_metadata(filename);
     } catch (const std::exception& e) {
         spdlog::error("segment: {}", e.what());
-        return std::nullopt;
+        return tl::make_unexpected(SegmentError::FileNotFound);
     }
 
     const auto& registry = HandlerRegistry::instance();
@@ -51,14 +62,14 @@ std::optional<SegmentationResult> VMPilot::SDK::Segmentator::segment(
     if (!fh) {
         spdlog::error("segment: unsupported format {}",
                       static_cast<uint8_t>(metadata.format));
-        return std::nullopt;
+        return tl::make_unexpected(SegmentError::UnsupportedFormat);
     }
 
     auto text = fh->getTextSection();
     auto text_base = fh->getTextBaseAddr();
     if (text.empty() || text_base == static_cast<uint64_t>(-1)) {
         spdlog::error("segment: failed to read .text section");
-        return std::nullopt;
+        return tl::make_unexpected(SegmentError::TextSectionMissing);
     }
 
     // 3. Build symbol table once
@@ -69,7 +80,7 @@ std::optional<SegmentationResult> VMPilot::SDK::Segmentator::segment(
     if (!ah) {
         spdlog::error("segment: unsupported arch {}",
                       static_cast<uint8_t>(metadata.arch));
-        return std::nullopt;
+        return tl::make_unexpected(SegmentError::UnsupportedArch);
     }
 
     // 5. Build compilation context
@@ -84,13 +95,13 @@ std::optional<SegmentationResult> VMPilot::SDK::Segmentator::segment(
     // 6. Load & extract
     if (!ah->Load(text, text_base)) {
         spdlog::error("segment: disassembly failed");
-        return std::nullopt;
+        return tl::make_unexpected(SegmentError::DisassemblyFailed);
     }
 
     auto regions = ah->getNativeFunctions();
     if (regions.empty()) {
         spdlog::info("segment: no protected regions found");
-        return std::nullopt;
+        return tl::make_unexpected(SegmentError::NoRegionsFound);
     }
 
     // 7. Refine & group
@@ -101,89 +112,4 @@ std::optional<SegmentationResult> VMPilot::SDK::Segmentator::segment(
     result.groups = std::move(groups);
     result.context = std::move(ctx);
     return result;
-}
-
-std::unique_ptr<Segmentator> VMPilot::SDK::Segmentator::create_segmentator(
-    const std::string& filename) noexcept {
-    registerBuiltinHandlers();
-
-    auto segmentator =
-        std::unique_ptr<Segmentator>(new (std::nothrow) Segmentator());
-    if (!segmentator) {
-        spdlog::error("Failed to allocate Segmentator");
-        return nullptr;
-    }
-
-    try {
-        segmentator->m_metadata = VMPilot::Common::get_file_metadata(filename);
-    } catch (const std::exception& e) {
-        spdlog::error("Error creating segmentator: {}", e.what());
-        return nullptr;
-    }
-
-    const auto& registry = HandlerRegistry::instance();
-
-    segmentator->m_file_handler =
-        registry.createFileHandler(segmentator->m_metadata.format, filename);
-    if (!segmentator->m_file_handler) {
-        spdlog::error("Unsupported file format: {}",
-                      static_cast<uint8_t>(segmentator->m_metadata.format));
-        return nullptr;
-    }
-
-    // Build symbol table from file handler, then create arch handler
-    NativeSymbolTable symbols =
-        segmentator->m_file_handler->getNativeSymbolTable();
-
-    segmentator->m_arch_handler = registry.createArchHandler(
-        segmentator->m_metadata.arch, segmentator->m_metadata.mode, symbols);
-    if (!segmentator->m_arch_handler) {
-        spdlog::error("Unsupported architecture: {}",
-                      static_cast<uint8_t>(segmentator->m_metadata.arch));
-        return nullptr;
-    }
-
-    // Build compilation context from file handler data
-    CompilationContext ctx;
-    ctx.symbols = segmentator->m_file_handler->getNativeSymbolTable();
-    ctx.arch = segmentator->m_metadata.arch;
-    ctx.mode = segmentator->m_metadata.mode;
-
-    ctx.rodata_sections = segmentator->m_file_handler->getReadOnlySections();
-
-    segmentator->m_arch_handler->setCompilationContext(std::move(ctx));
-
-    return segmentator;
-}
-
-void VMPilot::SDK::Segmentator::Segmentator::segmentation() noexcept {
-    if (m_file_handler == nullptr || m_arch_handler == nullptr) {
-        spdlog::error("Segmentation failed: file_handler: {}, arch_handler: {}",
-                      m_file_handler == nullptr, m_arch_handler == nullptr);
-        return;
-    }
-
-    const auto text_section = m_file_handler->getTextSection();
-    const auto text_base_addr = m_file_handler->getTextBaseAddr();
-
-    if (text_base_addr == static_cast<uint64_t>(-1) || text_section.empty()) {
-        spdlog::error(
-            "Segmentation failed: text_base_addr: {}, text_section size: {}",
-            text_base_addr, text_section.size());
-        return;
-    }
-
-    if (!m_arch_handler->Load(text_section, text_base_addr)) {
-        spdlog::error("Segmentation failed: load failed");
-        return;
-    }
-
-    auto native_functions = m_arch_handler->getNativeFunctions();
-    if (native_functions.empty()) {
-        spdlog::error("Segmentation failed: native_functions empty");
-        return;
-    }
-
-    spdlog::info("Segmentation succeeded: found {} protected regions",
-                 native_functions.size());
 }

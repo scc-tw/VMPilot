@@ -4,6 +4,7 @@ set (INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../../include/segmentator/
     ${CMAKE_CURRENT_SOURCE_DIR}/../../include/region_refiner/
     ${CMAKE_SOURCE_DIR}/common/include/
+    ${CMAKE_SOURCE_DIR}/third_party/expected/include/
 )
 
 set (TARGER_NAME VMPilot_SDK_Segmentator)
