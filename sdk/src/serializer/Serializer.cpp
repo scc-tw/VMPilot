@@ -1,21 +1,28 @@
 #include <Serializer.hpp>
 
+#include <ArchEnum.hpp>
+#include <ModeEnum.hpp>
 #include <VMPilot_crypto.hpp>
 #include <vmpilot.pb.h>
 
 #include <toml++/toml.hpp>
 
-#include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <string_view>
 #include <unordered_map>
 
 namespace fs = std::filesystem;
 
 using namespace VMPilot::SDK;
+
+// ---------------------------------------------------------------------------
+// Filename helpers
+// ---------------------------------------------------------------------------
 
 namespace {
 
@@ -23,24 +30,22 @@ namespace {
 /// Kept short so that directory + filename stay under both
 /// Windows MAX_PATH (260) and Linux NAME_MAX (255).
 /// Budget: output_dir (~70) + "/" + dir (~66) + "/" + filename (~120) < 260.
-static constexpr size_t kMaxComponent = 60;
-static constexpr size_t kMaxFilename = 120;
+constexpr size_t kMaxComponent = 60;
+constexpr size_t kMaxFilename = 120;
 
 /// Replace filesystem-unsafe characters and truncate.
-/// When truncation occurs, append a short hash of the original
+/// When truncation occurs, append a short FNV-1a hash of the original
 /// to preserve uniqueness (e.g. nested-template names that share
 /// a long common prefix).
-static std::string sanitize(const std::string& input,
-                            size_t max_len = kMaxComponent) {
-    std::string result = input;
+std::string sanitize(std::string_view input,
+                     size_t max_len = kMaxComponent) {
+    std::string result(input);
     for (char& c : result) {
         if (c == '?' || c == '<' || c == '>' || c == ':' || c == '"' ||
             c == '|' || c == '*' || c == '\\' || c == '/')
             c = '_';
     }
     if (result.size() > max_len) {
-        // Hash the full original so truncated names stay unique.
-        // Use a simple FNV-1a 32-bit hash — no crypto needed here.
         uint32_t h = 0x811c9dc5u;
         for (unsigned char c : input) {
             h ^= c;
@@ -48,86 +53,79 @@ static std::string sanitize(const std::string& input,
         }
         char suffix[10];
         std::snprintf(suffix, sizeof(suffix), "_%08x", h);
-        // Reserve room for the hash suffix (9 chars: _ + 8 hex)
         result.resize(max_len - 9);
         result += suffix;
     }
     return result;
 }
 
-static std::string hexString(const std::vector<uint8_t>& bytes) {
-    std::ostringstream oss;
-    for (auto b : bytes) oss << std::hex << std::setfill('0') << std::setw(2)
-                             << static_cast<int>(b);
-    return oss.str();
+std::string toHexAddr(uint64_t addr) {
+    std::ostringstream ss;
+    ss << "0x" << std::hex << addr;
+    return ss.str();
 }
 
-static std::string archToString(Segmentator::Arch arch) {
-    switch (arch) {
-        case Segmentator::Arch::X86: return "X86";
-        case Segmentator::Arch::ARM64: return "ARM64";
-        case Segmentator::Arch::ARM: return "ARM";
-        case Segmentator::Arch::MIPS: return "MIPS";
-        case Segmentator::Arch::PPC: return "PPC";
-        case Segmentator::Arch::RISCV: return "RISCV";
-        default: return "UNKNOWN";
+std::string toHexString(const std::vector<uint8_t>& bytes) {
+    std::ostringstream ss;
+    for (auto b : bytes)
+        ss << std::hex << std::setfill('0') << std::setw(2)
+           << static_cast<int>(b);
+    return ss.str();
+}
+
+/// Build unit filename with truncation safety.
+/// The address suffix is the true unique key and is never truncated.
+std::string buildUnitFilename(std::string_view source_name,
+                              bool is_canonical,
+                              std::string_view enclosing,
+                              uint64_t addr) {
+    auto addr_str = toHexAddr(addr);
+    std::string filename = sanitize(source_name) + "__" +
+                           (is_canonical ? "canonical" : "inline") + "__" +
+                           sanitize(enclosing) + "__" +
+                           addr_str + ".unit.pb";
+
+    if (filename.size() > kMaxFilename) {
+        std::string tail = "__" + addr_str + ".unit.pb";
+        filename = filename.substr(0, kMaxFilename - tail.size()) + tail;
     }
+    return filename;
 }
 
-static std::string modeToString(Segmentator::Mode mode) {
-    auto m = static_cast<uint32_t>(mode);
-    if (m & static_cast<uint32_t>(Segmentator::Mode::MODE_64))
-        return "MODE_64";
-    if (m & static_cast<uint32_t>(Segmentator::Mode::MODE_32))
-        return "MODE_32";
-    if (m & static_cast<uint32_t>(Segmentator::Mode::MODE_16))
-        return "MODE_16";
-    return "MODE_LITTLE_ENDIAN";
-}
+// ---------------------------------------------------------------------------
+// I/O helpers
+// ---------------------------------------------------------------------------
 
-static bool writeFile(const fs::path& path,
-                      const std::vector<uint8_t>& data) {
-    std::ofstream out(path, std::ios::binary);
-    if (!out) return false;
-    out.write(reinterpret_cast<const char*>(data.data()),
-              static_cast<std::streamsize>(data.size()));
-    return out.good();
-}
-
-static bool writeFile(const fs::path& path, const std::string& data) {
+bool writeFile(const fs::path& path, std::string_view data) {
     std::ofstream out(path, std::ios::binary);
     if (!out) return false;
     out.write(data.data(), static_cast<std::streamsize>(data.size()));
     return out.good();
 }
 
-static std::string entryTypeString(
+std::string entryTypeString(
     const Segmentator::NativeSymbolTableEntry& sym) {
-    return sym.getAttribute<std::string>("entry_type", std::string(""));
+    return sym.getAttribute<std::string>("entry_type", std::string());
 }
 
-}  // namespace
+// ---------------------------------------------------------------------------
+// Context serialization
+// ---------------------------------------------------------------------------
 
-tl::expected<void, std::string> Serializer::dump(
-    const Segmentator::SegmentationResult& result,
-    const std::string& output_dir) {
-    // 1. Create output directory
-    std::error_code ec;
-    fs::create_directories(output_dir, ec);
-    if (ec) {
-        return tl::make_unexpected("failed to create output directory: " +
-                                   ec.message());
-    }
+struct ContextBlob {
+    std::string serialized;       // raw protobuf bytes
+    std::vector<uint8_t> hash;    // SHA-256
+    std::string hash_hex;
+};
 
-    const fs::path out_root(output_dir);
+tl::expected<ContextBlob, std::string>
+serializeContext(const Segmentator::CompilationContext& ctx) {
+    vmpilot::CompilationContext pb;
+    pb.set_arch(static_cast<uint32_t>(ctx.arch));
+    pb.set_mode(static_cast<uint32_t>(ctx.mode));
 
-    // 2. Serialize CompilationContext -> context.pb
-    vmpilot::CompilationContext ctx_pb;
-    ctx_pb.set_arch(static_cast<uint32_t>(result.context.arch));
-    ctx_pb.set_mode(static_cast<uint32_t>(result.context.mode));
-
-    for (const auto& sym : result.context.symbols) {
-        auto* s = ctx_pb.add_symbols();
+    for (const auto& sym : ctx.symbols) {
+        auto* s = pb.add_symbols();
         s->set_name(sym.name);
         s->set_address(sym.address);
         s->set_size(sym.size);
@@ -135,136 +133,103 @@ tl::expected<void, std::string> Serializer::dump(
         s->set_is_global(sym.isGlobal);
     }
 
-    for (const auto& sec : result.context.rodata_sections) {
-        auto* r = ctx_pb.add_rodata_sections();
+    for (const auto& sec : ctx.rodata_sections) {
+        auto* r = pb.add_rodata_sections();
         r->set_base_addr(sec.base_addr);
         r->set_data(sec.data.data(), sec.data.size());
     }
 
-    std::string ctx_serialized;
-    if (!ctx_pb.SerializeToString(&ctx_serialized)) {
+    ContextBlob blob;
+    if (!pb.SerializeToString(&blob.serialized))
         return tl::make_unexpected("failed to serialize CompilationContext");
-    }
 
-    const fs::path ctx_path = out_root / "context.pb";
-    if (!writeFile(ctx_path, ctx_serialized)) {
-        return tl::make_unexpected("failed to write context.pb");
-    }
+    std::vector<uint8_t> bytes(blob.serialized.begin(),
+                               blob.serialized.end());
+    blob.hash = VMPilot::Crypto::SHA256(bytes, /*salt=*/{});
+    blob.hash_hex = toHexString(blob.hash);
+    return blob;
+}
 
-    // 3. Compute SHA-256 of context.pb
-    std::vector<uint8_t> ctx_bytes(ctx_serialized.begin(),
-                                   ctx_serialized.end());
-    auto context_hash = VMPilot::Crypto::SHA256(ctx_bytes, /*salt=*/{});
-    std::string context_hash_hex = hexString(context_hash);
+// ---------------------------------------------------------------------------
+// Unit serialization
+// ---------------------------------------------------------------------------
 
-    // 4. Build addr -> index lookup for refined_regions
-    std::unordered_map<uint64_t, size_t> addr_to_idx;
-    for (size_t i = 0; i < result.refined_regions.size(); ++i)
-        addr_to_idx[result.refined_regions[i].getAddr()] = i;
+tl::expected<std::string, std::string>
+serializeUnit(const Segmentator::NativeFunctionBase& region,
+              std::string_view enclosing,
+              bool is_canonical,
+              const std::vector<uint8_t>& context_hash) {
+    vmpilot::CompilationUnit pb;
+    pb.set_name(region.getName());
+    pb.set_addr(region.getAddr());
+    pb.set_size(region.getSize());
+    auto code = region.getCode();
+    pb.set_code(code.data(), code.size());
+    pb.set_enclosing_symbol(std::string(enclosing));
+    pb.set_is_canonical(is_canonical);
+    pb.set_context_file("context.pb");
+    pb.set_context_hash(context_hash.data(), context_hash.size());
 
-    // 5. For each group, create directory and write units
+    std::string out;
+    if (!pb.SerializeToString(&out))
+        return tl::make_unexpected("failed to serialize CompilationUnit for " +
+                                   region.getName());
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// Manifest builder
+// ---------------------------------------------------------------------------
+
+struct UnitManifestEntry {
+    std::string file;
+    std::string addr;
+    int64_t size;
+    bool is_canonical;
+    std::string enclosing_symbol;
+};
+
+struct GroupManifestEntry {
+    std::string name;
+    std::string directory;
+    std::vector<UnitManifestEntry> units;
+};
+
+std::string buildManifest(
+    const Segmentator::SegmentationResult& result,
+    const ContextBlob& ctx_blob,
+    const std::vector<GroupManifestEntry>& groups) {
     toml::table manifest;
 
-    // Binary metadata
-    toml::table binary_tbl;
-    binary_tbl.insert("path", result.binary_path);
-    binary_tbl.insert("compiler_info", result.compiler_info);
-    manifest.insert("binary", std::move(binary_tbl));
+    manifest.insert("binary", toml::table{
+        {"path", result.binary_path},
+        {"compiler_info", result.compiler_info},
+    });
 
-    // Context metadata
-    toml::table context_tbl;
-    context_tbl.insert("file", "context.pb");
-    context_tbl.insert("sha256", context_hash_hex);
-    context_tbl.insert("arch", archToString(result.context.arch));
-    context_tbl.insert("mode", modeToString(result.context.mode));
-    manifest.insert("context", std::move(context_tbl));
+    manifest.insert("context", toml::table{
+        {"file", "context.pb"},
+        {"sha256", ctx_blob.hash_hex},
+        {"arch", std::string(Segmentator::to_string(result.context.arch))},
+        {"mode", std::string(Segmentator::to_string(result.context.mode))},
+    });
 
-    // Groups array
     toml::array groups_arr;
-
-    for (const auto& group : result.groups) {
-        std::string dir_name = sanitize(group.source_name) + ".group";
-        fs::path group_dir = out_root / dir_name;
-        fs::create_directories(group_dir, ec);
-        if (ec) {
-            return tl::make_unexpected("failed to create group directory: " +
-                                       ec.message());
-        }
-
+    for (const auto& g : groups) {
         toml::table group_tbl;
-        group_tbl.insert("name", group.source_name);
-        group_tbl.insert("directory", dir_name);
+        group_tbl.insert("name", g.name);
+        group_tbl.insert("directory", g.directory);
+
         toml::array units_arr;
-
-        for (const auto& site : group.sites) {
-            auto it = addr_to_idx.find(site.addr);
-            if (it == addr_to_idx.end()) continue;
-
-            const auto& region = result.refined_regions[it->second];
-
-            // Build filename.
-            // Format: {source}__{canonical|inline}__{enclosing}__{addr}.unit.pb
-            // The addr suffix is the true unique key and must never be truncated.
-            // Individual name components are capped by sanitize() to kMaxComponent.
-            std::string enclosing = site.enclosing_symbol.value_or("unknown");
-            std::string canon_str =
-                site.is_canonical ? "canonical" : "inline";
-            std::ostringstream unit_addr_ss;
-            unit_addr_ss << "0x" << std::hex << site.addr;
-            std::string addr_str = unit_addr_ss.str();
-
-            std::string filename = sanitize(group.source_name) + "__" +
-                                   canon_str + "__" +
-                                   sanitize(enclosing) + "__" +
-                                   addr_str + ".unit.pb";
-
-            // Final safety net: cap total filename at kMaxFilename chars.
-            // Keep the addr + suffix intact (they're at the end and short).
-            if (filename.size() > kMaxFilename) {
-                std::string tail = "__" + addr_str + ".unit.pb";
-                size_t budget = kMaxFilename - tail.size();
-                filename = filename.substr(0, budget) + tail;
-            }
-
-            // Build CompilationUnit protobuf
-            vmpilot::CompilationUnit unit_pb;
-            unit_pb.set_name(region.getName());
-            unit_pb.set_addr(region.getAddr());
-            unit_pb.set_size(region.getSize());
-            auto code = region.getCode();
-            unit_pb.set_code(code.data(), code.size());
-            unit_pb.set_enclosing_symbol(enclosing);
-            unit_pb.set_is_canonical(site.is_canonical);
-            unit_pb.set_context_file("context.pb");
-            unit_pb.set_context_hash(context_hash.data(),
-                                     context_hash.size());
-
-            std::string unit_serialized;
-            if (!unit_pb.SerializeToString(&unit_serialized)) {
-                return tl::make_unexpected(
-                    "failed to serialize CompilationUnit for " +
-                    region.getName());
-            }
-
-            fs::path unit_path = group_dir / filename;
-            if (!writeFile(unit_path, unit_serialized)) {
-                return tl::make_unexpected("failed to write " + filename);
-            }
-
-            // Add to manifest
-            toml::table unit_tbl;
-            std::string rel_path = dir_name + "/" + filename;
-            unit_tbl.insert("file", rel_path);
-            unit_tbl.insert("context_file", "context.pb");
-            unit_tbl.insert("context_hash", context_hash_hex);
-            std::ostringstream addr_ss;
-            addr_ss << "0x" << std::hex << site.addr;
-            unit_tbl.insert("addr", addr_ss.str());
-            unit_tbl.insert("size",
-                            static_cast<int64_t>(region.getSize()));
-            unit_tbl.insert("is_canonical", site.is_canonical);
-            unit_tbl.insert("enclosing_symbol", enclosing);
-            units_arr.push_back(std::move(unit_tbl));
+        for (const auto& u : g.units) {
+            units_arr.push_back(toml::table{
+                {"file", u.file},
+                {"context_file", "context.pb"},
+                {"context_hash", ctx_blob.hash_hex},
+                {"addr", u.addr},
+                {"size", u.size},
+                {"is_canonical", u.is_canonical},
+                {"enclosing_symbol", u.enclosing_symbol},
+            });
         }
 
         group_tbl.insert("units", std::move(units_arr));
@@ -273,12 +238,94 @@ tl::expected<void, std::string> Serializer::dump(
 
     manifest.insert("groups", std::move(groups_arr));
 
-    // 6. Write manifest.toml
-    std::ostringstream toml_ss;
-    toml_ss << manifest;
-    if (!writeFile(out_root / "manifest.toml", toml_ss.str())) {
-        return tl::make_unexpected("failed to write manifest.toml");
+    std::ostringstream ss;
+    ss << manifest;
+    return ss.str();
+}
+
+}  // namespace
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+tl::expected<void, std::string> Serializer::dump(
+    const Segmentator::SegmentationResult& result,
+    const std::string& output_dir) {
+
+    // 1. Create output directory
+    std::error_code ec;
+    fs::create_directories(output_dir, ec);
+    if (ec)
+        return tl::make_unexpected("failed to create output directory: " +
+                                   ec.message());
+
+    const fs::path out_root(output_dir);
+
+    // 2. Serialize context and write to disk
+    auto ctx_blob = serializeContext(result.context);
+    if (!ctx_blob)
+        return tl::make_unexpected(ctx_blob.error());
+
+    if (!writeFile(out_root / "context.pb", ctx_blob->serialized))
+        return tl::make_unexpected("failed to write context.pb");
+
+    // 3. Build addr → index lookup for refined regions
+    std::unordered_map<uint64_t, size_t> addr_to_idx;
+    for (size_t i = 0; i < result.refined_regions.size(); ++i)
+        addr_to_idx[result.refined_regions[i].getAddr()] = i;
+
+    // 4. Serialize each group's units and collect manifest entries
+    std::vector<GroupManifestEntry> manifest_groups;
+
+    for (const auto& group : result.groups) {
+        std::string dir_name = sanitize(group.source_name) + ".group";
+        fs::path group_dir = out_root / dir_name;
+        fs::create_directories(group_dir, ec);
+        if (ec)
+            return tl::make_unexpected("failed to create group directory: " +
+                                       ec.message());
+
+        GroupManifestEntry manifest_group{group.source_name, dir_name, {}};
+
+        for (const auto& site : group.sites) {
+            auto it = addr_to_idx.find(site.addr);
+            if (it == addr_to_idx.end()) continue;
+
+            const auto& region = result.refined_regions[it->second];
+            std::string enclosing =
+                site.enclosing_symbol.value_or("unknown");
+
+            // Build filename and serialize unit
+            auto filename = buildUnitFilename(group.source_name,
+                                              site.is_canonical,
+                                              enclosing, site.addr);
+
+            auto unit_bytes = serializeUnit(region, enclosing,
+                                            site.is_canonical,
+                                            ctx_blob->hash);
+            if (!unit_bytes)
+                return tl::make_unexpected(unit_bytes.error());
+
+            if (!writeFile(group_dir / filename, *unit_bytes))
+                return tl::make_unexpected("failed to write " + filename);
+
+            manifest_group.units.push_back({
+                dir_name + "/" + filename,
+                toHexAddr(site.addr),
+                static_cast<int64_t>(region.getSize()),
+                site.is_canonical,
+                enclosing,
+            });
+        }
+
+        manifest_groups.push_back(std::move(manifest_group));
     }
+
+    // 5. Write manifest
+    auto manifest_str = buildManifest(result, *ctx_blob, manifest_groups);
+    if (!writeFile(out_root / "manifest.toml", manifest_str))
+        return tl::make_unexpected("failed to write manifest.toml");
 
     return {};
 }
