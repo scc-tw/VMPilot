@@ -63,6 +63,9 @@ compile_binary(const std::string& binary_path,
                 seg_result->text_relocations,
                 unit.context ? unit.context->symbols
                              : Segmentator::NativeSymbolTable{},
+                unit.context
+                    ? unit.context->rodata_sections
+                    : std::vector<Segmentator::ReadOnlySection>{},
                 seg_result->context.arch, seg_result->context.mode);
             unit.data_references = std::move(refs);
         }

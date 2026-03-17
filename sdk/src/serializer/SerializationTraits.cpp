@@ -162,6 +162,16 @@ SerializationTraits<Core::CompilationUnit>::to_bytes(
         r->set_is_pc_relative(ref.is_pc_relative);
         r->set_atomic_width(static_cast<uint32_t>(ref.atomic_width));
         serializeRelocationEntry(r->mutable_relocation(), ref.relocation);
+
+        if (ref.jump_table.has_value()) {
+            auto* jt = r->mutable_jump_table();
+            jt->set_table_base(ref.jump_table->table_base);
+            jt->set_entry_size(ref.jump_table->entry_size);
+            jt->set_entry_count(ref.jump_table->entry_count);
+            jt->set_relative_entries(ref.jump_table->relative_entries);
+            for (uint64_t target : ref.jump_table->targets)
+                jt->add_targets(target);
+        }
     }
 
     std::string bytes;
@@ -203,6 +213,19 @@ SerializationTraits<Core::CompilationUnit>::from_bytes(
         ref.is_pc_relative = r.is_pc_relative();
         ref.atomic_width = static_cast<Core::AtomicWidth>(r.atomic_width());
         ref.relocation = deserializeRelocationEntry(r.relocation());
+
+        if (r.has_jump_table()) {
+            const auto& jt_pb = r.jump_table();
+            Core::JumpTableRef jt;
+            jt.table_base = jt_pb.table_base();
+            jt.entry_size = jt_pb.entry_size();
+            jt.entry_count = jt_pb.entry_count();
+            jt.relative_entries = jt_pb.relative_entries();
+            for (int j = 0; j < jt_pb.targets_size(); ++j)
+                jt.targets.push_back(jt_pb.targets(j));
+            ref.jump_table = std::move(jt);
+        }
+
         unit.data_references.push_back(std::move(ref));
     }
 

@@ -4,6 +4,7 @@
 
 #include <DataReference.hpp>
 #include <NativeSymbolTable.hpp>
+#include <ReadOnlySection.hpp>
 #include <SectionInfo.hpp>
 #include <capstone.hpp>
 
@@ -20,7 +21,7 @@ namespace VMPilot::SDK::ReferenceAnalyzer {
 /// Three-layer analysis:
 ///   Layer 1 (Relocation): parse .rela.text entries — most authoritative
 ///   Layer 2 (InsnAnalysis): walk instructions, resolve memory operands
-///   Layer 3 (PatternMatch): detect TLS patterns, upgrade/annotate refs
+///   Layer 3 (PatternMatch): detect TLS/jump table patterns, upgrade refs
 ///
 /// Merge: L1 wins -> L2 fills gaps -> L3 upgrades.
 std::vector<Core::DataReference> analyze(
@@ -29,6 +30,7 @@ std::vector<Core::DataReference> analyze(
     const std::vector<Core::SectionInfo>& sections,
     const std::vector<Core::RelocationEntry>& text_relocations,
     const Segmentator::NativeSymbolTable& symbols,
+    const std::vector<Segmentator::ReadOnlySection>& rodata_sections,
     Segmentator::Arch arch, Segmentator::Mode mode) noexcept;
 
 }  // namespace VMPilot::SDK::ReferenceAnalyzer
