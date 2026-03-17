@@ -1,5 +1,6 @@
 #include <segmentator.hpp>
 
+#include <CompilationContext.hpp>
 #include <file_type_parser.hpp>
 
 #include <new>
@@ -45,6 +46,21 @@ std::unique_ptr<Segmentator> VMPilot::SDK::Segmentator::create_segmentator(
                       static_cast<uint8_t>(segmentator->m_metadata.arch));
         return nullptr;
     }
+
+    // Build compilation context from file handler data
+    CompilationContext ctx;
+    ctx.symbols = segmentator->m_file_handler->getNativeSymbolTable();
+    ctx.arch = segmentator->m_metadata.arch;
+    ctx.mode = segmentator->m_metadata.mode;
+
+    auto rodata = segmentator->m_file_handler->getReadOnlyData();
+    auto rodata_base = segmentator->m_file_handler->getReadOnlyBaseAddr();
+    if (!rodata.empty() && rodata_base != static_cast<uint64_t>(-1)) {
+        ctx.rodata_sections.push_back(
+            {std::move(rodata), rodata_base});
+    }
+
+    segmentator->m_arch_handler->setCompilationContext(std::move(ctx));
 
     return segmentator;
 }

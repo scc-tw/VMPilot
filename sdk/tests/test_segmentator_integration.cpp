@@ -1,4 +1,5 @@
 #include <ARM64Handler.hpp>
+#include <CompilationContext.hpp>
 #include <ELFHandler.hpp>
 #include <MachOHandler.hpp>
 #include <PEHandler.hpp>
@@ -173,6 +174,66 @@ TEST_F(SegmentatorIntegrationWindowsX86, FullPipeline) {
         EXPECT_GT(r->getAddr(), 0u);
         EXPECT_GT(r->getSize(), 0u);
         EXPECT_EQ(r->getCode().size(), r->getSize());
+    }
+}
+
+TEST_F(SegmentatorIntegrationX64, FunctionNameExtraction) {
+    auto metadata = VMPilot::Common::get_file_metadata(binary_path);
+    ELFFileHandlerStrategy elf(binary_path);
+
+    auto text = elf.getTextSection();
+    auto base = elf.getTextBaseAddr();
+    auto symbols = elf.getNativeSymbolTable();
+
+    // Build CompilationContext with rodata
+    CompilationContext ctx;
+    ctx.symbols = elf.getNativeSymbolTable();
+    ctx.arch = metadata.arch;
+    ctx.mode = metadata.mode;
+    auto rodata = elf.getReadOnlyData();
+    auto rodata_base = elf.getReadOnlyBaseAddr();
+    if (!rodata.empty() && rodata_base != static_cast<uint64_t>(-1)) {
+        ctx.rodata_sections.push_back({std::move(rodata), rodata_base});
+    }
+
+    X86Handler x86(metadata.mode, symbols);
+    x86.setCompilationContext(std::move(ctx));
+    ASSERT_TRUE(x86.Load(text, base));
+    auto regions = x86.getNativeFunctions();
+    ASSERT_EQ(regions.size(), 2u);
+
+    // With rodata available, at least one region should have
+    // a human-readable name (not the vmpilot_region_0x... fallback)
+    bool has_named_region = false;
+    for (const auto& r : regions) {
+        if (r->getName().substr(0, 17) != "vmpilot_region_0x") {
+            has_named_region = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(has_named_region)
+        << "Expected at least one region with __FUNCTION__ name, got: "
+        << regions[0]->getName() << ", " << regions[1]->getName();
+}
+
+TEST_F(SegmentatorIntegrationX64, FunctionNameFallbackWithoutRodata) {
+    auto metadata = VMPilot::Common::get_file_metadata(binary_path);
+    ELFFileHandlerStrategy elf(binary_path);
+
+    auto text = elf.getTextSection();
+    auto base = elf.getTextBaseAddr();
+    auto symbols = elf.getNativeSymbolTable();
+
+    // No CompilationContext set → fallback naming
+    X86Handler x86(metadata.mode, symbols);
+    ASSERT_TRUE(x86.Load(text, base));
+    auto regions = x86.getNativeFunctions();
+    ASSERT_EQ(regions.size(), 2u);
+
+    // All regions should have fallback names
+    for (const auto& r : regions) {
+        EXPECT_EQ(r->getName().substr(0, 17), "vmpilot_region_0x")
+            << "Without CompilationContext, region should have fallback name";
     }
 }
 

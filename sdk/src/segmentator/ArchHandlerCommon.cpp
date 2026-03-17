@@ -1,5 +1,6 @@
 #include "ArchHandlerCommon.hpp"
 
+#include <CompilationContext.hpp>
 #include <utilities.hpp>
 
 #include <cstdio>
@@ -16,8 +17,28 @@ AddrToSymbol buildAddrLookup(const NativeSymbolTable& symbols) {
     return lookup;
 }
 
+/// Resolve the __FUNCTION__ string argument at the given call site.
+static std::string resolveStringArg(
+    size_t call_idx,
+    const std::vector<Capstone::Instruction>& instructions,
+    const CompilationContext* ctx, const ArgExtractor& arg_extractor) {
+    if (!ctx || ctx->rodata_sections.empty() || !arg_extractor)
+        return {};
+
+    uint64_t va = arg_extractor(call_idx, instructions);
+    if (va == 0)
+        return {};
+
+    for (const auto& section : ctx->rodata_sections) {
+        if (section.contains(va))
+            return section.readCString(va);
+    }
+    return {};
+}
+
 std::vector<std::unique_ptr<NativeFunctionBase>> extractNativeFunctions(
-    ArchHandlerImplBase& impl, const CallResolver& resolver) {
+    ArchHandlerImplBase& impl, const CallResolver& resolver,
+    const ArgExtractor& arg_extractor) {
     auto& native_functions = impl.native_functions;
 
     if (!native_functions.empty()) {
@@ -102,13 +123,34 @@ std::vector<std::unique_ptr<NativeFunctionBase>> extractNativeFunctions(
             code.insert(code.end(), insn.bytes.begin(), insn.bytes.end());
         }
 
-        std::string name =
-            "vmpilot_region_0x" + ([&] {
+        // Try to extract __FUNCTION__ name from Begin and End call sites
+        std::string begin_name = resolveStringArg(
+            region.begin_idx, instructions, impl.compilation_ctx,
+            arg_extractor);
+        std::string end_name = resolveStringArg(
+            region.end_idx, instructions, impl.compilation_ctx,
+            arg_extractor);
+
+        if (!begin_name.empty() && !end_name.empty() &&
+            begin_name != end_name) {
+            spdlog::warn(
+                "__FUNCTION__ mismatch: begin='{}' end='{}' at 0x{:x}",
+                begin_name, end_name, start_addr);
+        }
+
+        std::string name;
+        if (!begin_name.empty()) {
+            name = std::move(begin_name);
+        } else if (!end_name.empty()) {
+            name = std::move(end_name);
+        } else {
+            name = "vmpilot_region_0x" + ([&] {
                 char buf[17];
                 snprintf(buf, sizeof(buf), "%llx",
                          static_cast<unsigned long long>(start_addr));
                 return std::string(buf);
             })();
+        }
 
         auto nf = std::make_unique<NativeFunctionBase>(
             start_addr, size, std::move(name), std::move(code));

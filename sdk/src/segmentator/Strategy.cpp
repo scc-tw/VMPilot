@@ -100,6 +100,14 @@ ArchHandlerStrategy::ArchHandlerStrategy()
 ArchHandlerStrategy::ArchHandlerStrategy(Arch arch, Mode mode)
     : m_arch(arch), m_mode(mode) {}
 
+void ArchHandlerStrategy::setCompilationContext(CompilationContext ctx) {
+    m_compilation_ctx = std::move(ctx);
+}
+
+const CompilationContext& ArchHandlerStrategy::getCompilationContext() const {
+    return m_compilation_ctx;
+}
+
 bool ArchHandlerStrategy::doLoad(const std::vector<uint8_t>& code,
                                  const uint64_t base_addr) {
     spdlog::error(

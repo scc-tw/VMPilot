@@ -3,6 +3,7 @@
 #pragma once
 
 #include <ArchEnum.hpp>
+#include <CompilationContext.hpp>
 #include <ModeEnum.hpp>
 #include <NativeFunctionBase.hpp>
 #include <NativeSymbolTable.hpp>
@@ -71,6 +72,7 @@ class ArchHandlerStrategy {
    protected:
     Arch m_arch;
     Mode m_mode;
+    CompilationContext m_compilation_ctx;
 
     virtual bool doLoad(const std::vector<uint8_t>& code,
                         const uint64_t base_addr);
@@ -81,6 +83,9 @@ class ArchHandlerStrategy {
     virtual ~ArchHandlerStrategy() = default;
     ArchHandlerStrategy();
     ArchHandlerStrategy(Arch arch, Mode mode);
+
+    void setCompilationContext(CompilationContext ctx);
+    const CompilationContext& getCompilationContext() const;
 
     [[nodiscard]] bool Load(const std::vector<uint8_t>& code,
                             const uint64_t base_addr);

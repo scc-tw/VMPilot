@@ -2,6 +2,8 @@ set(TARGET_NAME capstone_wrapper)
 
 set(SRC_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/capstone.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/x86.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/arm64.cpp
 )
 
 set(INCLUDE_DIRS
