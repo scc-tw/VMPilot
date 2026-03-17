@@ -19,14 +19,39 @@ using namespace VMPilot::SDK;
 
 namespace {
 
-static std::string sanitize(const std::string& input) {
+/// Max length for a single sanitized name component.
+/// Kept short so that directory + filename stay under both
+/// Windows MAX_PATH (260) and Linux NAME_MAX (255).
+/// Budget: output_dir (~70) + "/" + dir (~66) + "/" + filename (~120) < 260.
+static constexpr size_t kMaxComponent = 60;
+static constexpr size_t kMaxFilename = 120;
+
+/// Replace filesystem-unsafe characters and truncate.
+/// When truncation occurs, append a short hash of the original
+/// to preserve uniqueness (e.g. nested-template names that share
+/// a long common prefix).
+static std::string sanitize(const std::string& input,
+                            size_t max_len = kMaxComponent) {
     std::string result = input;
     for (char& c : result) {
         if (c == '?' || c == '<' || c == '>' || c == ':' || c == '"' ||
             c == '|' || c == '*' || c == '\\' || c == '/')
             c = '_';
     }
-    if (result.size() > 200) result.resize(200);
+    if (result.size() > max_len) {
+        // Hash the full original so truncated names stay unique.
+        // Use a simple FNV-1a 32-bit hash — no crypto needed here.
+        uint32_t h = 0x811c9dc5u;
+        for (unsigned char c : input) {
+            h ^= c;
+            h *= 0x01000193u;
+        }
+        char suffix[10];
+        std::snprintf(suffix, sizeof(suffix), "_%08x", h);
+        // Reserve room for the hash suffix (9 chars: _ + 8 hex)
+        result.resize(max_len - 9);
+        result += suffix;
+    }
     return result;
 }
 
@@ -177,18 +202,28 @@ tl::expected<void, std::string> Serializer::dump(
 
             const auto& region = result.refined_regions[it->second];
 
-            // Build filename
+            // Build filename.
+            // Format: {source}__{canonical|inline}__{enclosing}__{addr}.unit.pb
+            // The addr suffix is the true unique key and must never be truncated.
+            // Individual name components are capped by sanitize() to kMaxComponent.
             std::string enclosing = site.enclosing_symbol.value_or("unknown");
             std::string canon_str =
                 site.is_canonical ? "canonical" : "inline";
-            std::ostringstream fname_ss;
-            fname_ss << sanitize(group.source_name) << "__" << canon_str
-                     << "__" << sanitize(enclosing) << "__0x" << std::hex
-                     << site.addr << ".unit.pb";
-            std::string filename = fname_ss.str();
-            if (filename.size() > 200 + 8) {
-                // Cap base name at 200, keep .unit.pb suffix
-                filename = filename.substr(0, 200) + ".unit.pb";
+            std::ostringstream unit_addr_ss;
+            unit_addr_ss << "0x" << std::hex << site.addr;
+            std::string addr_str = unit_addr_ss.str();
+
+            std::string filename = sanitize(group.source_name) + "__" +
+                                   canon_str + "__" +
+                                   sanitize(enclosing) + "__" +
+                                   addr_str + ".unit.pb";
+
+            // Final safety net: cap total filename at kMaxFilename chars.
+            // Keep the addr + suffix intact (they're at the end and short).
+            if (filename.size() > kMaxFilename) {
+                std::string tail = "__" + addr_str + ".unit.pb";
+                size_t budget = kMaxFilename - tail.size();
+                filename = filename.substr(0, budget) + tail;
             }
 
             // Build CompilationUnit protobuf
