@@ -1,8 +1,8 @@
 #include <X86Handler.hpp>
 
-#include "ArchHandlerCommon.hpp"
-#include "RegValueResolver.hpp"
-#include "X86Traits.hpp"
+#include <ArchHandlerCommon.hpp>
+#include <RegValueResolver.hpp>
+#include <X86Traits.hpp>
 
 #include <x86.hpp>
 

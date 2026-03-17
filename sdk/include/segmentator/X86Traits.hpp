@@ -2,8 +2,8 @@
 #define __SDK_X86_TRAITS_HPP__
 #pragma once
 
-#include "ArchHandlerCommon.hpp"
-#include "RegValueResolver.hpp"
+#include <ArchHandlerCommon.hpp>
+#include <RegValueResolver.hpp>
 
 #include <x86.hpp>
 
