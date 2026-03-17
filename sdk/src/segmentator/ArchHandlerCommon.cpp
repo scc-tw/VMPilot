@@ -3,6 +3,7 @@
 #include <CompilationContext.hpp>
 #include <utilities.hpp>
 
+#include <algorithm>
 #include <cstdio>
 
 #include <spdlog/spdlog.h>
@@ -36,6 +37,67 @@ static std::string resolveStringArg(
     return {};
 }
 
+std::optional<std::string> findEnclosingSymbol(uint64_t addr,
+                                               ArchHandlerImplBase& impl) {
+    if (!impl.compilation_ctx)
+        return std::nullopt;
+
+    const auto& symbols = impl.compilation_ctx->symbols;
+
+    // Build sorted index on first call
+    if (!impl.func_symbols_built) {
+        for (size_t i = 0; i < symbols.size(); ++i) {
+            const auto& sym = symbols[i];
+            if (sym.type != SymbolType::FUNC)
+                continue;
+            // Exclude stubs (PLT/IAT) — they aren't real function bodies
+            if (sym.getAttribute<std::string>("entry_type", "") == "stub")
+                continue;
+            impl.sorted_func_indices.push_back(i);
+        }
+        std::sort(impl.sorted_func_indices.begin(),
+                  impl.sorted_func_indices.end(),
+                  [&symbols](size_t a, size_t b) {
+                      return symbols[a].address < symbols[b].address;
+                  });
+        impl.func_symbols_built = true;
+    }
+
+    const auto& idx = impl.sorted_func_indices;
+    if (idx.empty())
+        return std::nullopt;
+
+    // upper_bound finds first index whose symbol address > addr
+    auto it = std::upper_bound(
+        idx.begin(), idx.end(), addr,
+        [&symbols](uint64_t a, size_t i) {
+            return a < symbols[i].address;
+        });
+
+    if (it == idx.begin())
+        return std::nullopt;
+
+    --it;  // candidate: largest address <= addr
+    const auto& candidate = symbols[*it];
+
+    if (candidate.size > 0) {
+        // ELF: symbol has known size — check containment
+        if (addr >= candidate.address &&
+            addr < candidate.address + candidate.size)
+            return candidate.name;
+    } else {
+        // Mach-O (size == 0): use nearest-next-symbol heuristic
+        auto next = it + 1;
+        uint64_t upper = (next != idx.end())
+                             ? symbols[*next].address
+                             : static_cast<uint64_t>(-1);
+        if (addr >= candidate.address && addr < upper)
+            return candidate.name;
+    }
+
+    return std::nullopt;
+}
+
 std::vector<std::unique_ptr<NativeFunctionBase>> extractNativeFunctions(
     ArchHandlerImplBase& impl, const CallResolver& resolver,
     const ArgExtractor& arg_extractor) {
@@ -45,10 +107,8 @@ std::vector<std::unique_ptr<NativeFunctionBase>> extractNativeFunctions(
         // Return cached copy
         std::vector<std::unique_ptr<NativeFunctionBase>> result;
         result.reserve(native_functions.size());
-        for (const auto& nf : native_functions) {
-            result.push_back(std::make_unique<NativeFunctionBase>(
-                nf->getAddr(), nf->getSize(), nf->getName(), nf->getCode()));
-        }
+        for (const auto& nf : native_functions)
+            result.push_back(std::make_unique<NativeFunctionBase>(*nf));
         return result;
     }
 
@@ -155,6 +215,9 @@ std::vector<std::unique_ptr<NativeFunctionBase>> extractNativeFunctions(
         auto nf = std::make_unique<NativeFunctionBase>(
             start_addr, size, std::move(name), std::move(code));
 
+        if (auto enclosing = findEnclosingSymbol(start_addr, impl))
+            nf->setEnclosingSymbol(std::move(*enclosing));
+
         if (!nf->isValid()) {
             spdlog::error(
                 "Skipping invalid region at 0x{:x}: "
@@ -171,10 +234,8 @@ std::vector<std::unique_ptr<NativeFunctionBase>> extractNativeFunctions(
     // Return a copy
     std::vector<std::unique_ptr<NativeFunctionBase>> result;
     result.reserve(native_functions.size());
-    for (const auto& nf : native_functions) {
-        result.push_back(std::make_unique<NativeFunctionBase>(
-            nf->getAddr(), nf->getSize(), nf->getName(), nf->getCode()));
-    }
+    for (const auto& nf : native_functions)
+        result.push_back(std::make_unique<NativeFunctionBase>(*nf));
     return result;
 }
 

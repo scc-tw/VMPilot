@@ -86,6 +86,11 @@ bool isReadOnlyOp(const Instruction& insn);
 /// first (destination) operand.
 bool writesToReg(const Instruction& insn, unsigned reg);
 
+/// True if `name` is a PIC thunk (e.g., __x86.get_pc_thunk.bx) that
+/// targets the given register.  Used to resolve x86-32 GOT-relative
+/// addressing through `call thunk; add reg, imm` patterns.
+bool isPcThunkForReg(const std::string& name, unsigned reg);
+
 }  // namespace Capstone::X86
 
 #endif  // __CAPSTONE_WRAPPER_X86_HPP__

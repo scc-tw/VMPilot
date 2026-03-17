@@ -37,6 +37,9 @@ target_link_libraries(test_x86_handler GTest::gtest_main VMPilot_SDK_Segmentator
 add_executable(test_region_refiner test_region_refiner.cpp)
 target_link_libraries(test_region_refiner GTest::gtest_main VMPilot_SDK_RegionRefiner)
 
+add_executable(test_region_grouping test_region_grouping.cpp)
+target_link_libraries(test_region_grouping GTest::gtest_main VMPilot_SDK_RegionRefiner)
+
 add_executable(test_strategy test_strategy.cpp)
 target_link_libraries(test_strategy GTest::gtest_main VMPilot_SDK_Segmentator capstone_wrapper opcode_table)
 
@@ -70,6 +73,7 @@ gtest_discover_tests(test_capstone_wrapper)
 gtest_discover_tests(test_elf_handler)
 gtest_discover_tests(test_x86_handler)
 gtest_discover_tests(test_region_refiner)
+gtest_discover_tests(test_region_grouping)
 gtest_discover_tests(test_strategy)
 gtest_discover_tests(test_bytecode_compiler)
 gtest_discover_tests(test_macho_handler)

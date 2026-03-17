@@ -190,11 +190,7 @@ TEST_F(SegmentatorIntegrationX64, FunctionNameExtraction) {
     ctx.symbols = elf.getNativeSymbolTable();
     ctx.arch = metadata.arch;
     ctx.mode = metadata.mode;
-    auto rodata = elf.getReadOnlyData();
-    auto rodata_base = elf.getReadOnlyBaseAddr();
-    if (!rodata.empty() && rodata_base != static_cast<uint64_t>(-1)) {
-        ctx.rodata_sections.push_back({std::move(rodata), rodata_base});
-    }
+    ctx.rodata_sections = elf.getReadOnlySections();
 
     X86Handler x86(metadata.mode, symbols);
     x86.setCompilationContext(std::move(ctx));

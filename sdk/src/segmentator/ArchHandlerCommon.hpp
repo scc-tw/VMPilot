@@ -44,9 +44,20 @@ struct ArchHandlerImplBase {
     std::vector<std::unique_ptr<NativeFunctionBase>> native_functions;
     const CompilationContext* compilation_ctx = nullptr;  // non-owning
 
+    /// Indices into compilation_ctx->symbols, sorted by address.
+    /// Only FUNC symbols (excluding stubs) are included.
+    /// Built lazily on first call to findEnclosingSymbol().
+    std::vector<size_t> sorted_func_indices;
+    bool func_symbols_built = false;
+
     ArchHandlerImplBase(Capstone::Capstone&& cs, AddrToSymbol&& lookup)
         : cs(std::move(cs)), addr_lookup(std::move(lookup)) {}
 };
+
+/// Find the function symbol that encloses the given address.
+/// Returns the mangled symbol name, or nullopt if not found.
+std::optional<std::string> findEnclosingSymbol(uint64_t addr,
+                                               ArchHandlerImplBase& impl);
 
 /// Extract protected regions from disassembled instructions using the
 /// given call resolver. Results are cached in impl->native_functions.

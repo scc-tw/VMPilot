@@ -197,30 +197,24 @@ uint64_t PEFileHandlerStrategy::doGetTextBaseAddr() noexcept {
     return static_cast<uint64_t>(-1);
 }
 
-std::vector<uint8_t> PEFileHandlerStrategy::doGetReadOnlyData() noexcept {
+std::vector<ReadOnlySection>
+PEFileHandlerStrategy::doGetReadOnlySections() noexcept {
+    std::vector<ReadOnlySection> result;
     auto& sections = pImpl->reader.get_sections();
     for (size_t i = 0; i < sections.get_count(); ++i) {
         auto* sec = sections[i];
         if (sec->get_name() == ".rdata") {
             auto size = sec->get_data_size();
             const char* data = sec->get_data();
-            if (!data || size == 0)
-                return {};
-            return std::vector<uint8_t>(data, data + size);
+            if (data && size > 0) {
+                result.push_back(
+                    {std::vector<uint8_t>(data, data + size),
+                     pImpl->image_base + sec->get_virtual_address()});
+            }
+            break;
         }
     }
-    return {};
-}
-
-uint64_t PEFileHandlerStrategy::doGetReadOnlyBaseAddr() noexcept {
-    auto& sections = pImpl->reader.get_sections();
-    for (size_t i = 0; i < sections.get_count(); ++i) {
-        auto* sec = sections[i];
-        if (sec->get_name() == ".rdata") {
-            return pImpl->image_base + sec->get_virtual_address();
-        }
-    }
-    return static_cast<uint64_t>(-1);
+    return result;
 }
 
 NativeSymbolTable PEFileHandlerStrategy::doGetSymbols() noexcept {

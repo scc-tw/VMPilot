@@ -5,6 +5,8 @@
 #include <capstone.hpp>
 
 #include <cstdint>
+#include <functional>
+#include <optional>
 #include <variant>
 #include <vector>
 
@@ -42,6 +44,12 @@ overloaded(Ts...) -> overloaded<Ts...>;
 
 inline constexpr int kMaxResolveDepth = 5;
 
+/// Optional callback: given a CALL instruction and the register being
+/// resolved, return the value the call sets the register to.
+/// Used for patterns like x86-32 PIC thunks (__x86.get_pc_thunk.bx).
+using CallValueResolver = std::function<std::optional<uint64_t>(
+    const Capstone::Instruction& call_insn, unsigned reg)>;
+
 // ---------------------------------------------------------------------------
 // Generic backward constant propagation resolver.
 //
@@ -57,7 +65,8 @@ inline constexpr int kMaxResolveDepth = 5;
 template <typename Traits>
 uint64_t resolveRegValue(unsigned reg, size_t from_idx,
                          const std::vector<Capstone::Instruction>& insns,
-                         size_t min_idx, int depth = 0) {
+                         size_t min_idx, int depth = 0,
+                         const CallValueResolver& call_resolver = nullptr) {
     if (depth >= kMaxResolveDepth || from_idx >= insns.size())
         return 0;
 
@@ -68,6 +77,13 @@ uint64_t resolveRegValue(unsigned reg, size_t from_idx,
         if (insn.isCall() || insn.isRet()) {
             if (!Traits::isCalleeSaved(reg))
                 return 0;
+            // Check if this call is known to set our register
+            // (e.g., __x86.get_pc_thunk.bx sets ebx to return addr)
+            if (insn.isCall() && call_resolver) {
+                auto val = call_resolver(insn, reg);
+                if (val)
+                    return *val;
+            }
             continue;
         }
 
@@ -82,12 +98,14 @@ uint64_t resolveRegValue(unsigned reg, size_t from_idx,
                 [&](RegisterForward rf) -> uint64_t {
                     return resolveRegValue<Traits>(rf.src_reg,
                                                    i > 0 ? i - 1 : 0, insns,
-                                                   min_idx, depth + 1);
+                                                   min_idx, depth + 1,
+                                                   call_resolver);
                 },
                 [&](ArithmeticAdjust aa) -> uint64_t {
                     size_t prev = i > 0 ? i - 1 : 0;
                     uint64_t base = resolveRegValue<Traits>(
-                        aa.src_reg, prev, insns, min_idx, depth + 1);
+                        aa.src_reg, prev, insns, min_idx, depth + 1,
+                        call_resolver);
                     if (base != 0)
                         return static_cast<uint64_t>(
                             static_cast<int64_t>(base) + aa.offset);

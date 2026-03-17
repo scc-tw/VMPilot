@@ -72,30 +72,19 @@ uint64_t ELFFileHandlerStrategy::doGetTextBaseAddr() noexcept {
     return pImpl->text_base_addr;
 }
 
-std::vector<uint8_t> ELFFileHandlerStrategy::doGetReadOnlyData() noexcept {
+std::vector<ReadOnlySection>
+ELFFileHandlerStrategy::doGetReadOnlySections() noexcept {
+    std::vector<ReadOnlySection> sections;
     const auto it = pImpl->section_table.find(".rodata");
-    if (it == pImpl->section_table.end()) {
-        return {};
-    }
+    if (it == pImpl->section_table.end())
+        return sections;
     auto section = it->second.getSection();
-    if (!section || section->get_size() == 0) {
-        return {};
-    }
+    if (!section || section->get_size() == 0)
+        return sections;
     std::vector<uint8_t> data(section->get_size());
     std::memcpy(data.data(), section->get_data(), section->get_size());
-    return data;
-}
-
-uint64_t ELFFileHandlerStrategy::doGetReadOnlyBaseAddr() noexcept {
-    const auto it = pImpl->section_table.find(".rodata");
-    if (it == pImpl->section_table.end()) {
-        return static_cast<uint64_t>(-1);
-    }
-    auto section = it->second.getSection();
-    if (!section) {
-        return static_cast<uint64_t>(-1);
-    }
-    return section->get_address();
+    sections.push_back({std::move(data), section->get_address()});
+    return sections;
 }
 
 std::unordered_map<uint64_t, ELFFileHandlerStrategy::RelaInfo>

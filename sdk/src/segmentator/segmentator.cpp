@@ -53,12 +53,7 @@ std::unique_ptr<Segmentator> VMPilot::SDK::Segmentator::create_segmentator(
     ctx.arch = segmentator->m_metadata.arch;
     ctx.mode = segmentator->m_metadata.mode;
 
-    auto rodata = segmentator->m_file_handler->getReadOnlyData();
-    auto rodata_base = segmentator->m_file_handler->getReadOnlyBaseAddr();
-    if (!rodata.empty() && rodata_base != static_cast<uint64_t>(-1)) {
-        ctx.rodata_sections.push_back(
-            {std::move(rodata), rodata_base});
-    }
+    ctx.rodata_sections = segmentator->m_file_handler->getReadOnlySections();
 
     segmentator->m_arch_handler->setCompilationContext(std::move(ctx));
 

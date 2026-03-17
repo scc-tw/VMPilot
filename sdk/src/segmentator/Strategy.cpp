@@ -19,12 +19,9 @@ uint64_t FileHandlerStrategy::doGetTextBaseAddr() noexcept {
     return static_cast<uint64_t>(-1);
 }
 
-std::vector<uint8_t> FileHandlerStrategy::doGetReadOnlyData() noexcept {
+std::vector<ReadOnlySection>
+FileHandlerStrategy::doGetReadOnlySections() noexcept {
     return {};
-}
-
-uint64_t FileHandlerStrategy::doGetReadOnlyBaseAddr() noexcept {
-    return static_cast<uint64_t>(-1);
 }
 
 NativeSymbolTable FileHandlerStrategy::doGetSymbols() noexcept {
@@ -52,12 +49,8 @@ uint64_t FileHandlerStrategy::getTextBaseAddr() {
     return doGetTextBaseAddr();
 }
 
-std::vector<uint8_t> FileHandlerStrategy::getReadOnlyData() {
-    return doGetReadOnlyData();
-}
-
-uint64_t FileHandlerStrategy::getReadOnlyBaseAddr() {
-    return doGetReadOnlyBaseAddr();
+std::vector<ReadOnlySection> FileHandlerStrategy::getReadOnlySections() {
+    return doGetReadOnlySections();
 }
 
 NativeSymbolTable FileHandlerStrategy::getNativeSymbolTable() {
