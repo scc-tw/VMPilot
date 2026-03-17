@@ -89,31 +89,62 @@ NOINLINE int data_ref_showcase(int sel) {
 
 /// Showcase: jump table from switch statement.
 ///
-/// With -O2 and 8+ dense cases, GCC/Clang/MSVC emit a jump table
-/// in .rodata with relative (x86-64/ARM64) or absolute (x86-32) offsets.
+/// 64 dense cases — forces all compilers to emit a jump table.
+/// Each case writes to a volatile global to prevent merging.
+static volatile int g_jt_sink;
+
+#define JT_CASE(N, EXPR) case N: g_jt_sink = (EXPR); result = g_jt_sink; break
+
 NOINLINE int jump_table_showcase(int op) {
     VMPilot_Begin(__FUNCTION__);
 
+    int c = g_counter;
     int result;
     switch (op) {
-        case 0: result = g_counter * 2;     break;
-        case 1: result = g_counter + 10;    break;
-        case 2: result = g_counter - 5;     break;
-        case 3: result = g_counter ^ 0xFF;  break;
-        case 4: result = g_counter << 2;    break;
-        case 5: result = g_counter >> 1;    break;
-        case 6: result = g_counter & 0xF0;  break;
-        case 7: result = g_counter | 0x0F;  break;
-        default: result = -1;               break;
+        JT_CASE(0,  c * 2);       JT_CASE(1,  c + 10);
+        JT_CASE(2,  c - 5);       JT_CASE(3,  c ^ 0xFF);
+        JT_CASE(4,  c << 2);      JT_CASE(5,  c >> 1);
+        JT_CASE(6,  c & 0xF0);    JT_CASE(7,  c | 0x0F);
+        JT_CASE(8,  c * 3);       JT_CASE(9,  c - 20);
+        JT_CASE(10, c ^ 0xAA);    JT_CASE(11, c << 3);
+        JT_CASE(12, c * 5);       JT_CASE(13, c + 99);
+        JT_CASE(14, c & 0x7F);    JT_CASE(15, c | 0xF0);
+        JT_CASE(16, c * 7);       JT_CASE(17, c - 42);
+        JT_CASE(18, c ^ 0x55);    JT_CASE(19, c << 1);
+        JT_CASE(20, c >> 2);      JT_CASE(21, c & 0xCC);
+        JT_CASE(22, c | 0x33);    JT_CASE(23, c * 11);
+        JT_CASE(24, c + 200);     JT_CASE(25, c - 100);
+        JT_CASE(26, c ^ 0xFF00);  JT_CASE(27, c << 4);
+        JT_CASE(28, c >> 3);      JT_CASE(29, c & 0x0F);
+        JT_CASE(30, c | 0xFF);    JT_CASE(31, c * 13);
+        JT_CASE(32, c + 1);       JT_CASE(33, c - 1);
+        JT_CASE(34, c ^ 1);       JT_CASE(35, c << 5);
+        JT_CASE(36, c >> 4);      JT_CASE(37, c & 0xAA);
+        JT_CASE(38, c | 0x55);    JT_CASE(39, c * 17);
+        JT_CASE(40, c + 500);     JT_CASE(41, c - 250);
+        JT_CASE(42, c ^ 0xDEAD);  JT_CASE(43, c << 6);
+        JT_CASE(44, c >> 5);      JT_CASE(45, c & 0xF00F);
+        JT_CASE(46, c | 0x0FF0);  JT_CASE(47, c * 19);
+        JT_CASE(48, c + 1000);    JT_CASE(49, c - 500);
+        JT_CASE(50, c ^ 0xBEEF);  JT_CASE(51, c << 7);
+        JT_CASE(52, c >> 6);      JT_CASE(53, c & 0x8000);
+        JT_CASE(54, c | 0x1234);  JT_CASE(55, c * 23);
+        JT_CASE(56, c + 2000);    JT_CASE(57, c - 999);
+        JT_CASE(58, c ^ 0xCAFE);  JT_CASE(59, c << 8);
+        JT_CASE(60, c >> 7);      JT_CASE(61, c & 0xFFFF);
+        JT_CASE(62, c | 0x5678);  JT_CASE(63, c * 29);
+        default: result = -1; break;
     }
 
     VMPilot_End(__FUNCTION__);
     return result;
 }
 
+#undef JT_CASE
+
 int main() {
     int r1 = data_ref_showcase(3);
-    int r2 = jump_table_showcase(r1 % 8);
+    int r2 = jump_table_showcase(r1 % 64);
     printf("%d %d\n", r1, r2);
     return 0;
 }
