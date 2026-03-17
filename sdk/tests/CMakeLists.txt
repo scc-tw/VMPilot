@@ -16,9 +16,12 @@ set(INCLUDE_DIRS
 
 include_directories(${INCLUDE_DIRS})
 
-# Pass test data path as compile definition
+# Pass test data paths as compile definitions
 add_compile_definitions(
     TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data/basic/bin"
+    TEST_DATA_MULTI_REGION="${CMAKE_SOURCE_DIR}/data/multi_region/bin"
+    TEST_DATA_INLINE_HEAVY="${CMAKE_SOURCE_DIR}/data/inline_heavy/bin"
+    TEST_DATA_NESTED_PROTECT="${CMAKE_SOURCE_DIR}/data/nested_protect/bin"
 )
 
 # --- Test targets ---
@@ -156,3 +159,17 @@ gtest_discover_tests(test_compiler_backend)
 gtest_discover_tests(test_compilation_orchestrator)
 gtest_discover_tests(test_compile_pipeline)
 gtest_discover_tests(test_reference_analyzer)
+
+add_executable(test_integration_pipeline test_integration_pipeline.cpp)
+if (MSVC)
+    target_compile_options(test_integration_pipeline PRIVATE /WX-)
+endif()
+target_include_directories(test_integration_pipeline PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/serializer
+)
+target_link_libraries(test_integration_pipeline
+    GTest::gtest_main
+    VMPilot_SDK_LIB
+    opcode_table
+)
+gtest_discover_tests(test_integration_pipeline)
