@@ -379,8 +379,23 @@ void analyzeX86Insns(
                 target_va = insn.address + insn.size + op.mem.disp;
                 resolved = true;
             }
-            // Register-indirect: try to resolve base register
+            // Register-indirect (no index): try to resolve base register
             else if (op.mem.base != 0 && op.mem.index == 0) {
+                size_t from = idx > 0 ? idx - 1 : 0;
+                uint64_t base_val =
+                    Segmentator::resolveRegValue<Segmentator::X86ArchTraits>(
+                        op.mem.base, from, insns, 0);
+                if (base_val != 0) {
+                    target_va = base_val + op.mem.disp;
+                    resolved = true;
+                }
+            }
+            // Scaled-index with base: [base + index*scale + disp]
+            // Resolve base to get the array/table base address.
+            // The index selects an element at runtime — we use
+            // base_val + disp (element 0) for section classification.
+            else if (op.mem.base != 0 && op.mem.index != 0 &&
+                     !isStackReg(op.mem.index)) {
                 size_t from = idx > 0 ? idx - 1 : 0;
                 uint64_t base_val =
                     Segmentator::resolveRegValue<Segmentator::X86ArchTraits>(
