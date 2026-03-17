@@ -29,6 +29,14 @@ message RelocationEntry {
   string symbol_name = 5;
 }
 
+message JumpTableRef {
+  uint64 table_base = 1;
+  uint32 entry_size = 2;
+  uint32 entry_count = 3;
+  bool relative_entries = 4;
+  repeated uint64 targets = 5;
+}
+
 message DataReference {
   uint64 insn_offset = 1;
   uint64 target_va = 2;
@@ -41,6 +49,7 @@ message DataReference {
   bool is_pc_relative = 9;
   uint32 atomic_width = 10;
   RelocationEntry relocation = 11;
+  JumpTableRef jump_table = 12;
 }
 
 message CompilationContext {

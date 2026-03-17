@@ -49,6 +49,12 @@ std::vector<Core::DataReference> mergeResults(
                 it->second.tls_model == Core::TlsModel::None) {
                 it->second.tls_model = ref.tls_model;
             }
+            // Upgrade: if L3 identifies JumpTable, upgrade ReadOnlyData
+            if (ref.kind == Core::DataRefKind::JumpTable &&
+                it->second.kind == Core::DataRefKind::ReadOnlyData) {
+                it->second.kind = Core::DataRefKind::JumpTable;
+                it->second.jump_table = std::move(ref.jump_table);
+            }
         } else {
             merged[ref.insn_offset] = std::move(ref);
         }
@@ -77,6 +83,7 @@ std::vector<Core::DataReference> analyze(
     const std::vector<Core::SectionInfo>& sections,
     const std::vector<Core::RelocationEntry>& text_relocations,
     const Segmentator::NativeSymbolTable& symbols,
+    const std::vector<Segmentator::ReadOnlySection>& rodata_sections,
     Segmentator::Arch arch, Segmentator::Mode mode) noexcept {
     SectionLookup lookup(sections);
 
@@ -88,9 +95,9 @@ std::vector<Core::DataReference> analyze(
     auto l2 = analyzeInstructions(insns, region_addr, region_size, lookup,
                                    symbols, arch, mode);
 
-    // Layer 3: Pattern detection
-    auto l3 = analyzePatterns(insns, region_addr, region_size, symbols, arch,
-                               mode);
+    // Layer 3: Pattern detection (TLS + jump tables)
+    auto l3 = analyzePatterns(insns, region_addr, region_size, symbols, lookup,
+                               rodata_sections, arch, mode);
 
     // Merge: L1 wins -> L2 fills -> L3 upgrades
     return mergeResults(std::move(l1), std::move(l2), std::move(l3));
