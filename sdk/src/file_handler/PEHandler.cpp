@@ -276,6 +276,15 @@ std::vector<CallTarget> PEFileHandlerStrategy::doGetStubCallTargets() noexcept {
     return targets;
 }
 
+std::string PEFileHandlerStrategy::doGetCompilerInfo() noexcept {
+    auto* opt_hdr = pImpl->reader.get_optional_header();
+    if (!opt_hdr) return {};
+    uint8_t major = opt_hdr->get_major_linker_version();
+    uint8_t minor = opt_hdr->get_minor_linker_version();
+    return "MSVC Linker " + std::to_string(major) + "." +
+           std::to_string(minor);
+}
+
 std::vector<CallTarget>
 PEFileHandlerStrategy::doGetPointerTableTargets() noexcept {
     parseImports();

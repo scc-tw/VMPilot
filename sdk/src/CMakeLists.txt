@@ -12,6 +12,36 @@ CPMAddPackage(
 
 CPMAddPackage("gh:gabime/spdlog@1.17.0")
 
+CPMAddPackage(
+    NAME tomlplusplus
+    GITHUB_REPOSITORY "marzer/tomlplusplus"
+    GIT_TAG "v3.4.0"
+)
+
+# Build protobuf from submodule.
+# Save and strip warnings-as-errors so third-party C code compiles cleanly.
+set(_saved_c_flags "${CMAKE_C_FLAGS}")
+set(_saved_cxx_flags "${CMAKE_CXX_FLAGS}")
+string(REPLACE "/WX" "" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+string(REPLACE "/WX" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+string(REPLACE "-Werror" "" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+string(REPLACE "-Werror" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+
+set(protobuf_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(protobuf_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(protobuf_INSTALL OFF CACHE BOOL "" FORCE)
+set(protobuf_BUILD_PROTOC_BINARIES ON CACHE BOOL "" FORCE)
+set(protobuf_WITH_ZLIB OFF CACHE BOOL "" FORCE)
+set(protobuf_MSVC_STATIC_RUNTIME OFF CACHE BOOL "" FORCE)
+set(protobuf_ABSL_PROVIDER "module" CACHE STRING "" FORCE)
+add_subdirectory(${CMAKE_SOURCE_DIR}/third_party/protobuf
+                 ${CMAKE_BINARY_DIR}/third_party/protobuf
+                 EXCLUDE_FROM_ALL)
+
+# Restore original flags
+set(CMAKE_C_FLAGS "${_saved_c_flags}")
+set(CMAKE_CXX_FLAGS "${_saved_cxx_flags}")
+
 # Build capstone from submodule
 set(CAPSTONE_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(CAPSTONE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -42,9 +72,11 @@ add_library(${TARGET_NAME} STATIC ${SRC_FILE})
 add_subdirectory(bytecode_compiler)
 add_subdirectory(segmentator)
 add_subdirectory(region_refiner)
+add_subdirectory(serializer)
 set (LIBS ${LIBS}
     VMPilot_SDK_Bytecode_Compiler
     VMPilot_SDK_RegionRefiner
+    VMPilot_SDK_Serializer
     capstone_wrapper
 )
 

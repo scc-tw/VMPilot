@@ -2,6 +2,7 @@
 #define __SDK_SEGMENTATOR_HPP__
 
 #include <CompilationContext.hpp>
+#include <NativeFunctionBase.hpp>
 #include <RegionRefiner.hpp>
 
 #include <tl/expected.hpp>
@@ -27,7 +28,10 @@ const char* to_string(SegmentError e) noexcept;
 /// Result of the full segmentation pipeline.
 struct SegmentationResult {
     std::vector<RegionRefiner::ProtectedRegion> groups;
+    std::vector<NativeFunctionBase> refined_regions;
     CompilationContext context;
+    std::string binary_path;
+    std::string compiler_info;
 };
 
 /// Run the complete segmentation pipeline on a binary file.

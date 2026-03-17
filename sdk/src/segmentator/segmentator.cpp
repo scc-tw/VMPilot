@@ -110,6 +110,9 @@ VMPilot::SDK::Segmentator::segment(const std::string& filename) noexcept {
 
     SegmentationResult result;
     result.groups = std::move(groups);
+    result.refined_regions = std::move(refined);
     result.context = std::move(ctx);
+    result.binary_path = filename;
+    result.compiler_info = fh->getCompilerInfo();
     return result;
 }
