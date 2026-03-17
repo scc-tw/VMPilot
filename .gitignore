@@ -27,7 +27,8 @@
 *.app
 
 # Allow test binaries in data/
-!data/basic/bin/*.exe
+!data/*/bin/*.exe
+!data/*/bin/*.dll
 
 build/
 .vscode/
