@@ -76,6 +76,11 @@ bool isImmediateADD(const Instruction& insn);
 /// Pattern: sub <reg>, <imm>
 bool isImmediateSUB(const Instruction& insn);
 
+// --- Prefix analysis ---
+
+/// True if this instruction has a LOCK prefix (x86_prefix[0] == 0xF0).
+bool hasLockPrefix(const Instruction& insn);
+
 // --- Operand analysis ---
 
 /// True if the instruction does NOT modify its first (destination) operand.

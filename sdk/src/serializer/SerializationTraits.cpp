@@ -161,6 +161,8 @@ SerializationTraits<Core::CompilationUnit>::to_bytes(
         r->set_is_write(ref.is_write);
         r->set_is_pc_relative(ref.is_pc_relative);
         r->set_atomic_width(static_cast<uint32_t>(ref.atomic_width));
+        r->set_atomic_ordering(static_cast<uint32_t>(ref.atomic_ordering));
+        r->set_atomic_op(static_cast<uint32_t>(ref.atomic_op));
         serializeRelocationEntry(r->mutable_relocation(), ref.relocation);
 
         if (ref.jump_table.has_value()) {
@@ -212,6 +214,9 @@ SerializationTraits<Core::CompilationUnit>::from_bytes(
         ref.is_write = r.is_write();
         ref.is_pc_relative = r.is_pc_relative();
         ref.atomic_width = static_cast<Core::AtomicWidth>(r.atomic_width());
+        ref.atomic_ordering =
+            static_cast<Core::AtomicOrdering>(r.atomic_ordering());
+        ref.atomic_op = static_cast<Core::AtomicOp>(r.atomic_op());
         ref.relocation = deserializeRelocationEntry(r.relocation());
 
         if (r.has_jump_table()) {

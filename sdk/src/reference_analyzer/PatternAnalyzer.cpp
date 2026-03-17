@@ -134,7 +134,6 @@ void detectARM64TlsPatterns(
         }
     }
 
-    // TODO: Atomic detection — need Instruction to expose x86 prefix bytes
 }
 
 // ---------------------------------------------------------------------------

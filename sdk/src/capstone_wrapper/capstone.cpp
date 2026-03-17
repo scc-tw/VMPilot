@@ -179,6 +179,7 @@ std::vector<Instruction> Capstone::disasm(const std::vector<uint8_t>& code,
             // Architecture-specific operands
             if (arch_ == Arch::X86) {
                 const auto& x86 = detail.x86;
+                std::copy(x86.prefix, x86.prefix + 4, inst.x86_prefix);
                 inst.operands.reserve(x86.op_count);
                 for (uint8_t j = 0; j < x86.op_count; ++j) {
                     const auto& src = x86.operands[j];

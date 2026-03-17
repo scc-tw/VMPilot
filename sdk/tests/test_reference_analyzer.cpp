@@ -58,6 +58,8 @@ TEST(DataReference, EnumDefaults) {
     EXPECT_EQ(ref.tls_model, TlsModel::None);
     EXPECT_EQ(ref.source, DataRefSource::InsnAnalysis);
     EXPECT_EQ(ref.atomic_width, AtomicWidth::None);
+    EXPECT_EQ(ref.atomic_ordering, AtomicOrdering::None);
+    EXPECT_EQ(ref.atomic_op, AtomicOp::None);
     EXPECT_FALSE(ref.is_write);
     EXPECT_FALSE(ref.is_pc_relative);
 }
@@ -687,4 +689,145 @@ TEST(JumpTable, DataReferenceJumpTableOptional) {
     ref.jump_table->table_base = 0x402000;
     EXPECT_TRUE(ref.jump_table.has_value());
     EXPECT_EQ(ref.jump_table->table_base, 0x402000u);
+}
+
+// ---- Atomic Detection Tests ----
+
+TEST(AtomicDetection, X86LockAddIsAtomicRMW) {
+    // lock add dword ptr [rip+0x1FFA], ecx
+    // At 0x401000, target = 0x401000 + 7 + 0x1FFA = 0x403001
+    // But we need target in .data (0x403000..0x403200)
+    // lock add dword ptr [rip+0x1FF9], ecx → target = 0x401000 + 7 + 0x1FF9
+    //   = 0x403000
+    // Encoding: f0 01 0d f9 1f 00 00
+    auto sections = makeTestSections();
+    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
+
+    std::vector<uint8_t> code = {0xf0, 0x01, 0x0d, 0xf9, 0x1f, 0x00, 0x00};
+    auto insns = cs.disasm(code, 0x401000);
+    ASSERT_GE(insns.size(), 1u);
+
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+
+    bool found = false;
+    for (const auto& ref : refs) {
+        if (ref.source == DataRefSource::InsnAnalysis &&
+            ref.atomic_op != AtomicOp::None) {
+            found = true;
+            EXPECT_EQ(ref.atomic_op, AtomicOp::RMW);
+            EXPECT_EQ(ref.atomic_ordering, AtomicOrdering::AcqRel);
+            EXPECT_EQ(ref.atomic_width, AtomicWidth::Atomic32);
+        }
+    }
+    EXPECT_TRUE(found) << "Expected atomic RMW ref from lock add";
+}
+
+TEST(AtomicDetection, X86XchgIsAtomicSwap) {
+    // xchg dword ptr [rip+0x1FF9], ecx
+    // Encoding: 87 0d f9 1f 00 00
+    // At 0x401000, size=6, target = 0x401000 + 6 + 0x1FF9 = 0x402FFF
+    // Adjust: we need target in .data (0x403000)
+    // disp = 0x403000 - (0x401000 + 6) = 0x1FFA
+    // Encoding: 87 0d fa 1f 00 00
+    auto sections = makeTestSections();
+    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
+
+    std::vector<uint8_t> code = {0x87, 0x0d, 0xfa, 0x1f, 0x00, 0x00};
+    auto insns = cs.disasm(code, 0x401000);
+    ASSERT_GE(insns.size(), 1u);
+
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+
+    bool found = false;
+    for (const auto& ref : refs) {
+        if (ref.source == DataRefSource::InsnAnalysis &&
+            ref.atomic_op != AtomicOp::None) {
+            found = true;
+            EXPECT_EQ(ref.atomic_op, AtomicOp::Swap);
+            EXPECT_EQ(ref.atomic_ordering, AtomicOrdering::AcqRel);
+            EXPECT_EQ(ref.atomic_width, AtomicWidth::Atomic32);
+        }
+    }
+    EXPECT_TRUE(found) << "Expected atomic Swap ref from xchg";
+}
+
+TEST(AtomicDetection, X86LockCmpxchgIsAtomicCompareSwap) {
+    // lock cmpxchg dword ptr [rip+0x1FF8], ecx
+    // Encoding: f0 0f b1 0d f8 1f 00 00
+    // At 0x401000, size=8, target = 0x401000 + 8 + 0x1FF8 = 0x403000
+    auto sections = makeTestSections();
+    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
+
+    std::vector<uint8_t> code = {0xf0, 0x0f, 0xb1, 0x0d,
+                                  0xf8, 0x1f, 0x00, 0x00};
+    auto insns = cs.disasm(code, 0x401000);
+    ASSERT_GE(insns.size(), 1u);
+
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+
+    bool found = false;
+    for (const auto& ref : refs) {
+        if (ref.source == DataRefSource::InsnAnalysis &&
+            ref.atomic_op != AtomicOp::None) {
+            found = true;
+            EXPECT_EQ(ref.atomic_op, AtomicOp::CompareSwap);
+            EXPECT_EQ(ref.atomic_ordering, AtomicOrdering::AcqRel);
+            EXPECT_EQ(ref.atomic_width, AtomicWidth::Atomic32);
+        }
+    }
+    EXPECT_TRUE(found) << "Expected atomic CompareSwap ref from lock cmpxchg";
+}
+
+TEST(AtomicDetection, X86MfenceIsFence) {
+    // mfence: 0f ae f0
+    auto sections = makeTestSections();
+    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
+
+    std::vector<uint8_t> code = {0x0f, 0xae, 0xf0};
+    auto insns = cs.disasm(code, 0x401000);
+    ASSERT_GE(insns.size(), 1u);
+
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+
+    bool found = false;
+    for (const auto& ref : refs) {
+        if (ref.atomic_op == AtomicOp::Fence) {
+            found = true;
+            EXPECT_EQ(ref.atomic_ordering, AtomicOrdering::AcqRel);
+            EXPECT_EQ(ref.atomic_width, AtomicWidth::None);
+            EXPECT_EQ(ref.target_va, 0u);
+            EXPECT_EQ(ref.kind, DataRefKind::Unknown);
+        }
+    }
+    EXPECT_TRUE(found) << "Expected fence ref from mfence";
+}
+
+TEST(AtomicDetection, NonAtomicInsnHasNoAtomicFields) {
+    // Regular mov eax, [rip+0x1FFA] → no atomic annotation
+    auto sections = makeTestSections();
+    Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
+
+    std::vector<uint8_t> code = {0x8b, 0x05, 0xfa, 0x1f, 0x00, 0x00};
+    auto insns = cs.disasm(code, 0x401000);
+    ASSERT_GE(insns.size(), 1u);
+
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+                        VMPilot::Common::FileArch::X86,
+                        VMPilot::Common::FileMode::MODE_64);
+
+    for (const auto& ref : refs) {
+        if (ref.source == DataRefSource::InsnAnalysis) {
+            EXPECT_EQ(ref.atomic_op, AtomicOp::None);
+            EXPECT_EQ(ref.atomic_ordering, AtomicOrdering::None);
+            EXPECT_EQ(ref.atomic_width, AtomicWidth::None);
+        }
+    }
 }
