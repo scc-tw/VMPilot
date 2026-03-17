@@ -1,0 +1,33 @@
+syntax = "proto3";
+package vmpilot;
+
+message ReadOnlySection {
+  uint64 base_addr = 1;
+  bytes data = 2;
+}
+
+message SymbolEntry {
+  string name = 1;
+  uint64 address = 2;
+  uint64 size = 3;
+  string entry_type = 4;    // "", "stub", "pointer_table"
+  bool is_global = 5;
+}
+
+message CompilationContext {
+  uint32 arch = 1;
+  uint32 mode = 2;
+  repeated SymbolEntry symbols = 3;
+  repeated ReadOnlySection rodata_sections = 4;
+}
+
+message CompilationUnit {
+  string name = 1;
+  uint64 addr = 2;
+  uint64 size = 3;
+  bytes code = 4;
+  string enclosing_symbol = 5;
+  bool is_canonical = 6;
+  string context_file = 7;
+  bytes context_hash = 8;       // SHA-256 of context.pb
+}

@@ -71,6 +71,22 @@ target_link_libraries(test_string_extraction GTest::gtest_main VMPilot_SDK_Segme
 add_executable(test_segment_api test_segment_api.cpp)
 target_link_libraries(test_segment_api GTest::gtest_main VMPilot_SDK_Segmentator VMPilot_SDK_RegionRefiner capstone_wrapper opcode_table)
 
+add_executable(test_serializer test_serializer.cpp)
+if (MSVC)
+    target_compile_options(test_serializer PRIVATE /WX-)
+endif()
+target_include_directories(test_serializer PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/serializer
+)
+target_link_libraries(test_serializer
+    GTest::gtest_main
+    VMPilot_SDK_Serializer
+    VMPilot_SDK_Segmentator
+    VMPilot_SDK_RegionRefiner
+    capstone_wrapper
+    opcode_table
+)
+
 # Register with CTest
 include(GoogleTest)
 gtest_discover_tests(test_native_function_base)
@@ -89,3 +105,4 @@ gtest_discover_tests(test_pe_handler)
 gtest_discover_tests(test_segmentator_integration)
 gtest_discover_tests(test_string_extraction)
 gtest_discover_tests(test_segment_api)
+gtest_discover_tests(test_serializer)

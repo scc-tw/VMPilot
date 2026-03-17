@@ -41,6 +41,10 @@ FileHandlerStrategy::doGetPointerTableTargets() noexcept {
     return {};
 }
 
+std::string FileHandlerStrategy::doGetCompilerInfo() noexcept {
+    return {};
+}
+
 std::vector<uint8_t> FileHandlerStrategy::getTextSection() {
     return doGetTextSection();
 }
@@ -51,6 +55,10 @@ uint64_t FileHandlerStrategy::getTextBaseAddr() {
 
 std::vector<ReadOnlySection> FileHandlerStrategy::getReadOnlySections() {
     return doGetReadOnlySections();
+}
+
+std::string FileHandlerStrategy::getCompilerInfo() {
+    return doGetCompilerInfo();
 }
 
 NativeSymbolTable FileHandlerStrategy::getNativeSymbolTable() {

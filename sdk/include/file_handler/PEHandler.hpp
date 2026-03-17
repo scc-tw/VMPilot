@@ -38,6 +38,7 @@ class PEFileHandlerStrategy : public FileHandlerStrategy {
     virtual std::vector<CallTarget> doGetStubCallTargets() noexcept override;
     virtual std::vector<CallTarget> doGetPointerTableTargets() noexcept
         override;
+    virtual std::string doGetCompilerInfo() noexcept override;
 
    private:
     void parseImports() noexcept;

@@ -48,6 +48,10 @@ class FileHandlerStrategy {
     /// (ELF: GOT entries, PE: IAT entries, Mach-O: __got / __la_symbol_ptr)
     virtual std::vector<CallTarget> doGetPointerTableTargets() noexcept;
 
+    /// Return compiler/linker identification string from the binary.
+    /// (ELF: .comment section, PE: linker version, MachO: CPU type fallback)
+    virtual std::string doGetCompilerInfo() noexcept;
+
    public:
     virtual ~FileHandlerStrategy() = default;
     std::vector<uint8_t> getTextSection();
@@ -57,6 +61,9 @@ class FileHandlerStrategy {
     /// Assemble a complete symbol table from the three sources above.
     /// Not virtual --- subclasses override doGetSymbols/Direct/Indirect instead.
     NativeSymbolTable getNativeSymbolTable();
+
+    /// Return compiler/linker identification string.
+    std::string getCompilerInfo();
 };
 
 using FileHandlerFactory =

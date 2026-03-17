@@ -119,6 +119,19 @@ MachOFileHandlerStrategy::doGetStubCallTargets() noexcept {
     return targets;
 }
 
+std::string MachOFileHandlerStrategy::doGetCompilerInfo() noexcept {
+    // Return CPU type string as a fallback.
+    // Full LC_BUILD_VERSION parsing deferred to a future phase.
+    uint32_t cputype = pImpl->parser.cpuType();
+    switch (cputype) {
+        case 12: return "Mach-O ARM";
+        case 0x0100000C: return "Mach-O ARM64";
+        case 7: return "Mach-O X86";
+        case 0x01000007: return "Mach-O X86_64";
+        default: return "Mach-O CPU " + std::to_string(cputype);
+    }
+}
+
 std::vector<CallTarget>
 MachOFileHandlerStrategy::doGetPointerTableTargets() noexcept {
     std::vector<CallTarget> targets;

@@ -302,6 +302,27 @@ ELFFileHandlerStrategy::doGetPointerTableTargets() noexcept {
     return targets;
 }
 
+std::string ELFFileHandlerStrategy::doGetCompilerInfo() noexcept {
+    const auto it = pImpl->section_table.find(".comment");
+    if (it == pImpl->section_table.end())
+        return {};
+    auto section = it->second.getSection();
+    if (!section || section->get_size() == 0)
+        return {};
+
+    // .comment contains null-terminated strings (e.g. "GCC: (Ubuntu 11.4.0) 11.4.0")
+    // Replace embedded nulls with spaces, then trim.
+    std::string info(section->get_data(), section->get_size());
+    for (char& c : info) {
+        if (c == '\0') c = ' ';
+    }
+    // Trim leading/trailing whitespace
+    auto start = info.find_first_not_of(' ');
+    if (start == std::string::npos) return {};
+    auto end = info.find_last_not_of(' ');
+    return info.substr(start, end - start + 1);
+}
+
 std::vector<uint8_t> ELFFileHandlerStrategy::doGetTextSectionIntl() noexcept {
     const auto& text_section_iter = pImpl->section_table.find(".text");
     if (text_section_iter == pImpl->section_table.end()) {
