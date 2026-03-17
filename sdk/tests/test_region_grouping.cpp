@@ -7,18 +7,18 @@ using NativeFunc = VMPilot::SDK::Segmentator::NativeFunctionBase;
 using VMPilot::SDK::RegionRefiner::group;
 using VMPilot::SDK::RegionRefiner::ProtectedRegion;
 
-static std::unique_ptr<NativeFunc> make_region(
+static NativeFunc make_region(
     uint64_t addr, uint64_t size, const std::string& name,
     const std::optional<std::string>& enclosing = std::nullopt) {
     std::vector<uint8_t> code(size, 0x90);
-    auto nf = std::make_unique<NativeFunc>(addr, size, name, std::move(code));
+    NativeFunc nf(addr, size, name, std::move(code));
     if (enclosing)
-        nf->setEnclosingSymbol(*enclosing);
+        nf.setEnclosingSymbol(*enclosing);
     return nf;
 }
 
 TEST(RegionGrouping, SingleRegionNoEnclosing) {
-    std::vector<std::unique_ptr<NativeFunc>> regions;
+    std::vector<NativeFunc> regions;
     regions.push_back(make_region(0x1000, 50, "foo"));
 
     auto groups = group(regions);
@@ -30,7 +30,7 @@ TEST(RegionGrouping, SingleRegionNoEnclosing) {
 }
 
 TEST(RegionGrouping, TwoCopiesSameName) {
-    std::vector<std::unique_ptr<NativeFunc>> regions;
+    std::vector<NativeFunc> regions;
     regions.push_back(make_region(0x1270, 41, "foo", "_Z3fooi"));
     regions.push_back(make_region(0x10e3, 13, "foo", "main"));
 
@@ -46,7 +46,7 @@ TEST(RegionGrouping, TwoCopiesSameName) {
 }
 
 TEST(RegionGrouping, CanonicalViaDemangle) {
-    std::vector<std::unique_ptr<NativeFunc>> regions;
+    std::vector<NativeFunc> regions;
     // Inlined copy first, canonical second — canonical should still be found
     regions.push_back(make_region(0x10e3, 13, "foo", "main"));
     regions.push_back(make_region(0x1270, 41, "foo", "_Z3fooi"));
@@ -61,7 +61,7 @@ TEST(RegionGrouping, CanonicalViaDemangle) {
 }
 
 TEST(RegionGrouping, NoMatchFallback) {
-    std::vector<std::unique_ptr<NativeFunc>> regions;
+    std::vector<NativeFunc> regions;
     // Both enclosing symbols don't match source_name
     regions.push_back(make_region(0x1000, 20, "bar", "unrelated_func1"));
     regions.push_back(make_region(0x2000, 20, "bar", "unrelated_func2"));
@@ -76,7 +76,7 @@ TEST(RegionGrouping, NoMatchFallback) {
 }
 
 TEST(RegionGrouping, MultipleGroups) {
-    std::vector<std::unique_ptr<NativeFunc>> regions;
+    std::vector<NativeFunc> regions;
     // Group "foo": 2 copies
     regions.push_back(make_region(0x1270, 41, "foo", "_Z3fooi"));
     regions.push_back(make_region(0x10e3, 13, "foo", "main"));

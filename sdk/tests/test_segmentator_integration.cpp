@@ -50,11 +50,11 @@ TEST_F(SegmentatorIntegrationX64, FullPipeline) {
 
     // 5. Verify each region has valid code
     for (const auto& r : refined) {
-        EXPECT_GT(r->getAddr(), 0u);
-        EXPECT_GT(r->getSize(), 0u);
-        EXPECT_EQ(r->getCode().size(), r->getSize());
+        EXPECT_GT(r.getAddr(), 0u);
+        EXPECT_GT(r.getSize(), 0u);
+        EXPECT_EQ(r.getCode().size(), r.getSize());
         // First byte should be 0xE8 (call rel32 to VMPilot_Begin)
-        EXPECT_EQ(r->getCode()[0], 0xE8);
+        EXPECT_EQ(r.getCode()[0], 0xE8);
     }
 }
 
@@ -77,7 +77,7 @@ TEST_F(SegmentatorIntegrationX86, FullPipeline) {
     EXPECT_EQ(refined.size(), 2u);
 
     for (const auto& r : refined) {
-        EXPECT_EQ(r->getCode()[0], 0xE8);
+        EXPECT_EQ(r.getCode()[0], 0xE8);
     }
 }
 
@@ -107,9 +107,9 @@ TEST_F(SegmentatorIntegrationDarwinARM64, FullPipeline) {
     EXPECT_GE(refined.size(), 1u);
 
     for (const auto& r : refined) {
-        EXPECT_GT(r->getAddr(), 0u);
-        EXPECT_GT(r->getSize(), 0u);
-        EXPECT_EQ(r->getCode().size(), r->getSize());
+        EXPECT_GT(r.getAddr(), 0u);
+        EXPECT_GT(r.getSize(), 0u);
+        EXPECT_EQ(r.getCode().size(), r.getSize());
     }
 }
 
@@ -145,9 +145,9 @@ TEST_F(SegmentatorIntegrationWindowsX64, FullPipeline) {
     EXPECT_GE(refined.size(), 1u);
 
     for (const auto& r : refined) {
-        EXPECT_GT(r->getAddr(), 0u);
-        EXPECT_GT(r->getSize(), 0u);
-        EXPECT_EQ(r->getCode().size(), r->getSize());
+        EXPECT_GT(r.getAddr(), 0u);
+        EXPECT_GT(r.getSize(), 0u);
+        EXPECT_EQ(r.getCode().size(), r.getSize());
     }
 }
 
@@ -171,9 +171,9 @@ TEST_F(SegmentatorIntegrationWindowsX86, FullPipeline) {
     EXPECT_GE(refined.size(), 1u);
 
     for (const auto& r : refined) {
-        EXPECT_GT(r->getAddr(), 0u);
-        EXPECT_GT(r->getSize(), 0u);
-        EXPECT_EQ(r->getCode().size(), r->getSize());
+        EXPECT_GT(r.getAddr(), 0u);
+        EXPECT_GT(r.getSize(), 0u);
+        EXPECT_EQ(r.getCode().size(), r.getSize());
     }
 }
 
@@ -202,14 +202,14 @@ TEST_F(SegmentatorIntegrationX64, FunctionNameExtraction) {
     // a human-readable name (not the vmpilot_region_0x... fallback)
     bool has_named_region = false;
     for (const auto& r : regions) {
-        if (r->getName().substr(0, 17) != "vmpilot_region_0x") {
+        if (r.getName().substr(0, 17) != "vmpilot_region_0x") {
             has_named_region = true;
             break;
         }
     }
     EXPECT_TRUE(has_named_region)
         << "Expected at least one region with __FUNCTION__ name, got: "
-        << regions[0]->getName() << ", " << regions[1]->getName();
+        << regions[0].getName() << ", " << regions[1].getName();
 }
 
 TEST_F(SegmentatorIntegrationX64, FunctionNameFallbackWithoutRodata) {
@@ -228,7 +228,7 @@ TEST_F(SegmentatorIntegrationX64, FunctionNameFallbackWithoutRodata) {
 
     // All regions should have fallback names
     for (const auto& r : regions) {
-        EXPECT_EQ(r->getName().substr(0, 17), "vmpilot_region_0x")
+        EXPECT_EQ(r.getName().substr(0, 17), "vmpilot_region_0x")
             << "Without CompilationContext, region should have fallback name";
     }
 }
@@ -242,15 +242,15 @@ TEST_F(SegmentatorIntegrationX64, RegionsDontOverlap) {
 
     // Verify no two regions overlap
     for (size_t i = 0; i < regions.size(); ++i) {
-        uint64_t a_end = regions[i]->getAddr() + regions[i]->getSize();
+        uint64_t a_end = regions[i].getAddr() + regions[i].getSize();
         for (size_t j = i + 1; j < regions.size(); ++j) {
-            uint64_t b_start = regions[j]->getAddr();
-            uint64_t b_end = regions[j]->getAddr() + regions[j]->getSize();
+            uint64_t b_start = regions[j].getAddr();
+            uint64_t b_end = regions[j].getAddr() + regions[j].getSize();
             // Either a ends before b starts, or b ends before a starts
             bool no_overlap =
-                (a_end <= b_start) || (b_end <= regions[i]->getAddr());
+                (a_end <= b_start) || (b_end <= regions[i].getAddr());
             EXPECT_TRUE(no_overlap)
-                << "Regions overlap: [" << std::hex << regions[i]->getAddr()
+                << "Regions overlap: [" << std::hex << regions[i].getAddr()
                 << ", " << a_end << ") and [" << b_start << ", " << b_end
                 << ")";
         }

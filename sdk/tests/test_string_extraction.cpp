@@ -74,7 +74,7 @@ static std::string extractName(const std::vector<uint8_t>& code) {
     auto regions = handler.getNativeFunctions();
     if (regions.empty())
         return "";
-    return regions[0]->getName();
+    return regions[0].getName();
 }
 
 /// Compute the RIP-relative displacement for a LEA at the given code offset
@@ -264,8 +264,8 @@ TEST_F(StringExtractionX64, FallbackWithoutRodata) {
     auto regions = handler.getNativeFunctions();
     ASSERT_EQ(regions.size(), 1u);
     // Should have fallback name "vmpilot_region_0x..."
-    EXPECT_TRUE(regions[0]->getName().substr(0, 17) == "vmpilot_region_0x")
-        << "Got: " << regions[0]->getName();
+    EXPECT_TRUE(regions[0].getName().substr(0, 17) == "vmpilot_region_0x")
+        << "Got: " << regions[0].getName();
 }
 
 // ---------------------------------------------------------------------------
@@ -294,7 +294,7 @@ static std::string extractName32(const std::vector<uint8_t>& code) {
     auto regions = handler.getNativeFunctions();
     if (regions.empty())
         return "";
-    return regions[0]->getName();
+    return regions[0].getName();
 }
 
 // x86-32 pattern: push imm32 → call

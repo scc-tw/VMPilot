@@ -5,7 +5,6 @@
 #include <NativeFunctionBase.hpp>
 
 #include <cstdint>
-#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -35,7 +34,7 @@ struct ProtectedRegion {
  * demangling.  Takes a const ref (doesn't consume ownership).
  */
 std::vector<ProtectedRegion> group(
-    const std::vector<std::unique_ptr<Segmentator::NativeFunctionBase>>&
+    const std::vector<Segmentator::NativeFunctionBase>&
         regions) noexcept;
 
 /**
@@ -53,8 +52,8 @@ std::vector<ProtectedRegion> group(
  * @param regions The raw regions from segmentator.
  * @return Refined regions with no overlaps.
  */
-std::vector<std::unique_ptr<Segmentator::NativeFunctionBase>> refine(
-    std::vector<std::unique_ptr<Segmentator::NativeFunctionBase>>
+std::vector<Segmentator::NativeFunctionBase> refine(
+    std::vector<Segmentator::NativeFunctionBase>
         regions) noexcept;
 
 }  // namespace VMPilot::SDK::RegionRefiner

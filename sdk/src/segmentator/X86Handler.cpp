@@ -9,11 +9,15 @@
 
 using namespace VMPilot::SDK::Segmentator;
 
-static ArchHandlerRegistrar x86_registrar(
-    VMPilot::Common::FileArch::X86,
-    [](VMPilot::Common::FileMode mode, const NativeSymbolTable& symbols) {
-        return std::make_unique<X86Handler>(mode, symbols);
-    });
+namespace VMPilot::SDK::Segmentator {
+void registerX86Handler() {
+    HandlerRegistry::instance().registerArchHandler(
+        VMPilot::Common::FileArch::X86,
+        [](VMPilot::Common::FileMode mode, const NativeSymbolTable& symbols) {
+            return std::make_unique<X86Handler>(mode, symbols);
+        });
+}
+}  // namespace VMPilot::SDK::Segmentator
 
 struct X86Handler::Impl : ArchHandlerImplBase {
     using ArchHandlerImplBase::ArchHandlerImplBase;
@@ -39,24 +43,6 @@ bool X86Handler::doLoad(const std::vector<uint8_t>& code,
     pImpl->base_addr = base_addr;
     pImpl->instructions = pImpl->cs.disasm(code, base_addr);
     return !pImpl->instructions.empty();
-}
-
-// X86-specific call resolver: handles direct calls and RIP-relative indirect
-static std::optional<std::string> x86ResolveCallTarget(
-    const Capstone::Instruction& insn, const AddrToSymbol& lookup) {
-    uint64_t target = insn.getDirectTarget();
-    if (target != 0) {
-        auto it = lookup.find(target);
-        if (it != lookup.end())
-            return it->second;
-    }
-    target = insn.getRipRelativeTarget();
-    if (target != 0) {
-        auto it = lookup.find(target);
-        if (it != lookup.end())
-            return it->second;
-    }
-    return std::nullopt;
 }
 
 // --- X86 arch traits for generic backward constant propagation ---
@@ -107,40 +93,49 @@ struct X86ArchTraits {
     }
 };
 
-std::vector<std::unique_ptr<NativeFunctionBase>>
-X86Handler::doGetNativeFunctions() noexcept {
-    pImpl->compilation_ctx = &m_compilation_ctx;
-
-    // Build a PIC thunk resolver for x86-32 GOT-relative addressing.
-    // __x86.get_pc_thunk.XX sets register XX to the return address.
-    const auto& lookup = pImpl->addr_lookup;
-    CallValueResolver pic_resolver =
-        [&lookup](const Capstone::Instruction& insn,
-                  unsigned reg) -> std::optional<uint64_t> {
+// --- X86 callback traits for extractNativeFunctions ---
+struct X86CallbackTraits {
+    static std::optional<std::string> resolveCall(
+        const Capstone::Instruction& insn, const AddrToSymbol& lookup) {
         uint64_t target = insn.getDirectTarget();
-        if (target == 0)
-            return std::nullopt;
-        auto it = lookup.find(target);
-        if (it == lookup.end())
-            return std::nullopt;
-        if (Capstone::X86::isPcThunkForReg(it->second, reg))
-            return insn.address + insn.size;  // return address
+        if (target != 0) {
+            auto it = lookup.find(target);
+            if (it != lookup.end())
+                return it->second;
+        }
+        target = insn.getRipRelativeTarget();
+        if (target != 0) {
+            auto it = lookup.find(target);
+            if (it != lookup.end())
+                return it->second;
+        }
         return std::nullopt;
-    };
+    }
 
-    // Extract the VA of the first string argument near a call instruction.
-    // Uses backward constant propagation to handle arbitrary compiler code
-    // generation patterns including instruction scheduling, register
-    // spilling, and arithmetic address adjustments.
-    auto x86ExtractStringArg =
-        [&pic_resolver](
-            size_t call_idx,
-            const std::vector<Capstone::Instruction>& instructions)
-        -> std::optional<uint64_t> {
+    static std::optional<uint64_t> extractStringArg(
+        size_t call_idx,
+        const std::vector<Capstone::Instruction>& instructions,
+        const AddrToSymbol& lookup) {
         namespace CX = Capstone::X86;
 
         if (call_idx == 0)
             return std::nullopt;
+
+        // Build a PIC thunk resolver for x86-32 GOT-relative addressing.
+        // __x86.get_pc_thunk.XX sets register XX to the return address.
+        CallValueResolver pic_resolver =
+            [&lookup](const Capstone::Instruction& insn,
+                      unsigned reg) -> std::optional<uint64_t> {
+            uint64_t target = insn.getDirectTarget();
+            if (target == 0)
+                return std::nullopt;
+            auto it = lookup.find(target);
+            if (it == lookup.end())
+                return std::nullopt;
+            if (CX::isPcThunkForReg(it->second, reg))
+                return insn.address + insn.size;  // return address
+            return std::nullopt;
+        };
 
         constexpr size_t kMaxWindow = 20;
         const size_t start =
@@ -165,7 +160,7 @@ X86Handler::doGetNativeFunctions() noexcept {
                     pic_resolver);
                 if (va != 0)
                     return va;
-                break;  // found the write but couldn't resolve — give up
+                break;  // found the write but couldn't resolve -- give up
             }
         }
 
@@ -173,7 +168,7 @@ X86Handler::doGetNativeFunctions() noexcept {
         for (size_t i = call_idx; i-- > start;) {
             const auto& insn = instructions[i];
 
-            // Stop at prior CALL — its stack args aren't ours
+            // Stop at prior CALL -- its stack args aren't ours
             if (insn.isCall())
                 break;
 
@@ -185,7 +180,7 @@ X86Handler::doGetNativeFunctions() noexcept {
             if (CX::isImmediateStoreToStack(insn))
                 return CX::getImmediateValue(insn);
 
-            // push reg → resolve reg's value
+            // push reg -> resolve reg's value
             if (CX::isRegPush(insn)) {
                 uint64_t va = resolveRegValue<X86ArchTraits>(
                     insn.operands[0].reg, i > 0 ? i - 1 : 0, instructions,
@@ -195,7 +190,7 @@ X86Handler::doGetNativeFunctions() noexcept {
                 break;
             }
 
-            // mov [esp/rsp+off], reg → resolve reg's value
+            // mov [esp/rsp+off], reg -> resolve reg's value
             if (CX::isRegStoreToStack(insn)) {
                 uint64_t va = resolveRegValue<X86ArchTraits>(
                     insn.operands[1].reg, i > 0 ? i - 1 : 0, instructions,
@@ -207,8 +202,10 @@ X86Handler::doGetNativeFunctions() noexcept {
         }
 
         return std::nullopt;
-    };
+    }
+};
 
-    return extractNativeFunctions(*pImpl, x86ResolveCallTarget,
-                                  x86ExtractStringArg);
+std::vector<NativeFunctionBase>
+X86Handler::doGetNativeFunctions() noexcept {
+    return extractNativeFunctions<X86CallbackTraits>(*pImpl, m_compilation_ctx);
 }

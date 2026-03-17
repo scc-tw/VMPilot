@@ -16,10 +16,14 @@
 
 using namespace VMPilot::SDK::Segmentator;
 
-static FileHandlerRegistrar pe_registrar(
-    VMPilot::Common::FileFormat::PE, [](const std::string& filename) {
-        return std::make_unique<PEFileHandlerStrategy>(filename);
-    });
+namespace VMPilot::SDK::Segmentator {
+void registerPEHandler() {
+    HandlerRegistry::instance().registerFileHandler(
+        VMPilot::Common::FileFormat::PE, [](const std::string& filename) {
+            return std::make_unique<PEFileHandlerStrategy>(filename);
+        });
+}
+}  // namespace VMPilot::SDK::Segmentator
 
 namespace {
 constexpr uint32_t PE_DIRECTORY_IMPORT = 1;

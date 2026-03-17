@@ -15,21 +15,21 @@
 
 using NativeFunc = VMPilot::SDK::Segmentator::NativeFunctionBase;
 
-std::vector<std::unique_ptr<NativeFunc>> VMPilot::SDK::RegionRefiner::refine(
-    std::vector<std::unique_ptr<NativeFunc>> regions) noexcept {
+std::vector<NativeFunc> VMPilot::SDK::RegionRefiner::refine(
+    std::vector<NativeFunc> regions) noexcept {
     if (regions.size() <= 1) {
         return regions;
     }
 
     // Sort by start address, then by size descending (larger regions first)
     std::sort(regions.begin(), regions.end(), [](const auto& a, const auto& b) {
-        if (a->getAddr() == b->getAddr()) {
-            return a->getSize() > b->getSize();
+        if (a.getAddr() == b.getAddr()) {
+            return a.getSize() > b.getSize();
         }
-        return a->getAddr() < b->getAddr();
+        return a.getAddr() < b.getAddr();
     });
 
-    std::vector<std::unique_ptr<NativeFunc>> result;
+    std::vector<NativeFunc> result;
 
     // Sweep: maintain the "current" outermost region's end address.
     // Any region that starts within and ends within the current region
@@ -37,8 +37,8 @@ std::vector<std::unique_ptr<NativeFunc>> VMPilot::SDK::RegionRefiner::refine(
     uint64_t current_end = 0;
 
     for (auto& region : regions) {
-        uint64_t start = region->getAddr();
-        uint64_t end = start + region->getSize();
+        uint64_t start = region.getAddr();
+        uint64_t end = start + region.getSize();
 
         if (start >= current_end) {
             // No overlap with previous — start a new region
@@ -49,8 +49,8 @@ std::vector<std::unique_ptr<NativeFunc>> VMPilot::SDK::RegionRefiner::refine(
             spdlog::warn(
                 "RegionRefiner: dropping contained region '{}' "
                 "[0x{:x}, 0x{:x}) inside '{}' [0x{:x}, 0x{:x})",
-                region->getName(), start, end, result.back()->getName(),
-                result.back()->getAddr(), current_end);
+                region.getName(), start, end, result.back().getName(),
+                result.back().getAddr(), current_end);
             continue;
         } else {
             // Partial overlap — extend the current region to cover both
@@ -58,14 +58,14 @@ std::vector<std::unique_ptr<NativeFunc>> VMPilot::SDK::RegionRefiner::refine(
             spdlog::warn(
                 "RegionRefiner: merging partially overlapping regions "
                 "'{}' [0x{:x}, 0x{:x}) and '{}' [0x{:x}, 0x{:x})",
-                last->getName(), last->getAddr(), current_end,
-                region->getName(), start, end);
-            uint64_t merged_start = last->getAddr();
+                last.getName(), last.getAddr(), current_end,
+                region.getName(), start, end);
+            uint64_t merged_start = last.getAddr();
             uint64_t merged_size = end - merged_start;
 
             // Rebuild the code bytes for the merged region
-            auto last_code = last->getCode();
-            auto this_code = region->getCode();
+            auto last_code = last.getCode();
+            auto this_code = region.getCode();
 
             // The overlap portion: region starts at 'start', last ends at
             // 'current_end'. Overlap = current_end - start bytes.
@@ -76,16 +76,16 @@ std::vector<std::unique_ptr<NativeFunc>> VMPilot::SDK::RegionRefiner::refine(
                                  this_code.end());
             }
 
-            auto merged = std::make_unique<NativeFunc>(
-                merged_start, merged_size, last->getName(),
+            NativeFunc merged(
+                merged_start, merged_size, last.getName(),
                 std::move(last_code));
 
-            if (!merged->isValid()) {
+            if (!merged.isValid()) {
                 spdlog::error(
                     "RegionRefiner: merged region '{}' at 0x{:x} is invalid: "
                     "size={} but code.size()={}, dropping",
-                    merged->getName(), merged_start, merged_size,
-                    merged->getCode().size());
+                    merged.getName(), merged_start, merged_size,
+                    merged.getCode().size());
                 result.pop_back();
                 // Don't update current_end — treat as if both were dropped
                 continue;
@@ -152,20 +152,20 @@ static bool isCanonicalMatch(const std::string& source_name,
 
 std::vector<VMPilot::SDK::RegionRefiner::ProtectedRegion>
 VMPilot::SDK::RegionRefiner::group(
-    const std::vector<std::unique_ptr<Segmentator::NativeFunctionBase>>&
+    const std::vector<Segmentator::NativeFunctionBase>&
         regions) noexcept {
     // Map source_name → index into result vector
     std::unordered_map<std::string, size_t> name_to_group;
     std::vector<ProtectedRegion> groups;
 
     for (const auto& region : regions) {
-        const auto& name = region->getName();
+        const auto& name = region.getName();
 
         RegionSite site;
         site.source_name = name;
-        site.enclosing_symbol = region->getEnclosingSymbol();
-        site.addr = region->getAddr();
-        site.size = region->getSize();
+        site.enclosing_symbol = region.getEnclosingSymbol();
+        site.addr = region.getAddr();
+        site.size = region.getSize();
 
         auto it = name_to_group.find(name);
         if (it == name_to_group.end()) {

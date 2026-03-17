@@ -13,10 +13,14 @@
 
 using namespace VMPilot::SDK::Segmentator;
 
-static FileHandlerRegistrar elf_registrar(
-    VMPilot::Common::FileFormat::ELF, [](const std::string& filename) {
-        return std::make_unique<ELFFileHandlerStrategy>(filename);
-    });
+namespace VMPilot::SDK::Segmentator {
+void registerELFHandler() {
+    HandlerRegistry::instance().registerFileHandler(
+        VMPilot::Common::FileFormat::ELF, [](const std::string& filename) {
+            return std::make_unique<ELFFileHandlerStrategy>(filename);
+        });
+}
+}  // namespace VMPilot::SDK::Segmentator
 
 struct ELFFileHandlerStrategy::Impl {
     ELFIO::elfio reader;

@@ -47,7 +47,7 @@ class NativeFunctionBase {
     NativeFunctionBase& operator=(const NativeFunctionBase&) = default;
     NativeFunctionBase& operator=(NativeFunctionBase&&) noexcept = default;
 
-    virtual ~NativeFunctionBase() = default;
+    ~NativeFunctionBase() = default;
     uint64_t getAddr() const { return m_addr; }
     uint64_t getSize() const { return m_size; }
     std::string getName() const { return m_name; }

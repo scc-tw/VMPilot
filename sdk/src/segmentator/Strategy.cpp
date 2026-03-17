@@ -110,7 +110,7 @@ bool ArchHandlerStrategy::doLoad(const std::vector<uint8_t>& code,
     return false;
 }
 
-std::vector<std::unique_ptr<NativeFunctionBase>>
+std::vector<NativeFunctionBase>
 ArchHandlerStrategy::doGetNativeFunctions() {
     spdlog::error("ArchHandlerStrategy::doGetNativeFunctions not implemented");
     return {};
@@ -121,7 +121,7 @@ bool ArchHandlerStrategy::Load(const std::vector<uint8_t>& code,
     return doLoad(code, base_addr);
 }
 
-std::vector<std::unique_ptr<NativeFunctionBase>>
+std::vector<NativeFunctionBase>
 ArchHandlerStrategy::getNativeFunctions() {
     return doGetNativeFunctions();
 }
