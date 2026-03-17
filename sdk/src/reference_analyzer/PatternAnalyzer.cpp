@@ -9,6 +9,7 @@
 #include <capstone/x86.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <unordered_map>
 
@@ -424,6 +425,35 @@ void detectX86JumpTablePatterns(
 // ARM64 Jump Table Detection
 // ---------------------------------------------------------------------------
 
+/// Resolve byte-offset jump table entries (Apple Clang ARM64 variant).
+/// Each entry is a 1-byte unsigned offset; target = case_base + entry * shift.
+Core::JumpTableRef resolveByteOffsetJumpTable(
+    uint64_t table_base, uint64_t case_base, unsigned shift,
+    uint32_t entry_count_hint,
+    const std::vector<Segmentator::ReadOnlySection>& rodata_sections,
+    const SectionLookup& sections) {
+    Core::JumpTableRef jt;
+    jt.table_base = table_base;
+    jt.entry_size = 1;
+    jt.relative_entries = true;
+
+    const uint32_t max_entries =
+        (entry_count_hint > 0) ? entry_count_hint : 1024;
+
+    for (uint32_t i = 0; i < max_entries; ++i) {
+        uint8_t raw = 0;
+        if (!readRodataBytes(rodata_sections, table_base + i, &raw, 1))
+            break;
+        uint64_t target = case_base + (static_cast<uint64_t>(raw) << shift);
+        if (sections.classify(target) != Core::SectionKind::Text)
+            break;
+        jt.targets.push_back(target);
+    }
+
+    jt.entry_count = static_cast<uint32_t>(jt.targets.size());
+    return jt;
+}
+
 void detectARM64JumpTablePatterns(
     const std::vector<Capstone::Instruction>& insns,
     uint64_t region_addr, uint64_t region_size,
@@ -441,12 +471,98 @@ void detectARM64JumpTablePatterns(
         if (insn.mnemonic != "br")
             continue;
 
-        // Backtrace to find ADRP+ADD pattern pointing to .rodata
         uint64_t table_base = 0;
         const size_t limit = (idx > 10) ? idx - 10 : 0;
+
+        // --- Pattern A: Apple Clang byte-offset jump table ---
+        //
+        //   adrp  xT, <page>            ; table page
+        //   add   xT, xT, #<offset>     ; xT = byte offset table (.rodata)
+        //   adr   xB, <case_body_base>   ; xB = first case body (.text)
+        //   ldrb  wE, [xT, xI]          ; load 1-byte offset
+        //   add   xB, xB, xE, lsl #N    ; target = base + entry << N
+        //   br    xB
+        //
+        // Detect: look backward from br for adr (case base) and
+        // adrp+add resolving to .rodata (byte table).
+        {
+            uint64_t case_base = 0;
+            unsigned shift = 2;  // Apple Clang typically uses lsl #2
+
+            for (size_t i = idx; i > limit; --i) {
+                const auto& prev = insns[i - 1];
+
+                // Find "adr xB, <imm>" — the case body base
+                if (prev.mnemonic == "adr" && prev.operands.size() >= 2 &&
+                    prev.operands[0].type == Capstone::OpType::REG &&
+                    prev.operands[1].type == Capstone::OpType::IMM) {
+                    case_base =
+                        static_cast<uint64_t>(prev.operands[1].imm);
+                }
+
+                // Find "add xB, xB, xE, lsl #N" — extract shift amount
+                if (prev.mnemonic == "add" && prev.operands.size() >= 3 &&
+                    prev.operands[0].type == Capstone::OpType::REG &&
+                    prev.operands[2].type == Capstone::OpType::REG) {
+                    // The shift is encoded in the operand's shift field.
+                    // Capstone represents "lsl #2" as a shifted register.
+                    // We check op_str for "lsl #N" to extract shift.
+                    auto pos = prev.op_str.find("lsl #");
+                    if (pos != std::string::npos) {
+                        shift = static_cast<unsigned>(
+                            std::strtoul(prev.op_str.c_str() + pos + 5,
+                                         nullptr, 10));
+                    }
+                }
+
+                // Find ADRP+ADD → .rodata (byte offset table)
+                if (prev.mnemonic == "add" && prev.operands.size() >= 3 &&
+                    prev.operands[2].type == Capstone::OpType::IMM &&
+                    i >= 2) {
+                    const auto& prev2 = insns[i - 2];
+                    if (prev2.mnemonic == "adrp" &&
+                        prev2.operands.size() >= 2 &&
+                        prev2.operands[0].reg == prev.operands[1].reg) {
+                        uint64_t candidate =
+                            static_cast<uint64_t>(prev2.operands[1].imm) +
+                            static_cast<uint64_t>(prev.operands[2].imm);
+                        if (sections.classify(candidate) ==
+                            Core::SectionKind::Rodata) {
+                            table_base = candidate;
+                            // Don't break — keep scanning for adr/shift
+                        }
+                    }
+                }
+            }
+
+            if (table_base != 0 && case_base != 0) {
+                uint32_t count = findBoundsCheck(insns, idx, true);
+                auto jt = resolveByteOffsetJumpTable(
+                    table_base, case_base, shift, count,
+                    rodata_sections, sections);
+
+                if (!jt.targets.empty()) {
+                    Core::DataReference ref;
+                    ref.insn_offset = insn.address;
+                    ref.target_va = table_base;
+                    ref.kind = Core::DataRefKind::JumpTable;
+                    ref.source = Core::DataRefSource::PatternMatch;
+                    ref.jump_table = std::move(jt);
+                    refs.push_back(std::move(ref));
+                }
+                continue;  // Skip Pattern B if Pattern A matched
+            }
+        }
+
+        // --- Pattern B: GCC/Linux ARM64 4-byte relative offset ---
+        //
+        //   adrp  xT, <page>
+        //   add   xT, xT, #<offset>    ; xT = 4-byte offset table (.rodata)
+        //   ldr   wE, [xT, xI, lsl #2] ; load 32-bit signed offset
+        //   add   xB, xT, wE, sxtw     ; target = table_base + sext(offset)
+        //   br    xB
         for (size_t i = idx; i > limit; --i) {
             const auto& prev = insns[i - 1];
-            // Look for ADD with immediate that follows ADRP
             if (prev.mnemonic == "add" && prev.operands.size() >= 3 &&
                 prev.operands[2].type == Capstone::OpType::IMM && i >= 2) {
                 const auto& prev2 = insns[i - 2];
@@ -468,7 +584,6 @@ void detectARM64JumpTablePatterns(
             continue;
 
         uint32_t count = findBoundsCheck(insns, idx, true);
-        // ARM64 uses 32-bit relative offsets (ldr w + sxtw + add)
         auto jt = resolveJumpTableEntries(
             table_base, /*entry_size=*/4, /*relative_entries=*/true, count,
             rodata_sections, sections);
