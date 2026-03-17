@@ -25,7 +25,7 @@ class X86Handler : public ArchHandlerStrategy {
     virtual bool doLoad(const std::vector<uint8_t>& code,
                         const uint64_t base_addr) noexcept override;
 
-    virtual std::vector<std::unique_ptr<NativeFunctionBase>>
+    virtual std::vector<NativeFunctionBase>
     doGetNativeFunctions() noexcept override;
 };
 

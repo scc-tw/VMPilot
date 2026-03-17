@@ -7,10 +7,14 @@
 
 using namespace VMPilot::SDK::Segmentator;
 
-static FileHandlerRegistrar macho_registrar(
-    VMPilot::Common::FileFormat::MachO, [](const std::string& filename) {
-        return std::make_unique<MachOFileHandlerStrategy>(filename);
-    });
+namespace VMPilot::SDK::Segmentator {
+void registerMachOHandler() {
+    HandlerRegistry::instance().registerFileHandler(
+        VMPilot::Common::FileFormat::MachO, [](const std::string& filename) {
+            return std::make_unique<MachOFileHandlerStrategy>(filename);
+        });
+}
+}  // namespace VMPilot::SDK::Segmentator
 
 /// Mach-O symbols have a leading underscore; strip it to match
 /// the cross-platform signature (e.g. "__Z13VMPilot_BeginPKc" -> "_Z13VMPilot_BeginPKc")

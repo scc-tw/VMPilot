@@ -74,7 +74,7 @@ class ArchHandlerStrategy {
 
     virtual bool doLoad(const std::vector<uint8_t>& code,
                         const uint64_t base_addr);
-    virtual std::vector<std::unique_ptr<NativeFunctionBase>>
+    virtual std::vector<NativeFunctionBase>
     doGetNativeFunctions();
 
    public:
@@ -87,7 +87,7 @@ class ArchHandlerStrategy {
 
     [[nodiscard]] bool Load(const std::vector<uint8_t>& code,
                             const uint64_t base_addr);
-    std::vector<std::unique_ptr<NativeFunctionBase>> getNativeFunctions();
+    std::vector<NativeFunctionBase> getNativeFunctions();
 };
 
 using FileHandlerFactory =

@@ -63,10 +63,10 @@ TEST_F(X86HandlerX64Test, RegionsHaveValidData) {
     auto functions = handler.getNativeFunctions();
 
     for (const auto& f : functions) {
-        EXPECT_GT(f->getAddr(), 0u);
-        EXPECT_GT(f->getSize(), 0u);
-        EXPECT_FALSE(f->getCode().empty());
-        EXPECT_EQ(f->getCode().size(), f->getSize());
+        EXPECT_GT(f.getAddr(), 0u);
+        EXPECT_GT(f.getSize(), 0u);
+        EXPECT_FALSE(f.getCode().empty());
+        EXPECT_EQ(f.getCode().size(), f.getSize());
     }
 }
 
@@ -77,8 +77,8 @@ TEST_F(X86HandlerX64Test, CalledTwiceReturnsSameResult) {
     auto second = handler.getNativeFunctions();
     ASSERT_EQ(first.size(), second.size());
     for (size_t i = 0; i < first.size(); ++i) {
-        EXPECT_EQ(first[i]->getAddr(), second[i]->getAddr());
-        EXPECT_EQ(first[i]->getSize(), second[i]->getSize());
+        EXPECT_EQ(first[i].getAddr(), second[i].getAddr());
+        EXPECT_EQ(first[i].getSize(), second[i].getSize());
     }
 }
 

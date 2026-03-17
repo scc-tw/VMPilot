@@ -1,15 +1,30 @@
 #ifndef __SDK_SEGMENTATOR_HPP__
 #define __SDK_SEGMENTATOR_HPP__
 
+#include <CompilationContext.hpp>
+#include <RegionRefiner.hpp>
 #include <Strategy.hpp>
 #include <file_type_parser.hpp>
 
-#include <cstdint>
-#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace VMPilot::SDK::Segmentator {
+
+/// Result of the full segmentation pipeline.
+struct SegmentationResult {
+    std::vector<RegionRefiner::ProtectedRegion> groups;
+    CompilationContext context;
+};
+
+/// Run the complete segmentation pipeline on a binary file.
+/// Returns nullopt on any failure (bad format, no regions, etc.).
+std::optional<SegmentationResult> segment(
+    const std::string& filename) noexcept;
+
+/// Legacy facade — kept for backward compatibility.
 class Segmentator {
    protected:
     VMPilot::Common::FileMetadata m_metadata;
