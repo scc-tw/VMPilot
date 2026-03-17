@@ -10,7 +10,7 @@
 
 namespace VMPilot::SDK::Serializer {
 
-tl::expected<void, std::string> dump(
+[[nodiscard]] tl::expected<void, std::string> dump(
     const Segmentator::SegmentationResult& result,
     const std::string& output_dir);
 
