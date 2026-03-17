@@ -38,10 +38,20 @@ set(INCLUDE_DIRS
 
 add_library(${TARGET_NAME} STATIC ${SRC_FILES})
 
-# Generated protobuf code and protobuf headers emit warnings under /W4.
+# Generated protobuf code and protobuf headers emit warnings under strict settings.
 # Disable warnings-as-errors for this target so third-party headers compile.
 if (MSVC)
     target_compile_options(${TARGET_NAME} PRIVATE /WX-)
+else()
+    # Abseil/protobuf use Clang extensions that trigger warnings with -Werror
+    target_compile_options(${TARGET_NAME} PRIVATE
+        -Wno-nullability-extension
+        -Wno-variadic-macro-arguments-omitted
+        -Wno-gcc-compat
+        -Wno-gnu-anonymous-struct
+        -Wno-nested-anon-types
+        -Wno-sign-compare
+    )
 endif()
 
 target_include_directories(${TARGET_NAME} PUBLIC

@@ -74,6 +74,17 @@ target_link_libraries(test_segment_api GTest::gtest_main VMPilot_SDK_Segmentator
 add_executable(test_serializer test_serializer.cpp)
 if (MSVC)
     target_compile_options(test_serializer PRIVATE /WX-)
+else()
+    # Abseil/protobuf use Clang extensions that trigger warnings with -Werror
+    target_compile_options(test_serializer PRIVATE
+        -Wno-nullability-extension
+        -Wno-variadic-macro-arguments-omitted
+        -Wno-gcc-compat
+        -Wno-gnu-anonymous-struct
+        -Wno-nested-anon-types
+        -Wno-sign-compare
+        -Wno-unused-result
+    )
 endif()
 target_include_directories(test_serializer PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/serializer
