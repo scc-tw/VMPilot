@@ -1,10 +1,13 @@
 #include <compile_pipeline.hpp>
+#include <diagnostic_collector.hpp>
 
 #include <gtest/gtest.h>
 
 #include <filesystem>
 
 using namespace VMPilot::SDK::BytecodeCompiler;
+using VMPilot::Common::DiagnosticCollector;
+using VMPilot::Common::DiagnosticCode;
 
 namespace fs = std::filesystem;
 
@@ -13,7 +16,6 @@ static const std::string TEST_KEY =
 
 class CompilePipelineTest : public ::testing::Test {
 protected:
-    // Path to test binary — set via TEST_DATA_DIR compile definition
     std::string binary_path =
         std::string(TEST_DATA_DIR) + "/basic_binary.Linux.x86";
 
@@ -25,25 +27,26 @@ protected:
 TEST_F(CompilePipelineTest, BasicCompilation) {
     if (!fs::exists(binary_path)) GTEST_SKIP() << "Test binary not found";
 
-    auto result = compile_binary(binary_path, make_config());
-    ASSERT_TRUE(result.has_value()) << result.error();
+    DiagnosticCollector diag;
+    auto result = compile_binary(binary_path, make_config(), diag);
+    ASSERT_TRUE(result.has_value()) << diag.summary();
     EXPECT_GT(result->total_units, 0u);
     EXPECT_FALSE(result->outputs.empty());
+    EXPECT_EQ(result->failed_units, 0u);
 }
 
 TEST_F(CompilePipelineTest, DebugModePreservesFiles) {
     if (!fs::exists(binary_path)) GTEST_SKIP() << "Test binary not found";
 
+    DiagnosticCollector diag;
     auto config = make_config(true);
-    auto result = compile_binary(binary_path, config);
-    ASSERT_TRUE(result.has_value()) << result.error();
+    auto result = compile_binary(binary_path, config, diag);
+    ASSERT_TRUE(result.has_value()) << diag.summary();
 
-    // Debug temp directory should exist
     auto tmp = fs::temp_directory_path() / "vmpilot_compile_debug";
     EXPECT_TRUE(fs::exists(tmp))
         << "Debug temp directory should be preserved";
 
-    // Cleanup after test
     std::error_code ec;
     fs::remove_all(tmp, ec);
 }
@@ -51,34 +54,33 @@ TEST_F(CompilePipelineTest, DebugModePreservesFiles) {
 TEST_F(CompilePipelineTest, DefaultModeCleanup) {
     if (!fs::exists(binary_path)) GTEST_SKIP() << "Test binary not found";
 
-    auto result = compile_binary(binary_path, make_config(false));
-    ASSERT_TRUE(result.has_value()) << result.error();
-
-    // In non-debug mode, temp directory should not exist
-    // (it was never created in non-debug mode)
-    auto tmp = fs::temp_directory_path() / "vmpilot_compile_debug";
-    // We don't assert non-existence because the directory might not
-    // have been created at all in non-debug mode.
+    DiagnosticCollector diag;
+    auto result = compile_binary(binary_path, make_config(false), diag);
+    ASSERT_TRUE(result.has_value()) << diag.summary();
 }
 
 TEST_F(CompilePipelineTest, InvalidBinaryPath) {
-    auto result = compile_binary("/nonexistent/binary", make_config());
+    DiagnosticCollector diag;
+    auto result = compile_binary("/nonexistent/binary", make_config(), diag);
     ASSERT_FALSE(result.has_value());
+    EXPECT_TRUE(diag.has_errors());
 }
 
 TEST_F(CompilePipelineTest, InvalidBackend) {
     if (!fs::exists(binary_path)) GTEST_SKIP() << "Test binary not found";
 
-    auto result = compile_binary(binary_path, make_config(), "nonexistent");
+    DiagnosticCollector diag;
+    auto result = compile_binary(binary_path, make_config(), diag, "nonexistent");
     ASSERT_FALSE(result.has_value());
-    EXPECT_NE(result.error().find("Unknown backend"), std::string::npos);
+    EXPECT_EQ(result.error(), DiagnosticCode::BackendCreationFailed);
 }
 
 TEST_F(CompilePipelineTest, OutputBytecodesValid) {
     if (!fs::exists(binary_path)) GTEST_SKIP() << "Test binary not found";
 
-    auto result = compile_binary(binary_path, make_config());
-    ASSERT_TRUE(result.has_value()) << result.error();
+    DiagnosticCollector diag;
+    auto result = compile_binary(binary_path, make_config(), diag);
+    ASSERT_TRUE(result.has_value()) << diag.summary();
 
     VMPilot::Common::Instruction instr_helper;
     for (const auto& output : result->outputs) {

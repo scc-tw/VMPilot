@@ -4,8 +4,8 @@
 
 #include <CompilationOutput.hpp>
 #include <CompilationUnit.hpp>
-#include <CompileError.hpp>
 #include <CompilerBackend.hpp>
+#include <diagnostic_collector.hpp>
 
 #include <tl/expected.hpp>
 
@@ -18,23 +18,25 @@ namespace VMPilot::SDK::BytecodeCompiler {
 /// Aggregated result from compiling all units.
 struct CompilationResult {
     std::vector<CompilationOutput> outputs;
-    std::vector<CompileError> errors;
     size_t total_units = 0;
+    size_t failed_units = 0;
 };
 
 /// Dispatches compilation units to a backend via a thread pool.
 class CompilationOrchestrator {
 public:
-    /// @param backend   Compiler backend to use (takes ownership).
-    /// @param config    Shared compile configuration.
-    /// @param num_threads  Worker thread count. 0 = hardware_concurrency.
+    /// @param backend     Compiler backend to use (takes ownership).
+    /// @param config      Shared compile configuration.
+    /// @param num_threads Worker thread count. 0 = hardware_concurrency.
     CompilationOrchestrator(std::unique_ptr<CompilerBackend> backend,
                             CompileConfig config,
                             size_t num_threads = 0);
 
     /// Compile pre-built units in parallel.
-    [[nodiscard]] tl::expected<CompilationResult, std::string>
-    compile(const std::vector<Core::CompilationUnit>& units) noexcept;
+    [[nodiscard]] tl::expected<CompilationResult, Common::DiagnosticCode>
+    compile(const std::vector<Core::CompilationUnit>& units,
+            Common::DiagnosticCollector& diag =
+                Common::DiagnosticCollector::noop()) noexcept;
 
 private:
     std::unique_ptr<CompilerBackend> backend_;

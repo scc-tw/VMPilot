@@ -15,7 +15,6 @@ struct CompilationOutput {
     std::string name;
     uint64_t addr = 0;
     std::vector<Common::Instruction_t> bytecodes;
-    std::vector<std::string> warnings;
 };
 
 }  // namespace VMPilot::SDK::BytecodeCompiler

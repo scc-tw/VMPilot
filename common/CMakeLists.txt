@@ -20,6 +20,7 @@ set (SRC_FILES ${SRC_FILES}
     ${CMAKE_CURRENT_SOURCE_DIR}/src/utilities.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/macho_parser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/thread_pool.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/diagnostic_collector.cpp
 )
 
 # Add the library dependencies dir BLAKE3

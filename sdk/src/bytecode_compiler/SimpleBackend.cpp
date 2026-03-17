@@ -6,21 +6,22 @@
 
 namespace VMPilot::SDK::BytecodeCompiler {
 
+using Common::DiagnosticCode;
+
 SimpleBackend::SimpleBackend(const std::string& opcode_key) {
     Common::Opcode_table_generator gen(opcode_key);
     buildtime_ot_ = gen.Get_RealOp_to_OID();
 }
 
-tl::expected<CompilationOutput, CompileError>
+tl::expected<CompilationOutput, DiagnosticCode>
 SimpleBackend::compile_unit(const Core::CompilationUnit& unit,
-                            [[maybe_unused]] const CompileConfig& config) noexcept {
+                            [[maybe_unused]] const CompileConfig& config,
+                            Common::DiagnosticCollector& diag) noexcept {
     if (unit.code.empty()) {
-        return tl::unexpected(CompileError{
-            CompileErrorCode::InvalidInput,
-            "Empty code in compilation unit",
-            unit.name,
-            unit.addr,
-        });
+        diag.error("compiler", DiagnosticCode::InvalidInput,
+                   "empty code in compilation unit",
+                   unit.name, unit.addr);
+        return tl::unexpected(DiagnosticCode::InvalidInput);
     }
 
     CompilationOutput output;
@@ -28,21 +29,17 @@ SimpleBackend::compile_unit(const Core::CompilationUnit& unit,
     output.addr = unit.addr;
     output.bytecodes.reserve(unit.code.size());
 
-    // Look up the OID for DataMovement::MOV
     const auto mov_real = static_cast<Common::Opcode_t>(
         Common::Opcode::Enum::DataMovement::MOV);
     auto it = buildtime_ot_.find(mov_real);
     if (it == buildtime_ot_.end()) {
-        return tl::unexpected(CompileError{
-            CompileErrorCode::InternalError,
-            "MOV opcode not found in buildtime opcode table",
-            unit.name,
-            unit.addr,
-        });
+        diag.error("compiler", DiagnosticCode::CompilerInternalError,
+                   "MOV opcode not found in buildtime opcode table",
+                   unit.name, unit.addr);
+        return tl::unexpected(DiagnosticCode::CompilerInternalError);
     }
     const auto mov_oid = it->second;
 
-    // Thread-local RNG for nonce generation
     thread_local std::mt19937 rng(std::random_device{}());
     std::uniform_int_distribution<uint32_t> nonce_dist;
 

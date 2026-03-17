@@ -16,9 +16,10 @@ class SimpleBackend final : public CompilerBackend {
 public:
     explicit SimpleBackend(const std::string& opcode_key);
 
-    [[nodiscard]] tl::expected<CompilationOutput, CompileError>
+    [[nodiscard]] tl::expected<CompilationOutput, Common::DiagnosticCode>
     compile_unit(const Core::CompilationUnit& unit,
-                 const CompileConfig& config) noexcept override;
+                 const CompileConfig& config,
+                 Common::DiagnosticCollector& diag) noexcept override;
 
     [[nodiscard]] std::string name() const noexcept override {
         return "simple";

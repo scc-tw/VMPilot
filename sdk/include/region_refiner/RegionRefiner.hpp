@@ -3,6 +3,7 @@
 #pragma once
 
 #include <NativeFunctionBase.hpp>
+#include <diagnostic_collector.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -28,16 +29,6 @@ struct ProtectedRegion {
 };
 
 /**
- * @brief Group refined regions by source name into ProtectedRegions.
- *
- * Identifies canonical vs inlined copies using enclosing symbol
- * demangling.  Takes a const ref (doesn't consume ownership).
- */
-std::vector<ProtectedRegion> group(
-    const std::vector<Segmentator::NativeFunctionBase>&
-        regions) noexcept;
-
-/**
  * @brief Refine a set of protected regions by removing overlaps.
  *
  * Given raw regions from the segmentator (which may contain nested or
@@ -50,11 +41,24 @@ std::vector<ProtectedRegion> group(
  *   3. Duplicate: regions at the same address are deduplicated.
  *
  * @param regions The raw regions from segmentator.
+ * @param diag    Diagnostic collector for containment/merge notes.
  * @return Refined regions with no overlaps.
  */
 std::vector<Segmentator::NativeFunctionBase> refine(
-    std::vector<Segmentator::NativeFunctionBase>
-        regions) noexcept;
+    std::vector<Segmentator::NativeFunctionBase> regions,
+    Common::DiagnosticCollector& diag =
+        Common::DiagnosticCollector::noop()) noexcept;
+
+/**
+ * @brief Group refined regions by source name into ProtectedRegions.
+ *
+ * Identifies canonical vs inlined copies using enclosing symbol
+ * demangling.  Takes a const ref (doesn't consume ownership).
+ */
+std::vector<ProtectedRegion> group(
+    const std::vector<Segmentator::NativeFunctionBase>& regions,
+    Common::DiagnosticCollector& diag =
+        Common::DiagnosticCollector::noop()) noexcept;
 
 }  // namespace VMPilot::SDK::RegionRefiner
 
