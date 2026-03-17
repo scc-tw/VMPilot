@@ -3,6 +3,7 @@ set (MAIN_FILE main.cpp)
 set (TARGET_NAME VMPilot_SDK)
 
 add_subdirectory(src)
+add_subdirectory(tools)
 if (ENABLE_TESTS)
     add_subdirectory(tests)
 endif()
