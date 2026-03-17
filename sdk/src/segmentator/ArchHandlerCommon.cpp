@@ -54,14 +54,16 @@ std::vector<std::unique_ptr<NativeFunctionBase>> extractNativeFunctions(
 
     for (size_t i = 0; i < instructions.size(); ++i) {
         const auto& insn = instructions[i];
-        if (!insn.isCall())
+        // VMPilot_Begin is always a call.
+        // VMPilot_End may be a jmp (tail-call optimization under -O2/-O3).
+        if (!insn.isCall() && !insn.isJump())
             continue;
 
         auto sym = resolver(insn, lookup);
         if (!sym)
             continue;
 
-        if (matchesAny(*sym, begin_sigs)) {
+        if (insn.isCall() && matchesAny(*sym, begin_sigs)) {
             if (pending_begin != static_cast<size_t>(-1)) {
                 spdlog::warn(
                     "Nested VMPilot_Begin at 0x{:x}, previous begin at 0x{:x}",

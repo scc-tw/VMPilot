@@ -33,6 +33,13 @@ class FileHandlerStrategy {
     virtual std::vector<uint8_t> doGetTextSection() noexcept;
     virtual uint64_t doGetTextBaseAddr() noexcept;
 
+    /// Read-only data section content and base address.
+    /// (ELF: .rodata, PE: .rdata, Mach-O: __TEXT,__const)
+    /// Used by BytecodeCompiler to resolve jump tables and
+    /// RIP-relative data references from within protected regions.
+    virtual std::vector<uint8_t> doGetReadOnlyData() noexcept;
+    virtual uint64_t doGetReadOnlyBaseAddr() noexcept;
+
     /// Collect function symbols from the binary
     /// (ELF: .dynsym, PE: export table, Mach-O: LC_SYMTAB)
     virtual NativeSymbolTable doGetSymbols() noexcept;
@@ -49,6 +56,8 @@ class FileHandlerStrategy {
     virtual ~FileHandlerStrategy() = default;
     std::vector<uint8_t> getTextSection();
     uint64_t getTextBaseAddr();
+    std::vector<uint8_t> getReadOnlyData();
+    uint64_t getReadOnlyBaseAddr();
 
     /// Assemble a complete symbol table from the three sources above.
     /// Not virtual — subclasses override doGetSymbols/Direct/Indirect instead.

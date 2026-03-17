@@ -31,6 +31,8 @@ class PEFileHandlerStrategy : public FileHandlerStrategy {
    protected:
     virtual std::vector<uint8_t> doGetTextSection() noexcept override;
     virtual uint64_t doGetTextBaseAddr() noexcept override;
+    virtual std::vector<uint8_t> doGetReadOnlyData() noexcept override;
+    virtual uint64_t doGetReadOnlyBaseAddr() noexcept override;
 
     virtual NativeSymbolTable doGetSymbols() noexcept override;
     virtual std::vector<CallTarget> doGetStubCallTargets() noexcept override;
