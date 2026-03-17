@@ -1,15 +1,18 @@
 #include <CompilerBackend.hpp>
 #include <SimpleBackend.hpp>
 #include <CompilationUnit.hpp>
+#include <diagnostic_collector.hpp>
 #include <instruction_t.hpp>
 
 #include <gtest/gtest.h>
 
 using namespace VMPilot::SDK::BytecodeCompiler;
 using VMPilot::SDK::Core::CompilationUnit;
+using VMPilot::Common::DiagnosticCollector;
+using VMPilot::Common::DiagnosticCode;
 
 static const std::string TEST_KEY =
-    "01234567890123456789012345678901";  // 32-char key
+    "01234567890123456789012345678901";
 
 class SimpleBackendTest : public ::testing::Test {
 protected:
@@ -30,6 +33,7 @@ protected:
 
     std::unique_ptr<SimpleBackend> backend;
     CompileConfig config{TEST_KEY, false};
+    DiagnosticCollector diag;
 };
 
 TEST_F(SimpleBackendTest, Name) {
@@ -38,15 +42,15 @@ TEST_F(SimpleBackendTest, Name) {
 
 TEST_F(SimpleBackendTest, EmptyCodeReturnsError) {
     auto unit = make_unit("empty", {});
-    auto result = backend->compile_unit(unit, config);
+    auto result = backend->compile_unit(unit, config, diag);
     ASSERT_FALSE(result.has_value());
-    EXPECT_EQ(result.error().code, CompileErrorCode::InvalidInput);
-    EXPECT_EQ(result.error().unit_name, "empty");
+    EXPECT_EQ(result.error(), DiagnosticCode::InvalidInput);
+    EXPECT_TRUE(diag.has_errors());
 }
 
 TEST_F(SimpleBackendTest, SingleByte) {
     auto unit = make_unit("single", {0x90});
-    auto result = backend->compile_unit(unit, config);
+    auto result = backend->compile_unit(unit, config, diag);
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->name, "single");
     EXPECT_EQ(result->addr, 0x1000u);
@@ -55,21 +59,20 @@ TEST_F(SimpleBackendTest, SingleByte) {
 
 TEST_F(SimpleBackendTest, BytecodesPassChecksum) {
     auto unit = make_unit("checksum_test", {0x55, 0x89, 0xe5, 0xc3});
-    auto result = backend->compile_unit(unit, config);
+    auto result = backend->compile_unit(unit, config, diag);
     ASSERT_TRUE(result.has_value());
     ASSERT_EQ(result->bytecodes.size(), 4u);
 
     VMPilot::Common::Instruction instr_helper;
     for (const auto& inst : result->bytecodes) {
-        EXPECT_TRUE(instr_helper.check(inst))
-            << "Checksum verification failed for instruction";
+        EXPECT_TRUE(instr_helper.check(inst));
     }
 }
 
 TEST_F(SimpleBackendTest, BytecodesEncodeCorrectValues) {
     std::vector<uint8_t> code = {0xAA, 0xBB, 0xCC};
     auto unit = make_unit("values", code);
-    auto result = backend->compile_unit(unit, config);
+    auto result = backend->compile_unit(unit, config, diag);
     ASSERT_TRUE(result.has_value());
     ASSERT_EQ(result->bytecodes.size(), 3u);
 
@@ -84,7 +87,7 @@ TEST_F(SimpleBackendTest, LargerCode) {
     for (int i = 0; i < 256; ++i) code[i] = static_cast<uint8_t>(i);
 
     auto unit = make_unit("large", code);
-    auto result = backend->compile_unit(unit, config);
+    auto result = backend->compile_unit(unit, config, diag);
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->bytecodes.size(), 256u);
 }

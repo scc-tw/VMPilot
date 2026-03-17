@@ -1,11 +1,13 @@
 #include <CompilationOrchestrator.hpp>
 #include <SimpleBackend.hpp>
+#include <diagnostic_collector.hpp>
 
 #include <gtest/gtest.h>
 
 using namespace VMPilot::SDK::BytecodeCompiler;
 using namespace VMPilot::SDK::Core;
 using namespace VMPilot::SDK::Segmentator;
+using VMPilot::Common::DiagnosticCollector;
 
 static const std::string TEST_KEY =
     "01234567890123456789012345678901";
@@ -35,55 +37,61 @@ protected:
 };
 
 TEST_F(OrchestratorTest, EmptyUnits) {
+    DiagnosticCollector diag;
     auto backend = std::make_unique<SimpleBackend>(TEST_KEY);
     CompilationOrchestrator orch(std::move(backend), config, 2);
 
     auto units = make_units(0);
-    auto comp = orch.compile(units);
+    auto comp = orch.compile(units, diag);
     ASSERT_TRUE(comp.has_value());
     EXPECT_EQ(comp->total_units, 0u);
     EXPECT_TRUE(comp->outputs.empty());
-    EXPECT_TRUE(comp->errors.empty());
+    EXPECT_EQ(comp->failed_units, 0u);
 }
 
 TEST_F(OrchestratorTest, SingleUnit) {
+    DiagnosticCollector diag;
     auto backend = std::make_unique<SimpleBackend>(TEST_KEY);
     CompilationOrchestrator orch(std::move(backend), config, 2);
 
     auto units = make_units(1);
-    auto comp = orch.compile(units);
+    auto comp = orch.compile(units, diag);
     ASSERT_TRUE(comp.has_value());
     EXPECT_EQ(comp->total_units, 1u);
     EXPECT_EQ(comp->outputs.size(), 1u);
-    EXPECT_TRUE(comp->errors.empty());
+    EXPECT_EQ(comp->failed_units, 0u);
     EXPECT_EQ(comp->outputs[0].name, "func_0");
 }
 
 TEST_F(OrchestratorTest, MultipleUnitsParallel) {
+    DiagnosticCollector diag;
     auto backend = std::make_unique<SimpleBackend>(TEST_KEY);
     CompilationOrchestrator orch(std::move(backend), config, 4);
 
     auto units = make_units(20);
-    auto comp = orch.compile(units);
+    auto comp = orch.compile(units, diag);
     ASSERT_TRUE(comp.has_value());
     EXPECT_EQ(comp->total_units, 20u);
     EXPECT_EQ(comp->outputs.size(), 20u);
-    EXPECT_TRUE(comp->errors.empty());
+    EXPECT_EQ(comp->failed_units, 0u);
 }
 
 TEST_F(OrchestratorTest, NullBackendReturnsError) {
+    DiagnosticCollector diag;
     CompilationOrchestrator orch(nullptr, config, 2);
     auto units = make_units(1);
-    auto comp = orch.compile(units);
+    auto comp = orch.compile(units, diag);
     ASSERT_FALSE(comp.has_value());
+    EXPECT_TRUE(diag.has_errors());
 }
 
 TEST_F(OrchestratorTest, OutputBytecodesAreValid) {
+    DiagnosticCollector diag;
     auto backend = std::make_unique<SimpleBackend>(TEST_KEY);
     CompilationOrchestrator orch(std::move(backend), config, 2);
 
     auto units = make_units(3);
-    auto comp = orch.compile(units);
+    auto comp = orch.compile(units, diag);
     ASSERT_TRUE(comp.has_value());
 
     VMPilot::Common::Instruction instr_helper;

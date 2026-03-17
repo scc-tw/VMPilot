@@ -11,12 +11,12 @@
 #define HAS_CXXABI 0
 #endif
 
-#include <spdlog/spdlog.h>
-
 using NativeFunc = VMPilot::SDK::Segmentator::NativeFunctionBase;
+using VMPilot::Common::DiagnosticCode;
 
 std::vector<NativeFunc> VMPilot::SDK::RegionRefiner::refine(
-    std::vector<NativeFunc> regions) noexcept {
+    std::vector<NativeFunc> regions,
+    Common::DiagnosticCollector& diag) noexcept {
     if (regions.size() <= 1) {
         return regions;
     }
@@ -46,20 +46,18 @@ std::vector<NativeFunc> VMPilot::SDK::RegionRefiner::refine(
             result.push_back(std::move(region));
         } else if (end <= current_end) {
             // Fully contained within the current region — drop it
-            spdlog::warn(
-                "RegionRefiner: dropping contained region '{}' "
-                "[0x{:x}, 0x{:x}) inside '{}' [0x{:x}, 0x{:x})",
-                region.getName(), start, end, result.back().getName(),
-                result.back().getAddr(), current_end);
+            diag.note("refiner", DiagnosticCode::ContainedRegionDropped,
+                      "dropping contained region inside '" +
+                          result.back().getName() + "'",
+                      region.getName(), start);
             continue;
         } else {
             // Partial overlap — extend the current region to cover both
             auto& last = result.back();
-            spdlog::warn(
-                "RegionRefiner: merging partially overlapping regions "
-                "'{}' [0x{:x}, 0x{:x}) and '{}' [0x{:x}, 0x{:x})",
-                last.getName(), last.getAddr(), current_end,
-                region.getName(), start, end);
+            diag.note("refiner", DiagnosticCode::OverlappingRegionMerged,
+                      "merging overlapping regions '" + last.getName() +
+                          "' and '" + region.getName() + "'",
+                      region.getName(), start);
             uint64_t merged_start = last.getAddr();
             uint64_t merged_size = end - merged_start;
 
@@ -81,11 +79,9 @@ std::vector<NativeFunc> VMPilot::SDK::RegionRefiner::refine(
                 std::move(last_code));
 
             if (!merged.isValid()) {
-                spdlog::error(
-                    "RegionRefiner: merged region '{}' at 0x{:x} is invalid: "
-                    "size={} but code.size()={}, dropping",
-                    merged.getName(), merged_start, merged_size,
-                    merged.getCode().size());
+                diag.warn("refiner", DiagnosticCode::InvalidMergedRegion,
+                          "merged region is invalid (size/code mismatch), dropping",
+                          merged.getName(), merged_start);
                 result.pop_back();
                 // Don't update current_end — treat as if both were dropped
                 continue;
@@ -190,8 +186,8 @@ static bool isCanonicalMatch(const std::string& source_name,
 
 std::vector<VMPilot::SDK::RegionRefiner::ProtectedRegion>
 VMPilot::SDK::RegionRefiner::group(
-    const std::vector<Segmentator::NativeFunctionBase>&
-        regions) noexcept {
+    const std::vector<Segmentator::NativeFunctionBase>& regions,
+    [[maybe_unused]] Common::DiagnosticCollector& diag) noexcept {
     // Map source_name → index into result vector
     std::unordered_map<std::string, size_t> name_to_group;
     std::vector<ProtectedRegion> groups;

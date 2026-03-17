@@ -6,6 +6,8 @@
 
 namespace VMPilot::SDK::BytecodeCompiler {
 
+using Common::DiagnosticCode;
+
 CompilationOrchestrator::CompilationOrchestrator(
     std::unique_ptr<CompilerBackend> backend,
     CompileConfig config,
@@ -14,11 +16,15 @@ CompilationOrchestrator::CompilationOrchestrator(
       config_(std::move(config)),
       num_threads_(num_threads) {}
 
-tl::expected<CompilationResult, std::string>
+tl::expected<CompilationResult, DiagnosticCode>
 CompilationOrchestrator::compile(
-    const std::vector<Core::CompilationUnit>& units) noexcept {
-    if (!backend_)
-        return tl::unexpected(std::string("No compiler backend provided"));
+    const std::vector<Core::CompilationUnit>& units,
+    Common::DiagnosticCollector& diag) noexcept {
+    if (!backend_) {
+        diag.error("compiler", DiagnosticCode::NullBackend,
+                   "no compiler backend provided");
+        return tl::unexpected(DiagnosticCode::NullBackend);
+    }
 
     CompilationResult comp_result;
     comp_result.total_units = units.size();
@@ -26,37 +32,34 @@ CompilationOrchestrator::compile(
     if (units.empty())
         return comp_result;
 
-    // Dispatch to thread pool
     Common::ThreadPool pool(num_threads_);
-    using FutureResult = std::future<tl::expected<CompilationOutput, CompileError>>;
+    using FutureResult = std::future<tl::expected<CompilationOutput, DiagnosticCode>>;
     std::vector<FutureResult> futures;
     futures.reserve(units.size());
 
     for (const auto& unit : units) {
         futures.push_back(pool.submit(
-            [this, &unit]() -> tl::expected<CompilationOutput, CompileError> {
-                return backend_->compile_unit(unit, config_);
+            [this, &unit, &diag]()
+                -> tl::expected<CompilationOutput, DiagnosticCode> {
+                return backend_->compile_unit(unit, config_, diag);
             }));
     }
 
     pool.wait_all();
 
-    // Collect results
     for (auto& fut : futures) {
         try {
             auto res = fut.get();
             if (res.has_value()) {
                 comp_result.outputs.push_back(std::move(res.value()));
             } else {
-                comp_result.errors.push_back(std::move(res.error()));
+                comp_result.failed_units++;
+                // Error already recorded in DiagnosticCollector by the backend
             }
         } catch (const std::exception& e) {
-            comp_result.errors.push_back(CompileError{
-                CompileErrorCode::InternalError,
-                std::string("Exception during compilation: ") + e.what(),
-                {},
-                0,
-            });
+            comp_result.failed_units++;
+            diag.error("compiler", DiagnosticCode::CompilerInternalError,
+                       std::string("exception during compilation: ") + e.what());
         }
     }
 

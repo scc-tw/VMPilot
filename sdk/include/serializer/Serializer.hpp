@@ -3,6 +3,7 @@
 #pragma once
 
 #include <CompilationUnit.hpp>
+#include <diagnostic_collector.hpp>
 #include <segmentator.hpp>
 
 #include <tl/expected.hpp>
@@ -13,23 +14,34 @@
 namespace VMPilot::SDK::Serializer {
 
 /// Build CompilationUnits from a SegmentationResult.
-/// This is the single conversion point: SegmentationResult → vector<CompilationUnit>.
+/// Single conversion point. Reports orphan sites as Error diagnostics.
 [[nodiscard]] std::vector<Core::CompilationUnit> build_units(
-    const Segmentator::SegmentationResult& result);
+    const Segmentator::SegmentationResult& result,
+    Common::DiagnosticCollector& diag =
+        Common::DiagnosticCollector::noop());
 
 /// Dump CompilationUnits to disk (manifest.toml + context.pb + *.unit.pb).
-[[nodiscard]] tl::expected<void, std::string> dump(
+/// Cleans up output_dir on failure.
+[[nodiscard]] tl::expected<void, Common::DiagnosticCode> dump(
     const std::vector<Core::CompilationUnit>& units,
-    const std::string& output_dir);
+    const std::string& output_dir,
+    Common::DiagnosticCollector& diag =
+        Common::DiagnosticCollector::noop());
 
 /// Load all CompilationUnits from a previously dumped directory.
-[[nodiscard]] tl::expected<std::vector<Core::CompilationUnit>, std::string>
-load(const std::string& input_dir);
+/// Strict mode: fails if any unit cannot be loaded.
+[[nodiscard]] tl::expected<std::vector<Core::CompilationUnit>,
+                           Common::DiagnosticCode>
+load(const std::string& input_dir,
+     Common::DiagnosticCollector& diag =
+         Common::DiagnosticCollector::noop());
 
 /// Load a single CompilationUnit from a .unit.pb file + its context.pb.
-[[nodiscard]] tl::expected<Core::CompilationUnit, std::string>
+[[nodiscard]] tl::expected<Core::CompilationUnit, Common::DiagnosticCode>
 load_unit(const std::string& unit_pb_path,
-          const std::string& context_pb_path);
+          const std::string& context_pb_path,
+          Common::DiagnosticCollector& diag =
+              Common::DiagnosticCollector::noop());
 
 }  // namespace VMPilot::SDK::Serializer
 

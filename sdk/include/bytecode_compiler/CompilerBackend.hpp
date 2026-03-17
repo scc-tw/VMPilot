@@ -3,8 +3,8 @@
 #pragma once
 
 #include <CompilationOutput.hpp>
-#include <CompileError.hpp>
 #include <CompilationUnit.hpp>
+#include <diagnostic_collector.hpp>
 
 #include <tl/expected.hpp>
 
@@ -27,9 +27,10 @@ class CompilerBackend {
 public:
     virtual ~CompilerBackend() = default;
 
-    [[nodiscard]] virtual tl::expected<CompilationOutput, CompileError>
+    [[nodiscard]] virtual tl::expected<CompilationOutput, Common::DiagnosticCode>
     compile_unit(const Core::CompilationUnit& unit,
-                 const CompileConfig& config) noexcept = 0;
+                 const CompileConfig& config,
+                 Common::DiagnosticCollector& diag) noexcept = 0;
 
     [[nodiscard]] virtual std::string name() const noexcept = 0;
 };

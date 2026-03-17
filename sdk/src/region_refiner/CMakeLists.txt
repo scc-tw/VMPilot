@@ -7,10 +7,10 @@ set(SRC_FILES
 set(INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../../include/region_refiner
     ${CMAKE_CURRENT_SOURCE_DIR}/../../include/core
-    ${spdlog_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/common/include
 )
 
 include_directories(${INCLUDE_DIRS})
 
 add_library(${TARGET_NAME} STATIC ${SRC_FILES})
-target_link_libraries(${TARGET_NAME} spdlog)
+target_link_libraries(${TARGET_NAME} opcode_table)

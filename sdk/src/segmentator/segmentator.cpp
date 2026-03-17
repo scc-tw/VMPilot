@@ -4,9 +4,8 @@
 #include <HandlerRegistry.hpp>
 #include <file_type_parser.hpp>
 
-#include <spdlog/spdlog.h>
-
 using namespace VMPilot::SDK::Segmentator;
+using VMPilot::Common::DiagnosticCode;
 
 // Forward-declare explicit registration functions from handler .o files.
 // Calling these creates real symbol dependencies that force the linker
@@ -30,20 +29,10 @@ static void registerBuiltinHandlers() {
     registerARM64Handler();
 }
 
-const char* VMPilot::SDK::Segmentator::to_string(SegmentError e) noexcept {
-    switch (e) {
-        case SegmentError::FileNotFound:       return "file not found or corrupt";
-        case SegmentError::UnsupportedFormat:   return "unsupported binary format";
-        case SegmentError::UnsupportedArch:     return "unsupported architecture";
-        case SegmentError::TextSectionMissing:  return "failed to read .text section";
-        case SegmentError::DisassemblyFailed:   return "disassembly failed";
-        case SegmentError::NoRegionsFound:      return "no protected regions found";
-    }
-    return "unknown error";
-}
-
-tl::expected<SegmentationResult, SegmentError>
-VMPilot::SDK::Segmentator::segment(const std::string& filename) noexcept {
+tl::expected<SegmentationResult, DiagnosticCode>
+VMPilot::SDK::Segmentator::segment(
+    const std::string& filename,
+    Common::DiagnosticCollector& diag) noexcept {
     registerBuiltinHandlers();
 
     // 1. Detect format & arch
@@ -51,8 +40,10 @@ VMPilot::SDK::Segmentator::segment(const std::string& filename) noexcept {
     try {
         metadata = VMPilot::Common::get_file_metadata(filename);
     } catch (const std::exception& e) {
-        spdlog::error("segment: {}", e.what());
-        return tl::make_unexpected(SegmentError::FileNotFound);
+        diag.error("segmentator", DiagnosticCode::FileNotFound,
+                   std::string("file not found or corrupt: ") + e.what(),
+                   {}, 0);
+        return tl::make_unexpected(DiagnosticCode::FileNotFound);
     }
 
     const auto& registry = HandlerRegistry::instance();
@@ -60,16 +51,18 @@ VMPilot::SDK::Segmentator::segment(const std::string& filename) noexcept {
     // 2. Create file handler
     auto fh = registry.createFileHandler(metadata.format, filename);
     if (!fh) {
-        spdlog::error("segment: unsupported format {}",
-                      static_cast<uint8_t>(metadata.format));
-        return tl::make_unexpected(SegmentError::UnsupportedFormat);
+        diag.error("segmentator", DiagnosticCode::UnsupportedFormat,
+                   "unsupported binary format: " +
+                       std::to_string(static_cast<uint8_t>(metadata.format)));
+        return tl::make_unexpected(DiagnosticCode::UnsupportedFormat);
     }
 
     auto text = fh->getTextSection();
     auto text_base = fh->getTextBaseAddr();
     if (text.empty() || text_base == static_cast<uint64_t>(-1)) {
-        spdlog::error("segment: failed to read .text section");
-        return tl::make_unexpected(SegmentError::TextSectionMissing);
+        diag.error("segmentator", DiagnosticCode::TextSectionMissing,
+                   "failed to read .text section");
+        return tl::make_unexpected(DiagnosticCode::TextSectionMissing);
     }
 
     // 3. Build symbol table once
@@ -78,9 +71,10 @@ VMPilot::SDK::Segmentator::segment(const std::string& filename) noexcept {
     // 4. Create arch handler
     auto ah = registry.createArchHandler(metadata.arch, metadata.mode, symbols);
     if (!ah) {
-        spdlog::error("segment: unsupported arch {}",
-                      static_cast<uint8_t>(metadata.arch));
-        return tl::make_unexpected(SegmentError::UnsupportedArch);
+        diag.error("segmentator", DiagnosticCode::UnsupportedArch,
+                   "unsupported architecture: " +
+                       std::to_string(static_cast<uint8_t>(metadata.arch)));
+        return tl::make_unexpected(DiagnosticCode::UnsupportedArch);
     }
 
     // 5. Build compilation context
@@ -90,23 +84,30 @@ VMPilot::SDK::Segmentator::segment(const std::string& filename) noexcept {
     ctx.mode = metadata.mode;
     ctx.rodata_sections = fh->getReadOnlySections();
 
-    ah->setCompilationContext(ctx);  // copy — arch handler owns one
+    ah->setCompilationContext(ctx);
 
     // 6. Load & extract
     if (!ah->Load(text, text_base)) {
-        spdlog::error("segment: disassembly failed");
-        return tl::make_unexpected(SegmentError::DisassemblyFailed);
+        diag.error("segmentator", DiagnosticCode::DisassemblyFailed,
+                   "disassembly failed");
+        return tl::make_unexpected(DiagnosticCode::DisassemblyFailed);
     }
 
     auto regions = ah->getNativeFunctions();
     if (regions.empty()) {
-        spdlog::info("segment: no protected regions found");
-        return tl::make_unexpected(SegmentError::NoRegionsFound);
+        // NoRegionsFound is a Warning — return empty result, not error
+        diag.warn("segmentator", DiagnosticCode::NoRegionsFound,
+                  "no protected regions found in " + filename);
+        SegmentationResult empty;
+        empty.context = std::move(ctx);
+        empty.binary_path = filename;
+        empty.compiler_info = fh->getCompilerInfo();
+        return empty;
     }
 
     // 7. Refine & group
-    auto refined = RegionRefiner::refine(std::move(regions));
-    auto groups = RegionRefiner::group(refined);
+    auto refined = RegionRefiner::refine(std::move(regions), diag);
+    auto groups = RegionRefiner::group(refined, diag);
 
     SegmentationResult result;
     result.groups = std::move(groups);

@@ -1,11 +1,11 @@
 #include <segmentator.hpp>
+#include <diagnostic.hpp>
 
 #include <cinttypes>
 #include <cstdio>
 
 using VMPilot::SDK::Segmentator::segment;
-using VMPilot::SDK::Segmentator::SegmentError;
-using VMPilot::SDK::Segmentator::to_string;
+using VMPilot::Common::DiagnosticCode;
 
 int main(int argc, char* argv[]) {
     if (argc != 2) {
@@ -15,12 +15,15 @@ int main(int argc, char* argv[]) {
 
     auto result = segment(argv[1]);
     if (!result) {
-        if (result.error() == SegmentError::NoRegionsFound) {
-            printf("No protected regions found.\n");
-            return 0;
-        }
-        fprintf(stderr, "Error: %s\n", to_string(result.error()));
+        fprintf(stderr, "Error: %s\n",
+                VMPilot::Common::to_string(result.error()));
         return 1;
+    }
+
+    // NoRegionsFound is now a warning, not an error — result succeeds with empty groups
+    if (result->groups.empty()) {
+        printf("No protected regions found.\n");
+        return 0;
     }
 
     size_t total_regions = 0;

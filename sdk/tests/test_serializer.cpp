@@ -20,6 +20,7 @@
 namespace fs = std::filesystem;
 
 using namespace VMPilot::SDK;
+namespace Common = VMPilot::Common;
 
 namespace {
 
@@ -96,7 +97,7 @@ Segmentator::SegmentationResult makeSyntheticResult() {
 }
 
 /// Helper: build_units + dump in one call.
-tl::expected<void, std::string> dumpFromResult(
+tl::expected<void, VMPilot::Common::DiagnosticCode> dumpFromResult(
     const Segmentator::SegmentationResult& result,
     const std::string& output_dir) {
     auto units = Serializer::build_units(result);
@@ -236,10 +237,10 @@ TEST_F(SerializerTest, DumpAndLoadRoundTrip) {
     auto result = makeSyntheticResult();
     auto units = Serializer::build_units(result);
     auto ret = Serializer::dump(units, test_dir.string());
-    ASSERT_TRUE(ret.has_value()) << ret.error();
+    ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
     auto loaded = Serializer::load(test_dir.string());
-    ASSERT_TRUE(loaded.has_value()) << loaded.error();
+    ASSERT_TRUE(loaded.has_value()) << static_cast<int>(loaded.error());
     ASSERT_EQ(loaded->size(), units.size());
 
     // Verify loaded units have correct data
@@ -255,7 +256,7 @@ TEST_F(SerializerTest, LoadUnitSingle) {
     auto result = makeSyntheticResult();
     auto units = Serializer::build_units(result);
     auto ret = Serializer::dump(units, test_dir.string());
-    ASSERT_TRUE(ret.has_value()) << ret.error();
+    ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
     // Find a .unit.pb file
     std::string unit_path;
@@ -273,7 +274,7 @@ TEST_F(SerializerTest, LoadUnitSingle) {
 
     auto ctx_path = (test_dir / "context.pb").string();
     auto loaded = Serializer::load_unit(unit_path, ctx_path);
-    ASSERT_TRUE(loaded.has_value()) << loaded.error();
+    ASSERT_TRUE(loaded.has_value()) << static_cast<int>(loaded.error());
     EXPECT_EQ(loaded->name, "foo");
     EXPECT_NE(loaded->context, nullptr);
     EXPECT_FALSE(loaded->code.empty());
@@ -286,7 +287,7 @@ TEST_F(SerializerTest, LoadUnitSingle) {
 TEST_F(SerializerTest, RoundTrip) {
     auto result = makeSyntheticResult();
     auto ret = dumpFromResult(result, test_dir.string());
-    ASSERT_TRUE(ret.has_value()) << ret.error();
+    ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
     auto ctx_bytes = readFileBytes(test_dir / "context.pb");
     ASSERT_FALSE(ctx_bytes.empty());
@@ -306,7 +307,7 @@ TEST_F(SerializerTest, RoundTrip) {
 TEST_F(SerializerTest, DirectoryStructure) {
     auto result = makeSyntheticResult();
     auto ret = dumpFromResult(result, test_dir.string());
-    ASSERT_TRUE(ret.has_value()) << ret.error();
+    ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
     EXPECT_TRUE(fs::exists(test_dir / "manifest.toml"));
     EXPECT_TRUE(fs::exists(test_dir / "context.pb"));
@@ -322,7 +323,7 @@ TEST_F(SerializerTest, DirectoryStructure) {
 TEST_F(SerializerTest, ManifestContainsExpectedFields) {
     auto result = makeSyntheticResult();
     auto ret = dumpFromResult(result, test_dir.string());
-    ASSERT_TRUE(ret.has_value()) << ret.error();
+    ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
     auto manifest = readFileString(test_dir / "manifest.toml");
     EXPECT_NE(manifest.find("context.pb"), std::string::npos);
@@ -333,7 +334,7 @@ TEST_F(SerializerTest, ManifestContainsExpectedFields) {
 TEST_F(SerializerTest, ContextHashConsistency) {
     auto result = makeSyntheticResult();
     auto ret = dumpFromResult(result, test_dir.string());
-    ASSERT_TRUE(ret.has_value()) << ret.error();
+    ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
     auto ctx_bytes = readFileBytes(test_dir / "context.pb");
     auto expected_hash =
@@ -356,7 +357,7 @@ TEST_F(SerializerTest, ContextHashConsistency) {
 TEST_F(SerializerTest, UnitProtobufRoundTrip) {
     auto result = makeSyntheticResult();
     auto ret = dumpFromResult(result, test_dir.string());
-    ASSERT_TRUE(ret.has_value()) << ret.error();
+    ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
     bool found_canonical = false;
     for (const auto& entry : fs::directory_iterator(test_dir / "foo.group")) {
@@ -408,7 +409,7 @@ TEST_F(SerializerTest, FilenameSanitization) {
     result.groups.push_back(std::move(g));
 
     auto ret = dumpFromResult(result, test_dir.string());
-    ASSERT_TRUE(ret.has_value()) << ret.error();
+    ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
     EXPECT_TRUE(fs::is_directory(test_dir / "foo_bar__baz.group"));
 }
@@ -449,7 +450,7 @@ TEST_F(SerializerTest, MultipleGroups) {
     result.groups.push_back(makeGroup("gamma", 0x3000, 1, "helper"));
 
     auto ret = dumpFromResult(result, test_dir.string());
-    ASSERT_TRUE(ret.has_value()) << ret.error();
+    ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
     EXPECT_TRUE(fs::is_directory(test_dir / "alpha.group"));
     EXPECT_TRUE(fs::is_directory(test_dir / "beta.group"));
@@ -466,7 +467,7 @@ TEST_F(SerializerTest, MultipleGroups) {
 TEST_F(SerializerTest, InlineUnitFields) {
     auto result = makeSyntheticResult();
     auto ret = dumpFromResult(result, test_dir.string());
-    ASSERT_TRUE(ret.has_value()) << ret.error();
+    ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
     bool found_inline = false;
     for (const auto& entry : fs::directory_iterator(test_dir / "foo.group")) {
@@ -529,7 +530,7 @@ TEST_F(SerializerTest, LongNestedTemplateName) {
     result.groups.push_back(std::move(group));
 
     auto ret = dumpFromResult(result, test_dir.string());
-    ASSERT_TRUE(ret.has_value()) << ret.error();
+    ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
     bool found_group = false;
     for (const auto& entry : fs::directory_iterator(test_dir)) {
@@ -594,7 +595,7 @@ TEST_F(SerializerTest, TwoLongNamesStayUnique) {
     result.groups.push_back(std::move(g));
 
     auto ret = dumpFromResult(result, test_dir.string());
-    ASSERT_TRUE(ret.has_value()) << ret.error();
+    ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
     std::set<std::string> filenames;
     for (const auto& dir_entry : fs::directory_iterator(test_dir)) {
@@ -627,7 +628,7 @@ TEST_F(SerializerTest, MissingEnclosingSymbol) {
     result.groups.push_back(std::move(g));
 
     auto ret = dumpFromResult(result, test_dir.string());
-    ASSERT_TRUE(ret.has_value()) << ret.error();
+    ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
     for (const auto& e : fs::directory_iterator(test_dir / "func.group")) {
         if (e.path().extension() != ".pb") continue;
@@ -663,7 +664,7 @@ TEST_F(SerializerTest, SymbolEntryTypeRoundTrip) {
     result.context.symbols.push_back(std::move(pt_sym));
 
     auto ret = dumpFromResult(result, test_dir.string());
-    ASSERT_TRUE(ret.has_value()) << ret.error();
+    ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
     auto ctx_bytes = readFileBytes(test_dir / "context.pb");
     vmpilot::CompilationContext ctx_pb;
@@ -697,7 +698,7 @@ TEST_F(SerializerTest, RodataRoundTrip) {
     result.context.rodata_sections.push_back(std::move(sec));
 
     auto ret = dumpFromResult(result, test_dir.string());
-    ASSERT_TRUE(ret.has_value()) << ret.error();
+    ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
     auto ctx_bytes = readFileBytes(test_dir / "context.pb");
     vmpilot::CompilationContext ctx_pb;
@@ -720,8 +721,8 @@ TEST_F(SerializerTest, Determinism) {
 
     auto ret1 = dumpFromResult(result, dir1.string());
     auto ret2 = dumpFromResult(result, dir2.string());
-    ASSERT_TRUE(ret1.has_value()) << ret1.error();
-    ASSERT_TRUE(ret2.has_value()) << ret2.error();
+    ASSERT_TRUE(ret1.has_value()) << static_cast<int>(ret1.error());
+    ASSERT_TRUE(ret2.has_value()) << static_cast<int>(ret2.error());
 
     EXPECT_EQ(readFileBytes(dir1 / "context.pb"),
               readFileBytes(dir2 / "context.pb"));
@@ -730,7 +731,7 @@ TEST_F(SerializerTest, Determinism) {
 TEST_F(SerializerTest, ManifestIsParsableTOML) {
     auto result = makeSyntheticResult();
     auto ret = dumpFromResult(result, test_dir.string());
-    ASSERT_TRUE(ret.has_value()) << ret.error();
+    ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
     auto content = readFileString(test_dir / "manifest.toml");
     auto parsed = toml::parse(content);
@@ -759,7 +760,7 @@ TEST_F(SerializerTest, ManifestIsParsableTOML) {
 TEST_F(SerializerTest, UnitCountMatchesManifest) {
     auto result = makeSyntheticResult();
     auto ret = dumpFromResult(result, test_dir.string());
-    ASSERT_TRUE(ret.has_value()) << ret.error();
+    ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
     auto content = readFileString(test_dir / "manifest.toml");
     auto parsed = toml::parse(content);
@@ -795,7 +796,7 @@ TEST_F(SerializerTest, OrphanSiteSkipped) {
     result.groups[0].sites.push_back(std::move(orphan));
 
     auto ret = dumpFromResult(result, test_dir.string());
-    ASSERT_TRUE(ret.has_value()) << ret.error();
+    ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
     int count = 0;
     for (const auto& e : fs::directory_iterator(test_dir / "foo.group"))
@@ -806,7 +807,7 @@ TEST_F(SerializerTest, OrphanSiteSkipped) {
 TEST_F(SerializerTest, ManifestSHA256MatchesRecomputed) {
     auto result = makeSyntheticResult();
     auto ret = dumpFromResult(result, test_dir.string());
-    ASSERT_TRUE(ret.has_value()) << ret.error();
+    ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
     auto ctx_bytes = readFileBytes(test_dir / "context.pb");
     auto hash = VMPilot::Crypto::SHA256(ctx_bytes, {});
@@ -850,7 +851,7 @@ TEST_F(SerializerTest, AllUnsafeCharsSanitized) {
     result.groups.push_back(std::move(g));
 
     auto ret = dumpFromResult(result, test_dir.string());
-    ASSERT_TRUE(ret.has_value()) << ret.error();
+    ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
     EXPECT_TRUE(fs::is_directory(test_dir / "a_b_c_d_e_f_g_h_i_j.group"));
 }
@@ -871,7 +872,7 @@ TEST_F(SerializerTest, SegmentPopulatesNewFields) {
     if (!fs::exists(elf_path)) GTEST_SKIP() << "Missing " << elf_path;
 
     auto seg = Segmentator::segment(elf_path.string());
-    ASSERT_TRUE(seg.has_value()) << Segmentator::to_string(seg.error());
+    ASSERT_TRUE(seg.has_value()) << static_cast<int>(seg.error());
 
     EXPECT_FALSE(seg->refined_regions.empty());
     EXPECT_EQ(seg->binary_path, elf_path.string());
@@ -886,7 +887,7 @@ TEST_F(SerializerTest, CompilerInfoPE) {
     if (!fs::exists(pe_path)) GTEST_SKIP() << "Missing " << pe_path;
 
     auto seg = Segmentator::segment(pe_path.string());
-    ASSERT_TRUE(seg.has_value()) << Segmentator::to_string(seg.error());
+    ASSERT_TRUE(seg.has_value()) << static_cast<int>(seg.error());
 
     EXPECT_NE(seg->compiler_info.find("MSVC Linker"), std::string::npos)
         << "compiler_info = '" << seg->compiler_info << "'";
@@ -900,7 +901,7 @@ TEST_F(SerializerTest, CompilerInfoMachO) {
     if (!fs::exists(macho_path)) GTEST_SKIP() << "Missing " << macho_path;
 
     auto seg = Segmentator::segment(macho_path.string());
-    ASSERT_TRUE(seg.has_value()) << Segmentator::to_string(seg.error());
+    ASSERT_TRUE(seg.has_value()) << static_cast<int>(seg.error());
 
     EXPECT_NE(seg->compiler_info.find("Mach-O"), std::string::npos)
         << "compiler_info = '" << seg->compiler_info << "'";
@@ -920,11 +921,11 @@ TEST_P(SerializerCrossPlatformTest, SegmentAndDump) {
 
     auto seg = Segmentator::segment(bin_path.string());
     ASSERT_TRUE(seg.has_value())
-        << GetParam() << ": " << Segmentator::to_string(seg.error());
+        << GetParam() << ": " << static_cast<int>(seg.error());
 
     auto units = Serializer::build_units(*seg);
     auto ret = Serializer::dump(units, test_dir.string());
-    ASSERT_TRUE(ret.has_value()) << GetParam() << ": " << ret.error();
+    ASSERT_TRUE(ret.has_value()) << GetParam() << ": " << static_cast<int>(ret.error());
 
     EXPECT_TRUE(fs::exists(test_dir / "context.pb"));
     EXPECT_TRUE(fs::exists(test_dir / "manifest.toml"));
@@ -960,7 +961,7 @@ TEST_P(SerializerCrossPlatformTest, SegmentAndDump) {
 
     // Round-trip: load back and verify
     auto loaded = Serializer::load(test_dir.string());
-    ASSERT_TRUE(loaded.has_value()) << loaded.error();
+    ASSERT_TRUE(loaded.has_value()) << static_cast<int>(loaded.error());
     EXPECT_EQ(loaded->size(), static_cast<size_t>(total_units));
 }
 

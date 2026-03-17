@@ -4,6 +4,7 @@
 #include <CompilationContext.hpp>
 #include <NativeFunctionBase.hpp>
 #include <RegionRefiner.hpp>
+#include <diagnostic_collector.hpp>
 
 #include <tl/expected.hpp>
 
@@ -11,19 +12,6 @@
 #include <vector>
 
 namespace VMPilot::SDK::Segmentator {
-
-/// Error codes returned by segment().
-enum class SegmentError {
-    FileNotFound,
-    UnsupportedFormat,
-    UnsupportedArch,
-    TextSectionMissing,
-    DisassemblyFailed,
-    NoRegionsFound,
-};
-
-/// Human-readable description of a SegmentError.
-const char* to_string(SegmentError e) noexcept;
 
 /// Result of the full segmentation pipeline.
 struct SegmentationResult {
@@ -35,8 +23,17 @@ struct SegmentationResult {
 };
 
 /// Run the complete segmentation pipeline on a binary file.
-tl::expected<SegmentationResult, SegmentError> segment(
-    const std::string& filename) noexcept;
+///
+/// Error codes returned via DiagnosticCode (1000–1099 range):
+///   FileNotFound, UnsupportedFormat, UnsupportedArch,
+///   TextSectionMissing, DisassemblyFailed.
+///
+/// NoRegionsFound is emitted as a Warning and returns an empty
+/// SegmentationResult (not an error).
+tl::expected<SegmentationResult, Common::DiagnosticCode> segment(
+    const std::string& filename,
+    Common::DiagnosticCollector& diag =
+        Common::DiagnosticCollector::noop()) noexcept;
 
 }  // namespace VMPilot::SDK::Segmentator
 
