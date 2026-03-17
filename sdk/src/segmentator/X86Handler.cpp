@@ -1,6 +1,7 @@
 #include <X86Handler.hpp>
 
 #include "ArchHandlerCommon.hpp"
+#include "RegValueResolver.hpp"
 
 #include <x86.hpp>
 
@@ -58,57 +59,28 @@ static std::optional<std::string> x86ResolveCallTarget(
     return std::nullopt;
 }
 
-// ---------------------------------------------------------------------------
-// Backward constant propagation: resolve the constant value held in `reg`
-// by scanning instructions backwards and following data flow through:
-//   - LEA [rip+disp]              (PIC/PIE address)
-//   - LEA [base+disp]             (base-relative, resolves base recursively)
-//   - LEA [disp]                  (absolute address, non-PIE)
-//   - MOV/MOVABS reg, imm         (absolute address)
-//   - MOV reg, reg                (register forwarding, arbitrary chain length)
-//   - ADD reg, imm / SUB reg, imm (arithmetic adjustment on address)
-// Respects CALL/RET boundaries via callee-saved register awareness.
-// ---------------------------------------------------------------------------
-static uint64_t resolveRegValue(
-    unsigned reg, size_t from_idx,
-    const std::vector<Capstone::Instruction>& instructions, size_t min_idx,
-    int depth = 0) {
-    namespace CX = Capstone::X86;
-
-    constexpr int kMaxDepth = 5;
-    if (depth >= kMaxDepth || from_idx >= instructions.size())
-        return 0;
-
-    for (size_t i = from_idx + 1; i-- > min_idx;) {
-        const auto& insn = instructions[i];
-
-        // CALL/RET clobber caller-saved registers
-        if (insn.isCall() || insn.isRet()) {
-            if (!CX::isCalleeSaved(reg))
-                return 0;
-            continue;
-        }
-
-        // Skip instructions that don't write to our register
-        if (!CX::writesToReg(insn, reg))
-            continue;
+// --- X86 arch traits for generic backward constant propagation ---
+struct X86ArchTraits {
+    static bool isCalleeSaved(unsigned reg) {
+        return Capstone::X86::isCalleeSaved(reg);
+    }
+    static bool writesToReg(const Capstone::Instruction& insn, unsigned reg) {
+        return Capstone::X86::writesToReg(insn, reg);
+    }
+    static WriteClassification classifyWrite(const Capstone::Instruction& insn,
+                                             unsigned /*reg*/) {
+        namespace CX = Capstone::X86;
 
         // --- Terminal patterns (produce a constant) ---
-
-        // lea reg, [rip+disp]
         if (CX::isRipRelativeLEA(insn))
-            return CX::computeRipRelativeVA(insn);
+            return ResolvedConstant{CX::computeRipRelativeVA(insn)};
 
-        // mov/movabs reg, imm
         if (CX::isImmediateLoad(insn))
-            return CX::getImmediateValue(insn);
+            return ResolvedConstant{CX::getImmediateValue(insn)};
 
         // --- Forwarding patterns (trace the source) ---
-
-        // mov reg, src_reg
         if (CX::isRegToRegMov(insn))
-            return resolveRegValue(CX::getMovSource(insn), i > 0 ? i - 1 : 0,
-                                   instructions, min_idx, depth + 1);
+            return RegisterForward{CX::getMovSource(insn)};
 
         // lea reg, [base+disp] (non-RIP; includes lea reg, [disp])
         if (CX::isNonRipLEA(insn)) {
@@ -116,63 +88,36 @@ static uint64_t resolveRegValue(
             unsigned idx = insn.operands[1].mem.index;
             int64_t disp = insn.operands[1].mem.disp;
 
-            // Reject SIB with index register — too complex
             if (idx != 0)
-                return 0;
-
-            // lea reg, [disp] — no base, absolute address
+                return Unresolvable{};
             if (base == 0)
-                return static_cast<uint64_t>(disp);
-
-            // lea reg, [base+disp] — resolve base recursively
-            uint64_t base_val = resolveRegValue(
-                base, i > 0 ? i - 1 : 0, instructions, min_idx, depth + 1);
-            if (base_val != 0)
-                return static_cast<uint64_t>(
-                    static_cast<int64_t>(base_val) + disp);
-            return 0;
+                return ResolvedConstant{static_cast<uint64_t>(disp)};
+            return ArithmeticAdjust{base, disp};
         }
 
-        // add reg, imm — address adjustment
-        if (CX::isImmediateADD(insn)) {
-            int64_t imm = insn.operands[1].imm;
-            uint64_t prev = resolveRegValue(reg, i > 0 ? i - 1 : 0,
-                                            instructions, min_idx, depth + 1);
-            if (prev != 0)
-                return static_cast<uint64_t>(
-                    static_cast<int64_t>(prev) + imm);
-            return 0;
-        }
+        if (CX::isImmediateADD(insn))
+            return ArithmeticAdjust{insn.operands[0].reg,
+                                    insn.operands[1].imm};
 
-        // sub reg, imm — address adjustment
-        if (CX::isImmediateSUB(insn)) {
-            int64_t imm = insn.operands[1].imm;
-            uint64_t prev = resolveRegValue(reg, i > 0 ? i - 1 : 0,
-                                            instructions, min_idx, depth + 1);
-            if (prev != 0)
-                return static_cast<uint64_t>(
-                    static_cast<int64_t>(prev) - imm);
-            return 0;
-        }
+        if (CX::isImmediateSUB(insn))
+            return ArithmeticAdjust{insn.operands[0].reg,
+                                    -insn.operands[1].imm};
 
-        // Unknown write to register → can't resolve
-        return 0;
+        return Unresolvable{};
     }
-
-    return 0;
-}
+};
 
 // Extract the VA of the first string argument near a call instruction.
 // Uses backward constant propagation to handle arbitrary compiler code
 // generation patterns including instruction scheduling, register spilling,
 // and arithmetic address adjustments.
-static uint64_t x86ExtractStringArg(
+static std::optional<uint64_t> x86ExtractStringArg(
     size_t call_idx,
     const std::vector<Capstone::Instruction>& instructions) {
     namespace CX = Capstone::X86;
 
     if (call_idx == 0)
-        return 0;
+        return std::nullopt;
 
     constexpr size_t kMaxWindow = 20;
     const size_t start = (call_idx > kMaxWindow) ? call_idx - kMaxWindow : 0;
@@ -188,11 +133,11 @@ static uint64_t x86ExtractStringArg(
 
         // Found an instruction that sets a first-arg register
         if (!insn.operands.empty() &&
-            insn.operands[0].type == CX::OpType::REG &&
+            insn.operands[0].type == Capstone::OpType::REG &&
             CX::isFirstArgReg(insn.operands[0].reg) &&
             !CX::isReadOnlyOp(insn)) {
-            uint64_t va = resolveRegValue(insn.operands[0].reg, i,
-                                          instructions, start);
+            uint64_t va = resolveRegValue<X86ArchTraits>(
+                insn.operands[0].reg, i, instructions, start);
             if (va != 0)
                 return va;
             break;  // found the write but couldn't resolve — give up
@@ -217,9 +162,9 @@ static uint64_t x86ExtractStringArg(
 
         // push reg → resolve reg's value
         if (CX::isRegPush(insn)) {
-            uint64_t va = resolveRegValue(insn.operands[0].reg,
-                                          i > 0 ? i - 1 : 0, instructions,
-                                          start);
+            uint64_t va = resolveRegValue<X86ArchTraits>(
+                insn.operands[0].reg, i > 0 ? i - 1 : 0, instructions,
+                start);
             if (va != 0)
                 return va;
             break;
@@ -227,16 +172,16 @@ static uint64_t x86ExtractStringArg(
 
         // mov [esp/rsp+off], reg → resolve reg's value
         if (CX::isRegStoreToStack(insn)) {
-            uint64_t va = resolveRegValue(insn.operands[1].reg,
-                                          i > 0 ? i - 1 : 0, instructions,
-                                          start);
+            uint64_t va = resolveRegValue<X86ArchTraits>(
+                insn.operands[1].reg, i > 0 ? i - 1 : 0, instructions,
+                start);
             if (va != 0)
                 return va;
             break;
         }
     }
 
-    return 0;
+    return std::nullopt;
 }
 
 std::vector<std::unique_ptr<NativeFunctionBase>>
