@@ -62,22 +62,19 @@ set (INCLUDE_DIRS
 )
 
 set (TARGET_NAME VMPilot_SDK_LIB)
-set (SRC_FILE ${SRC_FILE}
-    ${CMAKE_CURRENT_SOURCE_DIR}/BytecodeCompileRecipe.cpp
-)
 
 include_directories(${INCLUDE_DIRS})
-add_library(${TARGET_NAME} STATIC ${SRC_FILE})
 
 add_subdirectory(bytecode_compiler)
 add_subdirectory(segmentator)
 add_subdirectory(region_refiner)
 add_subdirectory(serializer)
-set (LIBS ${LIBS}
+
+# VMPilot_SDK_LIB is an interface library that aggregates all SDK sub-libraries.
+add_library(${TARGET_NAME} INTERFACE)
+target_link_libraries(${TARGET_NAME} INTERFACE
     VMPilot_SDK_Bytecode_Compiler
     VMPilot_SDK_RegionRefiner
     VMPilot_SDK_Serializer
     capstone_wrapper
 )
-
-target_link_libraries(${TARGET_NAME} PUBLIC ${LIBS})

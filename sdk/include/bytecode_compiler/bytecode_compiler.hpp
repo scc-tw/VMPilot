@@ -1,39 +1,13 @@
 #ifndef __SDK_BYTECODE_COMPILER_HPP__
 #define __SDK_BYTECODE_COMPILER_HPP__
 
-#include <BytecodeCompileRecipe.hpp>
+// Central header for the bytecode compiler subsystem.
+// Includes all public types and the top-level pipeline entry point.
 
-#include <cstdint>
-#include <memory>
-#include <vector>
+#include <CompilationOrchestrator.hpp>
+#include <CompilationOutput.hpp>
+#include <CompileError.hpp>
+#include <CompilerBackend.hpp>
+#include <compile_pipeline.hpp>
 
-namespace VMPilot::SDK::BytecodeCompiler {
-
-enum class Arch : uint8_t {
-    X86,
-    X86_64,
-    ARM,
-    ARM64,
-};
-
-class CompilerBase {
-    Arch m_arch;
-
-   public:
-    virtual std::vector<uint8_t> Compile(
-        const BytecodeCompileRecipe& script) = 0;
-
-    Arch GetArch() const noexcept { return m_arch; }
-
-    CompilerBase(Arch arch) : m_arch(arch) {}
-    virtual ~CompilerBase() = default;
-};
-
-class CompilerFactory {
-   public:
-    static std::unique_ptr<CompilerBase> CreateCompiler(Arch arch) noexcept;
-};
-
-}  // namespace VMPilot::SDK::BytecodeCompiler
-
-#endif
+#endif  // __SDK_BYTECODE_COMPILER_HPP__

@@ -1,19 +1,19 @@
-#include <bytecode_compiler.hpp>
-#include <x86_64_compiler.hpp>
-#include <x86_compiler.hpp>
+#include <CompilerBackend.hpp>
+#include <SimpleBackend.hpp>
 
-using namespace VMPilot::SDK::BytecodeCompiler;
+namespace VMPilot::SDK::BytecodeCompiler {
 
-std::unique_ptr<CompilerBase> CompilerFactory::CreateCompiler(
-    Arch arch) noexcept {
-    switch (arch) {
-        case Arch::X86:
-            return std::make_unique<X86Compiler>();
-        case Arch::X86_64:
-            return std::make_unique<X86_64Compiler>();
-        case Arch::ARM:
-        case Arch::ARM64:
+std::unique_ptr<CompilerBackend>
+create_backend(const std::string& name,
+               const CompileConfig& config) noexcept {
+    if (name == "simple") {
+        try {
+            return std::make_unique<SimpleBackend>(config.opcode_key);
+        } catch (...) {
             return nullptr;
+        }
     }
     return nullptr;
 }
+
+}  // namespace VMPilot::SDK::BytecodeCompiler

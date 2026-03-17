@@ -53,6 +53,28 @@ target_link_libraries(test_bytecode_compiler GTest::gtest_main VMPilot_SDK_LIB)
 add_executable(test_segmentator_integration test_segmentator_integration.cpp)
 target_link_libraries(test_segmentator_integration GTest::gtest_main VMPilot_SDK_Segmentator VMPilot_SDK_RegionRefiner VMPilot_SDK_LIB capstone_wrapper opcode_table)
 
+add_executable(test_thread_pool test_thread_pool.cpp)
+target_link_libraries(test_thread_pool GTest::gtest_main opcode_table)
+
+add_executable(test_compilation_unit test_compilation_unit.cpp)
+target_link_libraries(test_compilation_unit GTest::gtest_main)
+
+add_executable(test_compiler_backend test_compiler_backend.cpp)
+target_link_libraries(test_compiler_backend GTest::gtest_main VMPilot_SDK_Bytecode_Compiler opcode_table)
+
+add_executable(test_compilation_orchestrator test_compilation_orchestrator.cpp)
+target_link_libraries(test_compilation_orchestrator GTest::gtest_main VMPilot_SDK_Bytecode_Compiler opcode_table)
+
+add_executable(test_compile_pipeline test_compile_pipeline.cpp)
+if (MSVC)
+    target_compile_options(test_compile_pipeline PRIVATE /WX-)
+endif()
+target_link_libraries(test_compile_pipeline
+    GTest::gtest_main
+    VMPilot_SDK_LIB
+    opcode_table
+)
+
 add_executable(test_macho_handler test_macho_handler.cpp)
 target_link_libraries(test_macho_handler GTest::gtest_main VMPilot_SDK_Segmentator capstone_wrapper opcode_table)
 
@@ -117,3 +139,8 @@ gtest_discover_tests(test_segmentator_integration)
 gtest_discover_tests(test_string_extraction)
 gtest_discover_tests(test_segment_api)
 gtest_discover_tests(test_serializer)
+gtest_discover_tests(test_thread_pool)
+gtest_discover_tests(test_compilation_unit)
+gtest_discover_tests(test_compiler_backend)
+gtest_discover_tests(test_compilation_orchestrator)
+gtest_discover_tests(test_compile_pipeline)
