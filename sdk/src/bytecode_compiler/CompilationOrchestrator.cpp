@@ -1,5 +1,4 @@
 #include <CompilationOrchestrator.hpp>
-#include <CompilationUnit.hpp>
 #include <thread_pool.hpp>
 
 #include <future>
@@ -17,46 +16,15 @@ CompilationOrchestrator::CompilationOrchestrator(
 
 tl::expected<CompilationResult, std::string>
 CompilationOrchestrator::compile(
-    const Segmentator::SegmentationResult& result) noexcept {
+    const std::vector<Core::CompilationUnit>& units) noexcept {
     if (!backend_)
         return tl::unexpected(std::string("No compiler backend provided"));
-
-    // Build CompilationUnits from SegmentationResult groups
-    std::vector<Core::CompilationUnit> units;
-
-    for (const auto& group : result.groups) {
-        for (const auto& site : group.sites) {
-            // Find the matching NativeFunctionBase by address
-            const Segmentator::NativeFunctionBase* found = nullptr;
-            for (const auto& region : result.refined_regions) {
-                if (region.getAddr() == site.addr &&
-                    region.getName() == site.source_name) {
-                    found = &region;
-                    break;
-                }
-            }
-            if (!found)
-                continue;
-
-            Core::CompilationUnit unit;
-            unit.name = site.source_name;
-            unit.addr = site.addr;
-            unit.size = site.size;
-            unit.code = found->getCode();
-            unit.enclosing_symbol =
-                site.enclosing_symbol.value_or(std::string{});
-            unit.is_canonical = site.is_canonical;
-            unit.context = &result.context;
-            units.push_back(std::move(unit));
-        }
-    }
 
     CompilationResult comp_result;
     comp_result.total_units = units.size();
 
-    if (units.empty()) {
+    if (units.empty())
         return comp_result;
-    }
 
     // Dispatch to thread pool
     Common::ThreadPool pool(num_threads_);

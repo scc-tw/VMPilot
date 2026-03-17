@@ -1,9 +1,9 @@
 #include <Serializer.hpp>
+#include <SerializationTraits.hpp>
 
 #include <ArchEnum.hpp>
 #include <ModeEnum.hpp>
 #include <VMPilot_crypto.hpp>
-#include <vmpilot.pb.h>
 
 #include <toml++/toml.hpp>
 
@@ -26,17 +26,9 @@ using namespace VMPilot::SDK;
 
 namespace {
 
-/// Max length for a single sanitized name component.
-/// Kept short so that directory + filename stay under both
-/// Windows MAX_PATH (260) and Linux NAME_MAX (255).
-/// Budget: output_dir (~70) + "/" + dir (~66) + "/" + filename (~120) < 260.
 constexpr size_t kMaxComponent = 60;
 constexpr size_t kMaxFilename = 120;
 
-/// Replace filesystem-unsafe characters and truncate.
-/// When truncation occurs, append a short FNV-1a hash of the original
-/// to preserve uniqueness (e.g. nested-template names that share
-/// a long common prefix).
 std::string sanitize(std::string_view input,
                      size_t max_len = kMaxComponent) {
     std::string result(input);
@@ -73,8 +65,6 @@ std::string toHexString(const std::vector<uint8_t>& bytes) {
     return ss.str();
 }
 
-/// Build unit filename with truncation safety.
-/// The address suffix is the true unique key and is never truncated.
 std::string buildUnitFilename(std::string_view source_name,
                               bool is_canonical,
                               std::string_view enclosing,
@@ -103,82 +93,19 @@ bool writeFile(const fs::path& path, std::string_view data) {
     return out.good();
 }
 
-std::string entryTypeString(
-    const Segmentator::NativeSymbolTableEntry& sym) {
-    return sym.getAttribute<std::string>("entry_type", std::string());
+tl::expected<std::string, std::string> readFile(const fs::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in)
+        return tl::unexpected(std::string("failed to open: ") + path.string());
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    if (!in.good() && !in.eof())
+        return tl::unexpected(std::string("failed to read: ") + path.string());
+    return ss.str();
 }
 
 // ---------------------------------------------------------------------------
-// Context serialization
-// ---------------------------------------------------------------------------
-
-struct ContextBlob {
-    std::string serialized;       // raw protobuf bytes
-    std::vector<uint8_t> hash;    // SHA-256
-    std::string hash_hex;
-};
-
-tl::expected<ContextBlob, std::string>
-serializeContext(const Segmentator::CompilationContext& ctx) {
-    vmpilot::CompilationContext pb;
-    pb.set_arch(static_cast<uint32_t>(ctx.arch));
-    pb.set_mode(static_cast<uint32_t>(ctx.mode));
-
-    for (const auto& sym : ctx.symbols) {
-        auto* s = pb.add_symbols();
-        s->set_name(sym.name);
-        s->set_address(sym.address);
-        s->set_size(sym.size);
-        s->set_entry_type(entryTypeString(sym));
-        s->set_is_global(sym.isGlobal);
-    }
-
-    for (const auto& sec : ctx.rodata_sections) {
-        auto* r = pb.add_rodata_sections();
-        r->set_base_addr(sec.base_addr);
-        r->set_data(sec.data.data(), sec.data.size());
-    }
-
-    ContextBlob blob;
-    if (!pb.SerializeToString(&blob.serialized))
-        return tl::make_unexpected("failed to serialize CompilationContext");
-
-    std::vector<uint8_t> bytes(blob.serialized.begin(),
-                               blob.serialized.end());
-    blob.hash = VMPilot::Crypto::SHA256(bytes, /*salt=*/{});
-    blob.hash_hex = toHexString(blob.hash);
-    return blob;
-}
-
-// ---------------------------------------------------------------------------
-// Unit serialization
-// ---------------------------------------------------------------------------
-
-tl::expected<std::string, std::string>
-serializeUnit(const Segmentator::NativeFunctionBase& region,
-              std::string_view enclosing,
-              bool is_canonical,
-              const std::vector<uint8_t>& context_hash) {
-    vmpilot::CompilationUnit pb;
-    pb.set_name(region.getName());
-    pb.set_addr(region.getAddr());
-    pb.set_size(region.getSize());
-    auto code = region.getCode();
-    pb.set_code(code.data(), code.size());
-    pb.set_enclosing_symbol(std::string(enclosing));
-    pb.set_is_canonical(is_canonical);
-    pb.set_context_file("context.pb");
-    pb.set_context_hash(context_hash.data(), context_hash.size());
-
-    std::string out;
-    if (!pb.SerializeToString(&out))
-        return tl::make_unexpected("failed to serialize CompilationUnit for " +
-                                   region.getName());
-    return out;
-}
-
-// ---------------------------------------------------------------------------
-// Manifest builder
+// Manifest helpers
 // ---------------------------------------------------------------------------
 
 struct UnitManifestEntry {
@@ -196,21 +123,25 @@ struct GroupManifestEntry {
 };
 
 std::string buildManifest(
-    const Segmentator::SegmentationResult& result,
-    const ContextBlob& ctx_blob,
+    const std::vector<Core::CompilationUnit>& units,
+    const std::string& ctx_hash_hex,
     const std::vector<GroupManifestEntry>& groups) {
     toml::table manifest;
 
-    manifest.insert("binary", toml::table{
-        {"path", result.binary_path},
-        {"compiler_info", result.compiler_info},
-    });
+    // Derive arch/mode from the first unit's context
+    std::string arch_str = "UNKNOWN";
+    std::string mode_str = "UNKNOWN";
+    std::string binary_path;
+    if (!units.empty() && units[0].context) {
+        arch_str = Segmentator::to_string(units[0].context->arch);
+        mode_str = Segmentator::to_string(units[0].context->mode);
+    }
 
     manifest.insert("context", toml::table{
         {"file", "context.pb"},
-        {"sha256", ctx_blob.hash_hex},
-        {"arch", std::string(Segmentator::to_string(result.context.arch))},
-        {"mode", std::string(Segmentator::to_string(result.context.mode))},
+        {"sha256", ctx_hash_hex},
+        {"arch", arch_str},
+        {"mode", mode_str},
     });
 
     toml::array groups_arr;
@@ -224,7 +155,7 @@ std::string buildManifest(
             units_arr.push_back(toml::table{
                 {"file", u.file},
                 {"context_file", "context.pb"},
-                {"context_hash", ctx_blob.hash_hex},
+                {"context_hash", ctx_hash_hex},
                 {"addr", u.addr},
                 {"size", u.size},
                 {"is_canonical", u.is_canonical},
@@ -246,76 +177,123 @@ std::string buildManifest(
 }  // namespace
 
 // ---------------------------------------------------------------------------
-// Public API
+// Public API: build_units
+// ---------------------------------------------------------------------------
+
+std::vector<Core::CompilationUnit> Serializer::build_units(
+    const Segmentator::SegmentationResult& result) {
+    std::vector<Core::CompilationUnit> units;
+
+    // Shared context — one shared_ptr for all units from this binary
+    auto ctx = std::make_shared<const Segmentator::CompilationContext>(
+        result.context);
+
+    for (const auto& group : result.groups) {
+        for (const auto& site : group.sites) {
+            // Find the matching NativeFunctionBase by address + name
+            const Segmentator::NativeFunctionBase* found = nullptr;
+            for (const auto& region : result.refined_regions) {
+                if (region.getAddr() == site.addr &&
+                    region.getName() == site.source_name) {
+                    found = &region;
+                    break;
+                }
+            }
+            if (!found)
+                continue;
+
+            Core::CompilationUnit unit;
+            unit.name = site.source_name;
+            unit.addr = site.addr;
+            unit.size = site.size;
+            unit.code = found->getCode();
+            unit.enclosing_symbol =
+                site.enclosing_symbol.value_or(std::string{});
+            unit.is_canonical = site.is_canonical;
+            unit.context = ctx;
+            units.push_back(std::move(unit));
+        }
+    }
+
+    return units;
+}
+
+// ---------------------------------------------------------------------------
+// Public API: dump
 // ---------------------------------------------------------------------------
 
 tl::expected<void, std::string> Serializer::dump(
-    const Segmentator::SegmentationResult& result,
+    const std::vector<Core::CompilationUnit>& units,
     const std::string& output_dir) {
+
+    if (units.empty())
+        return tl::unexpected(std::string("no units to dump"));
 
     // 1. Create output directory
     std::error_code ec;
     fs::create_directories(output_dir, ec);
     if (ec)
-        return tl::make_unexpected("failed to create output directory: " +
-                                   ec.message());
+        return tl::unexpected(std::string("failed to create output directory: ") +
+                              ec.message());
 
     const fs::path out_root(output_dir);
 
-    // 2. Serialize context and write to disk
-    auto ctx_blob = serializeContext(result.context);
-    if (!ctx_blob)
-        return tl::make_unexpected(ctx_blob.error());
+    // 2. Serialize and write context
+    // All units share the same context (guaranteed by build_units)
+    if (!units[0].context)
+        return tl::unexpected(std::string("units have no context"));
 
-    if (!writeFile(out_root / "context.pb", ctx_blob->serialized))
-        return tl::make_unexpected("failed to write context.pb");
+    auto ctx_bytes = serialize(*units[0].context);
+    if (!ctx_bytes)
+        return tl::unexpected(ctx_bytes.error());
 
-    // 3. Build addr → index lookup for refined regions
-    std::unordered_map<uint64_t, size_t> addr_to_idx;
-    for (size_t i = 0; i < result.refined_regions.size(); ++i)
-        addr_to_idx[result.refined_regions[i].getAddr()] = i;
+    if (!writeFile(out_root / "context.pb", *ctx_bytes))
+        return tl::unexpected(std::string("failed to write context.pb"));
 
-    // 4. Serialize each group's units and collect manifest entries
+    // Compute context hash for manifest
+    std::vector<uint8_t> ctx_raw(ctx_bytes->begin(), ctx_bytes->end());
+    auto ctx_hash = VMPilot::Crypto::SHA256(ctx_raw, /*salt=*/{});
+    auto ctx_hash_hex = toHexString(ctx_hash);
+
+    // 3. Group units by name for directory structure
+    std::unordered_map<std::string, std::vector<size_t>> name_to_indices;
+    for (size_t i = 0; i < units.size(); ++i)
+        name_to_indices[units[i].name].push_back(i);
+
+    // 4. Serialize each group's units
     std::vector<GroupManifestEntry> manifest_groups;
 
-    for (const auto& group : result.groups) {
-        std::string dir_name = sanitize(group.source_name) + ".group";
+    for (const auto& [group_name, indices] : name_to_indices) {
+        std::string dir_name = sanitize(group_name) + ".group";
         fs::path group_dir = out_root / dir_name;
         fs::create_directories(group_dir, ec);
         if (ec)
-            return tl::make_unexpected("failed to create group directory: " +
-                                       ec.message());
+            return tl::unexpected(std::string("failed to create group directory: ") +
+                                  ec.message());
 
-        GroupManifestEntry manifest_group{group.source_name, dir_name, {}};
+        GroupManifestEntry manifest_group{group_name, dir_name, {}};
 
-        for (const auto& site : group.sites) {
-            auto it = addr_to_idx.find(site.addr);
-            if (it == addr_to_idx.end()) continue;
+        for (size_t idx : indices) {
+            const auto& unit = units[idx];
 
-            const auto& region = result.refined_regions[it->second];
-            std::string enclosing =
-                site.enclosing_symbol.value_or("unknown");
+            auto filename = buildUnitFilename(
+                unit.name, unit.is_canonical,
+                unit.enclosing_symbol.empty() ? "unknown" : unit.enclosing_symbol,
+                unit.addr);
 
-            // Build filename and serialize unit
-            auto filename = buildUnitFilename(group.source_name,
-                                              site.is_canonical,
-                                              enclosing, site.addr);
-
-            auto unit_bytes = serializeUnit(region, enclosing,
-                                            site.is_canonical,
-                                            ctx_blob->hash);
+            auto unit_bytes = serialize(unit);
             if (!unit_bytes)
-                return tl::make_unexpected(unit_bytes.error());
+                return tl::unexpected(unit_bytes.error());
 
             if (!writeFile(group_dir / filename, *unit_bytes))
-                return tl::make_unexpected("failed to write " + filename);
+                return tl::unexpected(std::string("failed to write ") + filename);
 
             manifest_group.units.push_back({
                 dir_name + "/" + filename,
-                toHexAddr(site.addr),
-                static_cast<int64_t>(region.getSize()),
-                site.is_canonical,
-                enclosing,
+                toHexAddr(unit.addr),
+                static_cast<int64_t>(unit.size),
+                unit.is_canonical,
+                unit.enclosing_symbol.empty() ? "unknown" : unit.enclosing_symbol,
             });
         }
 
@@ -323,9 +301,105 @@ tl::expected<void, std::string> Serializer::dump(
     }
 
     // 5. Write manifest
-    auto manifest_str = buildManifest(result, *ctx_blob, manifest_groups);
+    auto manifest_str = buildManifest(units, ctx_hash_hex, manifest_groups);
     if (!writeFile(out_root / "manifest.toml", manifest_str))
-        return tl::make_unexpected("failed to write manifest.toml");
+        return tl::unexpected(std::string("failed to write manifest.toml"));
 
     return {};
+}
+
+// ---------------------------------------------------------------------------
+// Public API: load
+// ---------------------------------------------------------------------------
+
+tl::expected<std::vector<Core::CompilationUnit>, std::string>
+Serializer::load(const std::string& input_dir) {
+    const fs::path root(input_dir);
+
+    // 1. Read and deserialize context
+    auto ctx_bytes = readFile(root / "context.pb");
+    if (!ctx_bytes)
+        return tl::unexpected(ctx_bytes.error());
+
+    auto ctx_result = deserialize<Segmentator::CompilationContext>(*ctx_bytes);
+    if (!ctx_result)
+        return tl::unexpected(ctx_result.error());
+
+    auto ctx = std::make_shared<const Segmentator::CompilationContext>(
+        std::move(*ctx_result));
+
+    // 2. Read manifest to find unit files
+    auto manifest_bytes = readFile(root / "manifest.toml");
+    if (!manifest_bytes)
+        return tl::unexpected(manifest_bytes.error());
+
+    toml::table manifest;
+    try {
+        manifest = toml::parse(*manifest_bytes);
+    } catch (const toml::parse_error& e) {
+        return tl::unexpected(
+            std::string("failed to parse manifest.toml: ") + e.what());
+    }
+
+    // 3. Iterate groups and load each unit
+    std::vector<Core::CompilationUnit> units;
+
+    auto* groups = manifest["groups"].as_array();
+    if (!groups)
+        return tl::unexpected(std::string("manifest missing 'groups' array"));
+
+    for (const auto& group_node : *groups) {
+        auto* group = group_node.as_table();
+        if (!group) continue;
+
+        auto* units_arr = (*group)["units"].as_array();
+        if (!units_arr) continue;
+
+        for (const auto& unit_node : *units_arr) {
+            auto* unit_tbl = unit_node.as_table();
+            if (!unit_tbl) continue;
+
+            auto file_val = (*unit_tbl)["file"].value<std::string>();
+            if (!file_val) continue;
+
+            auto unit_file_bytes = readFile(root / *file_val);
+            if (!unit_file_bytes)
+                return tl::unexpected(unit_file_bytes.error());
+
+            auto unit = deserialize<Core::CompilationUnit>(*unit_file_bytes, ctx);
+            if (!unit)
+                return tl::unexpected(unit.error());
+
+            units.push_back(std::move(*unit));
+        }
+    }
+
+    return units;
+}
+
+// ---------------------------------------------------------------------------
+// Public API: load_unit
+// ---------------------------------------------------------------------------
+
+tl::expected<Core::CompilationUnit, std::string>
+Serializer::load_unit(const std::string& unit_pb_path,
+                      const std::string& context_pb_path) {
+    // 1. Read and deserialize context
+    auto ctx_bytes = readFile(context_pb_path);
+    if (!ctx_bytes)
+        return tl::unexpected(ctx_bytes.error());
+
+    auto ctx_result = deserialize<Segmentator::CompilationContext>(*ctx_bytes);
+    if (!ctx_result)
+        return tl::unexpected(ctx_result.error());
+
+    auto ctx = std::make_shared<const Segmentator::CompilationContext>(
+        std::move(*ctx_result));
+
+    // 2. Read and deserialize unit
+    auto unit_bytes = readFile(unit_pb_path);
+    if (!unit_bytes)
+        return tl::unexpected(unit_bytes.error());
+
+    return deserialize<Core::CompilationUnit>(*unit_bytes, ctx);
 }
