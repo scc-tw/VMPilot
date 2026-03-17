@@ -27,6 +27,15 @@ string(REPLACE "/WX" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 string(REPLACE "-Werror" "" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
 string(REPLACE "-Werror" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 
+# Suppress all warnings from third-party code (abseil/protobuf)
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -w")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w")
+elseif (MSVC)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /w")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /w")
+endif()
+
 # Abseil — pinned submodule (LTS 2026-01-07), built before protobuf
 # so that absl::strings target already exists and protobuf skips FetchContent.
 add_subdirectory(${CMAKE_SOURCE_DIR}/third_party/abseil-cpp
