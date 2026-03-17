@@ -81,6 +81,9 @@ class Instruction {
     // Architecture-neutral operand details
     std::vector<Operand> operands;
 
+    // x86 prefix bytes from capstone detail (prefix[0..3])
+    uint8_t x86_prefix[4] = {};
+
     // Instruction group membership
     std::vector<uint8_t> groups;
 

@@ -50,6 +50,8 @@ message DataReference {
   uint32 atomic_width = 10;
   RelocationEntry relocation = 11;
   JumpTableRef jump_table = 12;
+  uint32 atomic_ordering = 13;
+  uint32 atomic_op = 14;
 }
 
 message CompilationContext {

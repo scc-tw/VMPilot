@@ -34,10 +34,32 @@ enum class DataRefSource : uint8_t {
 
 enum class AtomicWidth : uint8_t {
     None,
-    Atomic8,   // TODO: reserved for future atomic detection
-    Atomic16,  // TODO: reserved for future atomic detection
-    Atomic32,  // TODO: reserved for future atomic detection
-    Atomic64,  // TODO: reserved for future atomic detection
+    Atomic8,
+    Atomic16,
+    Atomic32,
+    Atomic64,
+    Atomic128,  // lock cmpxchg16b
+};
+
+enum class AtomicOrdering : uint8_t {
+    None,
+    Relaxed,   // ARM64 no suffix (cas, swp, ldadd...)
+    Acquire,   // ARM64 'a' suffix (casa, swpa, ldar...)
+    Release,   // ARM64 'l' suffix (casl, stlr...)
+    AcqRel,    // ARM64 'al' suffix / x86 lock (seq_cst equivalent)
+};
+
+enum class AtomicOp : uint8_t {
+    None,
+    LoadExclusive,   // ARM64 ldxr/ldaxr
+    StoreExclusive,  // ARM64 stxr/stlxr
+    CompareSwap,     // lock cmpxchg / cas
+    Swap,            // xchg / swp
+    FetchAdd,        // lock xadd / ldadd
+    RMW,             // lock add/sub/and/or/xor/inc/dec/neg/not/bts/btr/btc
+    LoadAcquire,     // ARM64 ldar
+    StoreRelease,    // ARM64 stlr
+    Fence,           // mfence/sfence/lfence / dmb/dsb/isb
 };
 
 struct JumpTableRef {
@@ -67,6 +89,8 @@ struct DataReference {
     bool is_write = false;        // true if instruction writes to target
     bool is_pc_relative = false;  // true if RIP/PC-relative addressing
     AtomicWidth atomic_width = AtomicWidth::None;
+    AtomicOrdering atomic_ordering = AtomicOrdering::None;
+    AtomicOp atomic_op = AtomicOp::None;
 
     /// Original relocation entry (populated by Layer 1)
     RelocationEntry relocation;

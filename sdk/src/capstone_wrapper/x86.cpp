@@ -125,6 +125,12 @@ bool isImmediateSUB(const Instruction& insn) {
            insn.operands[1].type == OpType::IMM;
 }
 
+// --- Prefix analysis ---
+
+bool hasLockPrefix(const Instruction& insn) {
+    return insn.x86_prefix[0] == X86_PREFIX_LOCK;
+}
+
 // --- Operand analysis ---
 
 bool isReadOnlyOp(const Instruction& insn) {
