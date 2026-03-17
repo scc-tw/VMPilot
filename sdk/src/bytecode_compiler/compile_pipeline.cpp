@@ -1,11 +1,31 @@
 #include <compile_pipeline.hpp>
+#include <ReferenceAnalyzer.hpp>
 #include <Serializer.hpp>
 #include <segmentator.hpp>
+
+#include <capstone.hpp>
 
 #include <filesystem>
 #include <string>
 
 namespace fs = std::filesystem;
+
+namespace {
+
+/// Convert SDK arch enum to Capstone arch enum.
+Capstone::Arch toCapstoneArch(VMPilot::Common::FileArch arch) {
+    switch (arch) {
+        case VMPilot::Common::FileArch::X86:   return Capstone::Arch::X86;
+        case VMPilot::Common::FileArch::ARM64: return Capstone::Arch::ARM64;
+        case VMPilot::Common::FileArch::ARM:   return Capstone::Arch::ARM;
+        case VMPilot::Common::FileArch::MIPS:  return Capstone::Arch::MIPS;
+        case VMPilot::Common::FileArch::PPC:   return Capstone::Arch::PPC;
+        case VMPilot::Common::FileArch::RISCV: return Capstone::Arch::RISCV;
+        default: return Capstone::Arch::X86;
+    }
+}
+
+}  // namespace
 
 namespace VMPilot::SDK::BytecodeCompiler {
 
@@ -27,6 +47,28 @@ compile_binary(const std::string& binary_path,
     // If build_units reported errors (orphan sites), stop
     if (diag.has_errors())
         return tl::unexpected(DiagnosticCode::OrphanSiteSkipped);
+
+    // 2.5. Analyze data references for each unit
+    try {
+        Capstone::Capstone cs(
+            toCapstoneArch(seg_result->context.arch),
+            static_cast<Capstone::Mode>(seg_result->context.mode));
+
+        for (auto& unit : units) {
+            auto insns = cs.disasm(unit.code, unit.addr);
+            auto refs = ReferenceAnalyzer::analyze(
+                insns, unit.addr, unit.size,
+                unit.context ? unit.context->all_sections
+                             : std::vector<Core::SectionInfo>{},
+                seg_result->text_relocations,
+                unit.context ? unit.context->symbols
+                             : Segmentator::NativeSymbolTable{},
+                seg_result->context.arch, seg_result->context.mode);
+            unit.data_references = std::move(refs);
+        }
+    } catch (...) {
+        // Reference analysis failure is non-fatal — units remain usable
+    }
 
     // 3. Debug mode: serialize to temp directory
     std::string temp_dir;

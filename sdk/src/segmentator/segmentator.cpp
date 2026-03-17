@@ -83,6 +83,7 @@ VMPilot::SDK::Segmentator::segment(
     ctx.arch = metadata.arch;
     ctx.mode = metadata.mode;
     ctx.rodata_sections = fh->getReadOnlySections();
+    ctx.all_sections = fh->getAllSections();
 
     ah->setCompilationContext(ctx);
 
@@ -115,5 +116,6 @@ VMPilot::SDK::Segmentator::segment(
     result.context = std::move(ctx);
     result.binary_path = filename;
     result.compiler_info = fh->getCompilerInfo();
+    result.text_relocations = fh->getTextRelocations();
     return result;
 }

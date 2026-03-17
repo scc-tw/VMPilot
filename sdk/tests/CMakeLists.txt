@@ -119,6 +119,18 @@ target_link_libraries(test_serializer
     opcode_table
 )
 
+add_executable(test_reference_analyzer test_reference_analyzer.cpp)
+target_include_directories(test_reference_analyzer PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/reference_analyzer
+)
+target_link_libraries(test_reference_analyzer
+    GTest::gtest_main
+    VMPilot_SDK_ReferenceAnalyzer
+    VMPilot_SDK_Segmentator
+    capstone_wrapper
+    opcode_table
+)
+
 # Register with CTest
 include(GoogleTest)
 gtest_discover_tests(test_native_function_base)
@@ -143,3 +155,4 @@ gtest_discover_tests(test_compilation_unit)
 gtest_discover_tests(test_compiler_backend)
 gtest_discover_tests(test_compilation_orchestrator)
 gtest_discover_tests(test_compile_pipeline)
+gtest_discover_tests(test_reference_analyzer)

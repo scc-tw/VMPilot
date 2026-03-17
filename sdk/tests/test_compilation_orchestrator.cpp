@@ -18,7 +18,7 @@ protected:
 
     std::vector<CompilationUnit> make_units(int count) {
         auto ctx = std::make_shared<const CompilationContext>(
-            CompilationContext{{}, {}, Arch::X86, Mode::MODE_32});
+            CompilationContext{{}, {}, {}, Arch::X86, Mode::MODE_32});
 
         std::vector<CompilationUnit> units;
         for (int i = 0; i < count; ++i) {

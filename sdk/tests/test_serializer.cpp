@@ -203,7 +203,7 @@ TEST_F(SerializerTest, ContextTraitsRoundTrip) {
 TEST_F(SerializerTest, UnitTraitsRoundTrip) {
     auto ctx = std::make_shared<const Segmentator::CompilationContext>(
         Segmentator::CompilationContext{
-            {}, {}, Segmentator::Arch::X86, Segmentator::Mode::MODE_64});
+            {}, {}, {}, Segmentator::Arch::X86, Segmentator::Mode::MODE_64});
 
     Core::CompilationUnit unit;
     unit.name = "my_func";

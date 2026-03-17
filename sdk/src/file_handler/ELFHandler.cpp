@@ -323,6 +323,118 @@ std::string ELFFileHandlerStrategy::doGetCompilerInfo() noexcept {
     return info.substr(start, end - start + 1);
 }
 
+std::vector<VMPilot::SDK::Core::SectionInfo>
+ELFFileHandlerStrategy::doGetAllSections() noexcept {
+    namespace Core = VMPilot::SDK::Core;
+    std::vector<Core::SectionInfo> result;
+
+    for (auto& [name, viewer] : pImpl->section_table) {
+        auto sec = viewer.getSection();
+        if (!sec || sec->get_size() == 0)
+            continue;
+
+        Core::SectionInfo info;
+        info.base_addr = sec->get_address();
+        info.size = sec->get_size();
+        info.name = name;
+
+        // Classify by name
+        if (name == ".text")
+            info.kind = Core::SectionKind::Text;
+        else if (name == ".rodata" || name == ".rodata.str1.1" ||
+                 name == ".rodata.str1.8" || name == ".rodata.cst4" ||
+                 name == ".rodata.cst8" || name == ".rodata.cst16")
+            info.kind = Core::SectionKind::Rodata;
+        else if (name == ".data" || name == ".data.rel.ro")
+            info.kind = Core::SectionKind::Data;
+        else if (name == ".bss")
+            info.kind = Core::SectionKind::Bss;
+        else if (name == ".tdata" || name == ".tbss")
+            info.kind = Core::SectionKind::Tls;
+        else if (name.substr(0, 4) == ".got")
+            info.kind = Core::SectionKind::Got;
+        else if (name.substr(0, 4) == ".plt")
+            info.kind = Core::SectionKind::Plt;
+        else
+            info.kind = Core::SectionKind::Unknown;
+
+        result.push_back(std::move(info));
+    }
+
+    return result;
+}
+
+std::vector<VMPilot::SDK::Core::RelocationEntry>
+ELFFileHandlerStrategy::doGetTextRelocations() noexcept {
+    namespace Core = VMPilot::SDK::Core;
+    std::vector<Core::RelocationEntry> result;
+
+    const bool is_64_bit = pImpl->reader.get_class() == ELFIO::ELFCLASS64;
+    const char* rela_name = is_64_bit ? ".rela.text" : ".rel.text";
+    const auto& rela_it = pImpl->section_table.find(rela_name);
+    if (rela_it == pImpl->section_table.end())
+        return result;
+
+    auto rela_sec = rela_it->second.getSection();
+    if (!rela_sec)
+        return result;
+
+    // Find symbol table for name resolution
+    ELFIO::section* sym_sec = nullptr;
+    auto symtab_it = pImpl->section_table.find(".symtab");
+    if (symtab_it != pImpl->section_table.end())
+        sym_sec = symtab_it->second.getSection();
+    if (!sym_sec) {
+        auto dynsym_it = pImpl->section_table.find(".dynsym");
+        if (dynsym_it != pImpl->section_table.end())
+            sym_sec = dynsym_it->second.getSection();
+    }
+
+    const auto& reader = pImpl->reader;  // NOLINT
+    ELFIO::relocation_section_accessor accessor(reader, rela_sec);
+    const auto count = accessor.get_entries_num();
+
+    std::unique_ptr<ELFIO::symbol_section_accessor> sym_accessor;
+    if (sym_sec)
+        sym_accessor = std::make_unique<ELFIO::symbol_section_accessor>(
+            pImpl->reader, sym_sec);
+
+    for (size_t i = 0; i < count; ++i) {
+        ELFIO::Elf64_Addr offset;
+        ELFIO::Elf_Word symbol;
+        ELFIO::Elf_Sxword addend;
+        unsigned int type;
+
+        if (!accessor.get_entry(i, offset, symbol, type, addend))
+            continue;
+
+        Core::RelocationEntry entry;
+        entry.offset = offset;
+        entry.type = type;
+        entry.symbol_index = symbol;
+        entry.addend = addend;
+
+        // Resolve symbol name
+        if (sym_accessor && symbol > 0) {
+            std::string name;
+            ELFIO::Elf64_Addr value;
+            ELFIO::Elf_Xword sym_size;
+            unsigned char bind, sym_type;
+            ELFIO::Elf_Half section_index;
+            unsigned char other;
+
+            if (sym_accessor->get_symbol(symbol, name, value, sym_size, bind,
+                                          sym_type, section_index, other)) {
+                entry.symbol_name = std::move(name);
+            }
+        }
+
+        result.push_back(std::move(entry));
+    }
+
+    return result;
+}
+
 std::vector<uint8_t> ELFFileHandlerStrategy::doGetTextSectionIntl() noexcept {
     const auto& text_section_iter = pImpl->section_table.find(".text");
     if (text_section_iter == pImpl->section_table.end()) {

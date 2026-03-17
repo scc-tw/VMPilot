@@ -2,6 +2,7 @@
 #define __SDK_SEGMENTATOR_HPP__
 
 #include <CompilationContext.hpp>
+#include <DataReference.hpp>
 #include <NativeFunctionBase.hpp>
 #include <RegionRefiner.hpp>
 #include <diagnostic_collector.hpp>
@@ -20,6 +21,7 @@ struct SegmentationResult {
     CompilationContext context;
     std::string binary_path;
     std::string compiler_info;
+    std::vector<Core::RelocationEntry> text_relocations;
 };
 
 /// Run the complete segmentation pipeline on a binary file.

@@ -48,6 +48,9 @@ class Parser {
     /// Read raw bytes of a section from the file data.
     std::vector<uint8_t> readSectionData(const Section& section) const;
 
+    /// All parsed sections.
+    const std::vector<Section>& sections() const noexcept { return sections_; }
+
     /// All parsed symbols.
     const std::vector<Symbol>& symbols() const noexcept { return symbols_; }
 

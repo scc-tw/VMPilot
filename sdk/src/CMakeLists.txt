@@ -82,6 +82,7 @@ include_directories(${INCLUDE_DIRS})
 add_subdirectory(bytecode_compiler)
 add_subdirectory(segmentator)
 add_subdirectory(region_refiner)
+add_subdirectory(reference_analyzer)
 add_subdirectory(serializer)
 
 # VMPilot_SDK_LIB is an interface library that aggregates all SDK sub-libraries.
@@ -89,6 +90,7 @@ add_library(${TARGET_NAME} INTERFACE)
 target_link_libraries(${TARGET_NAME} INTERFACE
     VMPilot_SDK_Bytecode_Compiler
     VMPilot_SDK_RegionRefiner
+    VMPilot_SDK_ReferenceAnalyzer
     VMPilot_SDK_Serializer
     capstone_wrapper
 )
