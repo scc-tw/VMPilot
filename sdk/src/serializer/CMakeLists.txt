@@ -44,8 +44,11 @@ add_library(${TARGET_NAME} STATIC ${SRC_FILES})
 if (MSVC)
     target_compile_options(${TARGET_NAME} PRIVATE /WX-)
 else()
-    # Abseil/protobuf use Clang extensions that trigger warnings with -Werror
+    # Abseil/protobuf headers trigger warnings under -Werror -pedantic.
+    # Suppress for this target since it transitively includes third-party headers.
     target_compile_options(${TARGET_NAME} PRIVATE
+        -Wno-error
+        -Wno-pedantic
         -Wno-nullability-extension
         -Wno-variadic-macro-arguments-omitted
         -Wno-gcc-compat
