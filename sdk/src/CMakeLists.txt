@@ -70,6 +70,10 @@ set (INCLUDE_DIRS
     ${INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
     ${CMAKE_SOURCE_DIR}/common/include
+)
+
+# Third-party header-only libs — mark SYSTEM to suppress warnings
+include_directories(SYSTEM
     ${CMAKE_BINARY_DIR}/_deps/elfio-src/
     ${CMAKE_BINARY_DIR}/_deps/coffi-src/
     ${spdlog_SOURCE_DIR}/include

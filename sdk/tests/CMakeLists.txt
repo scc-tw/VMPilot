@@ -9,12 +9,16 @@ set(INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/bytecode_compiler
     ${CMAKE_SOURCE_DIR}/common/include
     ${CMAKE_SOURCE_DIR}/third_party/expected/include
+)
+
+include_directories(${INCLUDE_DIRS})
+
+# Third-party header-only libs — mark SYSTEM to suppress warnings
+include_directories(SYSTEM
     ${CMAKE_BINARY_DIR}/_deps/elfio-src/
     ${CMAKE_BINARY_DIR}/_deps/coffi-src/
     ${spdlog_SOURCE_DIR}/include
 )
-
-include_directories(${INCLUDE_DIRS})
 
 # Pass test data paths as compile definitions
 add_compile_definitions(
