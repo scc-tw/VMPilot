@@ -1,0 +1,15 @@
+name: Apple Clang
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+jobs:
+  apple-clang:
+    uses: ./.github/workflows/build.yml
+    with:
+      os: macos-latest
+      generator: Ninja
+      cmake_args: "-DCMAKE_BUILD_TYPE=Debug"

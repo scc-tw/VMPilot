@@ -1,0 +1,18 @@
+name: GCC
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+jobs:
+  gcc:
+    uses: ./.github/workflows/build.yml
+    with:
+      os: ubuntu-latest
+      generator: Ninja
+      cmake_args: >-
+        -DCMAKE_BUILD_TYPE=Debug
+        -DCMAKE_C_COMPILER=gcc-14
+        -DCMAKE_CXX_COMPILER=g++-14
