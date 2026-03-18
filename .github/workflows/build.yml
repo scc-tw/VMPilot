@@ -1,0 +1,88 @@
+# Reusable build workflow — called by per-compiler CI workflows.
+name: Build
+
+on:
+  workflow_call:
+    inputs:
+      os:
+        required: true
+        type: string
+      generator:
+        required: true
+        type: string
+      cmake_args:
+        required: false
+        type: string
+        default: ""
+      build_args:
+        required: false
+        type: string
+        default: ""
+      test_args:
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  build:
+    runs-on: ${{ inputs.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # ── Cache submodules ──
+      - name: Compute submodule cache key
+        id: submod-hash
+        shell: bash
+        run: |
+          echo "hash=$(git ls-tree HEAD third_party common/crypto | git hash-object --stdin)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache submodules
+        id: cache-submodules
+        uses: actions/cache@v4
+        with:
+          path: |
+            third_party
+            common/crypto
+          key: submodules-${{ runner.os }}-${{ steps.submod-hash.outputs.hash }}
+
+      - name: Init submodules
+        if: steps.cache-submodules.outputs.cache-hit != 'true'
+        run: git submodule update --init --recursive --depth 1
+
+      # ── Cache CPM downloads ──
+      - name: Cache CPM
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: cpm-${{ runner.os }}-${{ inputs.generator }}-${{ hashFiles('CMakeLists.txt', 'sdk/src/CMakeLists.txt') }}
+          restore-keys: |
+            cpm-${{ runner.os }}-${{ inputs.generator }}-
+
+      # ── Install Ninja ──
+      - name: Install Ninja (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      # ── Configure ──
+      - name: Configure
+        shell: bash
+        run: |
+          cmake -B build \
+            -G "${{ inputs.generator }}" \
+            ${{ inputs.cmake_args }} \
+            -DENABLE_TESTS=ON
+
+      # ── Build ──
+      - name: Build
+        run: cmake --build build ${{ inputs.build_args }} -j
+
+      # ── Test ──
+      - name: Test
+        run: ctest --test-dir build ${{ inputs.test_args }} --output-on-failure

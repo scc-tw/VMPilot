@@ -1,0 +1,17 @@
+name: MSVC
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+jobs:
+  msvc:
+    uses: ./.github/workflows/build.yml
+    with:
+      os: windows-latest
+      generator: "Visual Studio 17 2022"
+      cmake_args: "-A x64"
+      build_args: "--config Debug"
+      test_args: "-C Debug"

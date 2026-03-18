@@ -1,0 +1,18 @@
+name: Clang
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+jobs:
+  clang:
+    uses: ./.github/workflows/build.yml
+    with:
+      os: ubuntu-latest
+      generator: Ninja
+      cmake_args: >-
+        -DCMAKE_BUILD_TYPE=Debug
+        -DCMAKE_C_COMPILER=clang-18
+        -DCMAKE_CXX_COMPILER=clang++-18
