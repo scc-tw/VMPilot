@@ -39,6 +39,13 @@ jobs:
             build_args: ""
             test_args: ""
 
+          - name: Apple Clang
+            os: macos-latest
+            generator: Ninja
+            cmake_args: "-DCMAKE_BUILD_TYPE=Debug"
+            build_args: ""
+            test_args: ""
+
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
 
@@ -79,10 +86,14 @@ jobs:
           restore-keys: |
             cpm-${{ runner.os }}-${{ matrix.name }}-
 
-      # ── Install Ninja (Linux only — Windows runners already have it) ──
-      - name: Install Ninja
+      # ── Install Ninja (Linux and macOS — Windows runners already have it) ──
+      - name: Install Ninja (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
 
       # ── Configure ──
       - name: Configure
