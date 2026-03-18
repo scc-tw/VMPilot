@@ -13,6 +13,7 @@
 #include <cinttypes>
 #include <cstdio>
 #include <filesystem>
+#include <algorithm>
 
 namespace fs = std::filesystem;
 
