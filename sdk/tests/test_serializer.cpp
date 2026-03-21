@@ -957,7 +957,7 @@ TEST_P(SerializerCrossPlatformTest, SegmentAndDump) {
     EXPECT_GT(total_units, 0) << "No units produced for " << GetParam();
 
     auto manifest_str = readFileString(test_dir / "manifest.toml");
-    EXPECT_NO_THROW(toml::parse(manifest_str));
+    EXPECT_NO_THROW(static_cast<void>(toml::parse(manifest_str)));
 
     // Round-trip: load back and verify
     auto loaded = Serializer::load(test_dir.string());
