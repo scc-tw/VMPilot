@@ -69,7 +69,7 @@ jobs:
     #   modify them (or add more) to build your code if your project, please refer to the EXAMPLE below for guidance.
 
     - run: |
-        cmake -B build -DCMAKE_BUILD_TYPE=Debug 
+        cmake -B build -DCMAKE_BUILD_TYPE=Release
         cmake --build build
 
     - name: Perform CodeQL Analysis
