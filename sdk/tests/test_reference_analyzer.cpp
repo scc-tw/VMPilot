@@ -1,9 +1,8 @@
 #include <gtest/gtest.h>
 
 #include <DataReference.hpp>
-#include <ReadOnlySection.hpp>
 #include <ReferenceAnalyzer.hpp>
-#include <SectionInfo.hpp>
+#include <Section.hpp>
 #include <capstone.hpp>
 
 // Internal headers for unit-testing individual layers
@@ -20,15 +19,15 @@ using namespace VMPilot::SDK::ReferenceAnalyzer;
 
 namespace {
 
-std::vector<SectionInfo> makeTestSections() {
+std::vector<Section> makeTestSections() {
     return {
-        {0x401000, 0x1000, SectionKind::Text, ".text"},
-        {0x402000, 0x200, SectionKind::Rodata, ".rodata"},
-        {0x403000, 0x200, SectionKind::Data, ".data"},
-        {0x404000, 0x100, SectionKind::Bss, ".bss"},
-        {0x405000, 0x100, SectionKind::Tls, ".tdata"},
-        {0x406000, 0x100, SectionKind::Got, ".got"},
-        {0x407000, 0x100, SectionKind::Plt, ".plt"},
+        {0x401000, 0x1000, SectionKind::Text, ".text", {}},
+        {0x402000, 0x200, SectionKind::Rodata, ".rodata", {}},
+        {0x403000, 0x200, SectionKind::Data, ".data", {}},
+        {0x404000, 0x100, SectionKind::Bss, ".bss", {}},
+        {0x405000, 0x100, SectionKind::Tls, ".tdata", {}},
+        {0x406000, 0x100, SectionKind::Got, ".got", {}},
+        {0x407000, 0x100, SectionKind::Plt, ".plt", {}},
     };
 }
 
@@ -37,7 +36,7 @@ std::vector<SectionInfo> makeTestSections() {
 // ---- SectionInfo Tests ----
 
 TEST(SectionInfo, ContainsBasic) {
-    SectionInfo sec{0x1000, 0x100, SectionKind::Data, ".data"};
+    Section sec{0x1000, 0x100, SectionKind::Data, ".data", {}};
     EXPECT_TRUE(sec.contains(0x1000));
     EXPECT_TRUE(sec.contains(0x1050));
     EXPECT_TRUE(sec.contains(0x10FF));
@@ -46,7 +45,7 @@ TEST(SectionInfo, ContainsBasic) {
 }
 
 TEST(SectionInfo, ContainsEmpty) {
-    SectionInfo sec{0x1000, 0, SectionKind::Data, ".data"};
+    Section sec{0x1000, 0, SectionKind::Data, ".data", {}};
     EXPECT_FALSE(sec.contains(0x1000));
 }
 
@@ -86,7 +85,7 @@ TEST(RelocationAnalyzer, FilterToRegion) {
     };
 
     // Region is 0x401400..0x401600
-    auto refs = analyze({}, 0x401400, 0x200, sections, relocs, {}, {},
+    auto refs = analyze({}, 0x401400, 0x200, sections, relocs, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -111,7 +110,7 @@ TEST(RelocationAnalyzer, TlsRelocationTypes) {
         {0x401050, 23 /*TPOFF32*/, 1, 0, "tls_var"},
     };
 
-    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -135,7 +134,7 @@ TEST(RelocationAnalyzer, GotRelocation) {
         {0x401100, 9, 1, -4, "extern_sym"},
     };
 
-    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -159,7 +158,7 @@ TEST(RelocationAnalyzer, Plt32Skipped) {
         {0x401200, 4, 1, -4, "some_func"},
     };
 
-    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -190,7 +189,7 @@ TEST(InsnAnalyzer, RipRelativeToRodata) {
     EXPECT_EQ(insns[0].address, 0x401000u);
 
     // Target: 0x401000 + 6 + 0x0FFA = 0x402000 (in .rodata)
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -218,7 +217,7 @@ TEST(InsnAnalyzer, RipRelativeToData) {
     auto insns = cs.disasm(code, 0x401000);
     ASSERT_GE(insns.size(), 1u);
 
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -245,7 +244,7 @@ TEST(InsnAnalyzer, LEASkipped) {
     auto insns = cs.disasm(code, 0x401000);
     ASSERT_GE(insns.size(), 1u);
 
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -267,7 +266,7 @@ TEST(InsnAnalyzer, StackRelativeSkipped) {
     auto insns = cs.disasm(code, 0x401000);
     ASSERT_GE(insns.size(), 1u);
 
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -290,7 +289,7 @@ TEST(PatternAnalyzer, FsSegmentTls) {
     ASSERT_GE(insns.size(), 1u);
 
     auto sections = makeTestSections();
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -323,7 +322,7 @@ TEST(Merge, L1OverridesL2) {
         {0x401000, 23 /*TPOFF32*/, 1, 0, "tls_var"},
     };
 
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, relocs, {}, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, relocs, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -347,7 +346,7 @@ TEST(Merge, ResultsSorted) {
         {0x401100, 2, 2, -4, "sym_a"},
     };
 
-    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -361,7 +360,7 @@ TEST(Merge, ResultsSorted) {
 // ---- Empty Input Tests ----
 
 TEST(ReferenceAnalyzer, EmptyInputs) {
-    auto refs = analyze({}, 0, 0, {}, {}, {}, {},
+    auto refs = analyze({}, 0, 0, {}, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
     EXPECT_TRUE(refs.empty());
@@ -373,7 +372,7 @@ TEST(ReferenceAnalyzer, NoSectionsProducesNoRefs) {
     std::vector<uint8_t> code = {0x90};
     auto insns = cs.disasm(code, 0x401000);
 
-    auto refs = analyze(insns, 0x401000, 1, {}, {}, {}, {},
+    auto refs = analyze(insns, 0x401000, 1, {}, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
     EXPECT_TRUE(refs.empty());
@@ -385,11 +384,13 @@ namespace {
 
 /// Helper: build a rodata section with 32-bit relative entries.
 /// Each entry is a signed 32-bit offset from table_base to a target in .text.
-Segmentator::ReadOnlySection makeRodataWithRelativeJumpTable(
+Section makeRodataWithRelativeJumpTable(
     uint64_t table_base,
     const std::vector<uint64_t>& targets) {
-    Segmentator::ReadOnlySection sec;
+    Section sec;
     sec.base_addr = table_base;
+    sec.kind = SectionKind::Rodata;
+    sec.name = ".rodata";
     sec.data.resize(targets.size() * 4);
     for (size_t i = 0; i < targets.size(); ++i) {
         int32_t offset =
@@ -397,6 +398,7 @@ Segmentator::ReadOnlySection makeRodataWithRelativeJumpTable(
                                   static_cast<int64_t>(table_base));
         std::memcpy(sec.data.data() + i * 4, &offset, 4);
     }
+    sec.size = sec.data.size();
     return sec;
 }
 
@@ -417,7 +419,7 @@ TEST(JumpTable, X86_64_JmpRegWithLea) {
     // Jump table targets in .text
     std::vector<uint64_t> targets = {0x401100, 0x401200, 0x401300, 0x401400};
     auto rodata = makeRodataWithRelativeJumpTable(0x402000, targets);
-    std::vector<Segmentator::ReadOnlySection> rodata_sections = {rodata};
+    std::vector<Section> rodata_sections = {rodata};
 
     Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
 
@@ -434,8 +436,10 @@ TEST(JumpTable, X86_64_JmpRegWithLea) {
     auto insns = cs.disasm(code, 0x401000);
     ASSERT_GE(insns.size(), 6u);
 
+    // Merge rodata data into sections for unified API
+    for (auto& rs : rodata_sections)
+        sections.push_back(rs);
     auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
-                        rodata_sections,
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -479,14 +483,17 @@ TEST(JumpTable, X86_64_IndexedMemoryJmp) {
     std::vector<uint64_t> targets = {0x401100, 0x401200, 0x401300};
 
     // Build rodata with absolute 32-bit entries
-    Segmentator::ReadOnlySection rodata_sec;
+    Section rodata_sec;
     rodata_sec.base_addr = 0x402000;
+    rodata_sec.kind = SectionKind::Rodata;
+    rodata_sec.name = ".rodata";
     rodata_sec.data.resize(targets.size() * 4);
     for (size_t i = 0; i < targets.size(); ++i) {
         uint32_t val = static_cast<uint32_t>(targets[i]);
         std::memcpy(rodata_sec.data.data() + i * 4, &val, 4);
     }
-    std::vector<Segmentator::ReadOnlySection> rodata_sections = {rodata_sec};
+    rodata_sec.size = rodata_sec.data.size();
+    std::vector<Section> rodata_sections = {rodata_sec};
 
     Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_32);
 
@@ -499,8 +506,10 @@ TEST(JumpTable, X86_64_IndexedMemoryJmp) {
     auto insns = cs.disasm(code, 0x401000);
     ASSERT_GE(insns.size(), 3u);
 
+    // Merge rodata data into sections for unified API
+    for (auto& rs : rodata_sections)
+        sections.push_back(rs);
     auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
-                        rodata_sections,
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_32);
 
@@ -533,7 +542,7 @@ TEST(JumpTable, InvalidEntryTruncatesTable) {
                                           0x401400};
     auto rodata =
         makeRodataWithRelativeJumpTable(0x402000, targets_raw);
-    std::vector<Segmentator::ReadOnlySection> rodata_sections = {rodata};
+    std::vector<Section> rodata_sections = {rodata};
 
     Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
 
@@ -548,8 +557,10 @@ TEST(JumpTable, InvalidEntryTruncatesTable) {
     auto insns = cs.disasm(code, 0x401000);
     ASSERT_GE(insns.size(), 2u);
 
+    // Merge rodata data into sections for unified API
+    for (auto& rs : rodata_sections)
+        sections.push_back(rs);
     auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
-                        rodata_sections,
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -580,7 +591,7 @@ TEST(JumpTable, BoundsCheckDetection) {
     for (int i = 0; i < 10; ++i)
         many_targets.push_back(0x401100 + i * 0x10);
     auto rodata = makeRodataWithRelativeJumpTable(0x402000, many_targets);
-    std::vector<Segmentator::ReadOnlySection> rodata_sections = {rodata};
+    std::vector<Section> rodata_sections = {rodata};
 
     Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
 
@@ -607,8 +618,10 @@ TEST(JumpTable, BoundsCheckDetection) {
     auto insns = cs.disasm(code, 0x401000);
     ASSERT_GE(insns.size(), 4u);
 
+    // Merge rodata data into sections for unified API
+    for (auto& rs : rodata_sections)
+        sections.push_back(rs);
     auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
-                        rodata_sections,
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -634,7 +647,7 @@ TEST(JumpTable, EntryResolutionWithRelativeOffsets) {
     // targets are in .text at various locations
     std::vector<uint64_t> targets = {0x401050, 0x4010A0, 0x401800};
     auto rodata = makeRodataWithRelativeJumpTable(0x402000, targets);
-    std::vector<Segmentator::ReadOnlySection> rodata_sections = {rodata};
+    std::vector<Section> rodata_sections = {rodata};
 
     Capstone::Capstone cs(Capstone::Arch::X86, Capstone::Mode::MODE_64);
 
@@ -649,8 +662,10 @@ TEST(JumpTable, EntryResolutionWithRelativeOffsets) {
     auto insns = cs.disasm(code, 0x401000);
     ASSERT_GE(insns.size(), 2u);
 
+    // Merge rodata data into sections for unified API
+    for (auto& rs : rodata_sections)
+        sections.push_back(rs);
     auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
-                        rodata_sections,
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -709,7 +724,7 @@ TEST(RelocationAnalyzer, TlsInitialExec) {
     std::vector<RelocationEntry> relocs = {
         {0x401050, 22 /*R_X86_64_GOTTPOFF*/, 1, -4, "tls_ie_var"},
     };
-    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
     bool found = false;
@@ -729,7 +744,7 @@ TEST(RelocationAnalyzer, TlsGeneralDynamic) {
     std::vector<RelocationEntry> relocs = {
         {0x401060, 19 /*R_X86_64_TLSGD*/, 1, 0, "tls_gd_var"},
     };
-    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
     bool found = false;
@@ -748,7 +763,7 @@ TEST(RelocationAnalyzer, TlsLocalDynamic) {
     std::vector<RelocationEntry> relocs = {
         {0x401070, 20 /*R_X86_64_TLSLD*/, 1, 0, "tls_ld_var"},
     };
-    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
     bool found = false;
@@ -767,7 +782,7 @@ TEST(RelocationAnalyzer, Tpoff64) {
     std::vector<RelocationEntry> relocs = {
         {0x401080, 18 /*R_X86_64_TPOFF64*/, 1, 0, "tls64"},
     };
-    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
     bool found = false;
@@ -787,7 +802,7 @@ TEST(RelocationAnalyzer, GotpcrelxVariants) {
         {0x401090, 41 /*GOTPCRELX*/, 1, -4, "sym_a"},
         {0x4010A0, 42 /*REX_GOTPCRELX*/, 2, -4, "sym_b"},
     };
-    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
     int got_count = 0;
@@ -806,7 +821,7 @@ TEST(RelocationAnalyzer, DirectRefPC32) {
     std::vector<RelocationEntry> relocs = {
         {0x401030, 2 /*R_X86_64_PC32*/, 1, -4, "my_global"},
     };
-    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
     bool found = false;
@@ -825,7 +840,7 @@ TEST(RelocationAnalyzer, DirectRef64) {
     std::vector<RelocationEntry> relocs = {
         {0x401040, 1 /*R_X86_64_64*/, 1, 0, "abs_sym"},
     };
-    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
     bool found = false;
@@ -844,7 +859,7 @@ TEST(RelocationAnalyzer, NoneSkipped) {
     std::vector<RelocationEntry> relocs = {
         {0x401050, 0 /*R_X86_64_NONE*/, 0, 0, ""},
     };
-    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
     for (const auto& ref : refs) {
@@ -857,7 +872,7 @@ TEST(RelocationAnalyzer, UnknownTypeProducesUnknownKind) {
     std::vector<RelocationEntry> relocs = {
         {0x401060, 9999, 1, 0, "weird"},
     };
-    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
     bool found = false;
@@ -875,7 +890,7 @@ TEST(RelocationAnalyzer, SymbolNamePreserved) {
     std::vector<RelocationEntry> relocs = {
         {0x401050, 2, 1, -4, "my_special_symbol"},
     };
-    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
     bool found = false;
@@ -897,7 +912,7 @@ TEST(RelocationAnalyzer, RegionBoundaryExact) {
         {0x401200, 2, 3, -4, "at_end"},      // at end — excluded
         {0x4010FF, 2, 4, -4, "before"},       // before start — excluded
     };
-    auto refs = analyze({}, 0x401100, 0x100, sections, relocs, {}, {},
+    auto refs = analyze({}, 0x401100, 0x100, sections, relocs, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
     bool found_start = false, found_last = false;
@@ -919,7 +934,7 @@ TEST(RelocationAnalyzer, MultipleRelocsAllPreserved) {
         {0x401030, 2, 3, -4, "pc32_c"},
         {0x401040, 22, 4, -4, "ie_d"},
     };
-    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
     EXPECT_GE(refs.size(), 4u);
@@ -937,7 +952,7 @@ TEST(RelocationAnalyzer, AArch64GotReloc) {
         {0x401010, 311 /*R_AARCH64_ADR_GOT_PAGE*/, 1, 0, "got_sym"},
         {0x401014, 312 /*R_AARCH64_LD64_GOT_LO12_NC*/, 1, 0, "got_sym"},
     };
-    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {},
                         VMPilot::Common::FileArch::ARM64,
                         VMPilot::Common::FileMode::MODE_64);
     int got_count = 0;
@@ -953,7 +968,7 @@ TEST(RelocationAnalyzer, AArch64TlsLocalExec) {
         {0x401010, 549 /*TLSLE_ADD_TPREL_HI12*/, 1, 0, "tls_le"},
         {0x401014, 551 /*TLSLE_ADD_TPREL_LO12_NC*/, 1, 0, "tls_le"},
     };
-    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {},
                         VMPilot::Common::FileArch::ARM64,
                         VMPilot::Common::FileMode::MODE_64);
     int le_count = 0;
@@ -969,7 +984,7 @@ TEST(RelocationAnalyzer, AArch64TlsInitialExec) {
     std::vector<RelocationEntry> relocs = {
         {0x401010, 539 /*TLSIE_ADR_GOTTPREL_PAGE21*/, 1, 0, "tls_ie"},
     };
-    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {},
                         VMPilot::Common::FileArch::ARM64,
                         VMPilot::Common::FileMode::MODE_64);
     bool found = false;
@@ -988,7 +1003,7 @@ TEST(RelocationAnalyzer, AArch64TlsGeneralDynamic) {
         {0x401010, 513 /*TLSGD_ADR_PAGE21*/, 1, 0, "tls_gd"},
         {0x401014, 514 /*TLSGD_ADD_LO12_NC*/, 1, 0, "tls_gd"},
     };
-    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {},
                         VMPilot::Common::FileArch::ARM64,
                         VMPilot::Common::FileMode::MODE_64);
     int gd_count = 0;
@@ -1003,7 +1018,7 @@ TEST(RelocationAnalyzer, AArch64TlsLocalDynamic) {
     std::vector<RelocationEntry> relocs = {
         {0x401010, 517 /*TLSLD_ADR_PAGE21*/, 1, 0, "tls_ld"},
     };
-    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {}, {},
+    auto refs = analyze({}, 0x401000, 0x1000, sections, relocs, {},
                         VMPilot::Common::FileArch::ARM64,
                         VMPilot::Common::FileMode::MODE_64);
     bool found = false;
@@ -1046,7 +1061,7 @@ TEST(Scenario, GccAtomicCounterIncrement) {
     sym.isGlobal = true;
     syms.push_back(sym);
 
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, syms, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, syms,
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -1083,7 +1098,7 @@ TEST(Scenario, ClangFetchAddReturnValue) {
     auto insns = cs.disasm(code, 0x401000);
     ASSERT_GE(insns.size(), 3u);
 
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -1119,7 +1134,7 @@ TEST(Scenario, CompareExchangeOnGlobal) {
     auto insns = cs.disasm(code, 0x401000);
     ASSERT_GE(insns.size(), 3u);
 
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -1157,7 +1172,7 @@ TEST(Scenario, SpinlockAcquireViaXchg) {
     auto insns = cs.disasm(code, 0x401000);
     ASSERT_GE(insns.size(), 5u);
 
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -1193,7 +1208,7 @@ TEST(Scenario, SeqCstStoreWithMfence) {
     auto insns = cs.disasm(code, 0x401000);
     ASSERT_GE(insns.size(), 3u);
 
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -1243,7 +1258,7 @@ TEST(Scenario, MixedAtomicAndNonAtomicFunction) {
     auto insns = cs.disasm(code, 0x401000);
     ASSERT_GE(insns.size(), 5u);
 
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -1298,7 +1313,7 @@ TEST(Scenario, GccStackCanaryPrologue) {
     auto insns = cs.disasm(code, 0x401000);
     ASSERT_GE(insns.size(), 7u);
 
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -1334,7 +1349,7 @@ TEST(Scenario, GotIndirectExternalLoad) {
     auto insns = cs.disasm(code, 0x401000);
     ASSERT_GE(insns.size(), 3u);
 
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -1362,7 +1377,7 @@ TEST(Scenario, BssGlobalAccess) {
     auto insns = cs.disasm(code, 0x401000);
     ASSERT_GE(insns.size(), 2u);
 
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -1388,7 +1403,7 @@ TEST(Scenario, RelocationOverridesInsnAnalysis) {
         {0x401000, 23 /*TPOFF32*/, 1, 0, "tls_var"},
     };
 
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, relocs, {}, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, relocs, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -1418,7 +1433,7 @@ TEST(Scenario, AtomicByteFlag) {
     auto insns = cs.disasm(code, 0x401000);
     ASSERT_GE(insns.size(), 2u);
 
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -1451,7 +1466,7 @@ TEST(Scenario, AtomicQwordPointerSized) {
     auto insns = cs.disasm(code, 0x401000);
     ASSERT_GE(insns.size(), 2u);
 
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -1484,7 +1499,7 @@ TEST(Scenario, NonAtomicGlobalAddNotFlaggedAtomic) {
     auto insns = cs.disasm(code, 0x401000);
     ASSERT_GE(insns.size(), 2u);
 
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -1511,7 +1526,7 @@ TEST(Scenario, ARM64DmbBetweenLoads) {
     ASSERT_GE(insns.size(), 4u);
 
     auto sections = makeTestSections();
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
                         VMPilot::Common::FileArch::ARM64,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -1542,7 +1557,7 @@ TEST(Scenario, AllThreeLayersRealMerge) {
         {0x401020, 9 /*GOTPCREL*/, 1, -4, "extern_sym"},
     };
 
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, relocs, {}, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, relocs, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -1588,7 +1603,7 @@ TEST(Scenario, MsvcStackCookieGsSegment) {
     auto insns = cs.disasm(code, 0x401000);
     ASSERT_GE(insns.size(), 6u);
 
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -1644,7 +1659,7 @@ TEST(Scenario, MsvcInterlockedIncDec) {
     sym.isGlobal = true;
     syms.push_back(sym);
 
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, syms, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, syms,
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -1683,7 +1698,7 @@ TEST(Scenario, MsvcInterlockedCompareExchange) {
     auto insns = cs.disasm(code, 0x401000);
     ASSERT_GE(insns.size(), 4u);
 
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
 
@@ -1707,7 +1722,7 @@ TEST(ReferenceAnalyzer, ZeroSizeRegion) {
     std::vector<uint8_t> code = {0x8b, 0x05, 0xfa, 0x0f, 0x00, 0x00};
     auto insns = cs.disasm(code, 0x401000);
 
-    auto refs = analyze(insns, 0x401000, 0, sections, {}, {}, {},
+    auto refs = analyze(insns, 0x401000, 0, sections, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
     EXPECT_TRUE(refs.empty()) << "Zero-size region should produce no refs";
@@ -1720,7 +1735,7 @@ TEST(ReferenceAnalyzer, NopOnlyProducesNoRefs) {
     auto insns = cs.disasm(code, 0x401000);
     ASSERT_GE(insns.size(), 4u);
 
-    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {}, {},
+    auto refs = analyze(insns, 0x401000, 0x1000, sections, {}, {},
                         VMPilot::Common::FileArch::X86,
                         VMPilot::Common::FileMode::MODE_64);
     EXPECT_TRUE(refs.empty());
@@ -1728,7 +1743,7 @@ TEST(ReferenceAnalyzer, NopOnlyProducesNoRefs) {
 
 TEST(ReferenceAnalyzer, ARM64EmptyStream) {
     auto sections = makeTestSections();
-    auto refs = analyze({}, 0x401000, 0x1000, sections, {}, {}, {},
+    auto refs = analyze({}, 0x401000, 0x1000, sections, {}, {},
                         VMPilot::Common::FileArch::ARM64,
                         VMPilot::Common::FileMode::MODE_64);
     EXPECT_TRUE(refs.empty());

@@ -85,10 +85,13 @@ Segmentator::SegmentationResult makeSyntheticResult() {
     sym.isGlobal = true;
     result.context.symbols.push_back(std::move(sym));
 
-    Segmentator::ReadOnlySection rodata;
+    Core::Section rodata;
     rodata.base_addr = 0x3000;
+    rodata.size = 5;
+    rodata.kind = Core::SectionKind::Rodata;
+    rodata.name = ".rodata";
     rodata.data = {0x68, 0x65, 0x6c, 0x6c, 0x6f};
-    result.context.rodata_sections.push_back(std::move(rodata));
+    result.context.sections.push_back(std::move(rodata));
 
     result.binary_path = "test_binary.elf";
     result.compiler_info = "GCC: (test) 11.0.0";
@@ -177,10 +180,13 @@ TEST_F(SerializerTest, ContextTraitsRoundTrip) {
     sym.setAttribute("entry_type", std::string("stub"));
     ctx.symbols.push_back(std::move(sym));
 
-    Segmentator::ReadOnlySection sec;
+    Core::Section sec;
     sec.base_addr = 0x5000;
+    sec.size = 4;
+    sec.kind = Core::SectionKind::Rodata;
+    sec.name = ".rodata";
     sec.data = {0xAA, 0xBB, 0x00, 0xCC};
-    ctx.rodata_sections.push_back(std::move(sec));
+    ctx.sections.push_back(std::move(sec));
 
     auto bytes = Serializer::serialize(ctx);
     ASSERT_TRUE(bytes.has_value()) << bytes.error();
@@ -194,16 +200,18 @@ TEST_F(SerializerTest, ContextTraitsRoundTrip) {
     EXPECT_EQ(restored->symbols[0].name, "test_sym");
     EXPECT_EQ(restored->symbols[0].address, 0x1234u);
     EXPECT_TRUE(restored->symbols[0].isGlobal);
-    ASSERT_EQ(restored->rodata_sections.size(), 1u);
-    EXPECT_EQ(restored->rodata_sections[0].base_addr, 0x5000u);
-    EXPECT_EQ(restored->rodata_sections[0].data,
+    ASSERT_EQ(restored->sections.size(), 1u);
+    EXPECT_EQ(restored->sections[0].base_addr, 0x5000u);
+    EXPECT_EQ(restored->sections[0].data,
               (std::vector<uint8_t>{0xAA, 0xBB, 0x00, 0xCC}));
 }
 
 TEST_F(SerializerTest, UnitTraitsRoundTrip) {
+    Segmentator::CompilationContext ctx_val;
+    ctx_val.arch = Segmentator::Arch::X86;
+    ctx_val.mode = Segmentator::Mode::MODE_64;
     auto ctx = std::make_shared<const Segmentator::CompilationContext>(
-        Segmentator::CompilationContext{
-            {}, {}, {}, Segmentator::Arch::X86, Segmentator::Mode::MODE_64});
+        std::move(ctx_val));
 
     Core::CompilationUnit unit;
     unit.name = "my_func";
@@ -301,7 +309,7 @@ TEST_F(SerializerTest, RoundTrip) {
               static_cast<uint32_t>(Segmentator::Mode::MODE_64));
     EXPECT_EQ(ctx_pb.symbols_size(), 1);
     EXPECT_EQ(ctx_pb.symbols(0).name(), "main");
-    EXPECT_EQ(ctx_pb.rodata_sections_size(), 1);
+    EXPECT_EQ(ctx_pb.all_sections_size(), 1);
 }
 
 TEST_F(SerializerTest, DirectoryStructure) {
@@ -691,11 +699,14 @@ TEST_F(SerializerTest, SymbolEntryTypeRoundTrip) {
 
 TEST_F(SerializerTest, RodataRoundTrip) {
     auto result = makeSyntheticResult();
-    result.context.rodata_sections.clear();
-    Segmentator::ReadOnlySection sec;
+    result.context.sections.clear();
+    Core::Section sec;
     sec.base_addr = 0xDEAD;
+    sec.size = 6;
+    sec.kind = Core::SectionKind::Rodata;
+    sec.name = ".rodata";
     sec.data = {0x00, 0xFF, 0x41, 0x42, 0x00, 0x43};
-    result.context.rodata_sections.push_back(std::move(sec));
+    result.context.sections.push_back(std::move(sec));
 
     auto ret = dumpFromResult(result, test_dir.string());
     ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
@@ -705,9 +716,9 @@ TEST_F(SerializerTest, RodataRoundTrip) {
     ASSERT_TRUE(ctx_pb.ParseFromArray(ctx_bytes.data(),
                                       static_cast<int>(ctx_bytes.size())));
 
-    ASSERT_EQ(ctx_pb.rodata_sections_size(), 1);
-    EXPECT_EQ(ctx_pb.rodata_sections(0).base_addr(), 0xDEADu);
-    auto data = ctx_pb.rodata_sections(0).data();
+    ASSERT_EQ(ctx_pb.all_sections_size(), 1);
+    EXPECT_EQ(ctx_pb.all_sections(0).base_addr(), 0xDEADu);
+    auto data = ctx_pb.all_sections(0).data();
     std::vector<uint8_t> actual(data.begin(), data.end());
     EXPECT_EQ(actual,
               (std::vector<uint8_t>{0x00, 0xFF, 0x41, 0x42, 0x00, 0x43}));

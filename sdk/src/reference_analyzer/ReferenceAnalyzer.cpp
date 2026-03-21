@@ -25,7 +25,7 @@ std::vector<Core::DataReference> analyze(
             insns, region_addr, region_size, lookup, ctx.symbols);
         auto l3 = analyzePatterns<Segmentator::X86ArchTraits>(
             insns, region_addr, region_size,
-            ctx.symbols, lookup, ctx.rodata_sections, ctx.mode);
+            ctx.symbols, lookup, ctx.sections, ctx.mode);
         return RefMerger::merge(
             std::move(l1), std::move(l2), std::move(l3));
     }
@@ -37,7 +37,7 @@ std::vector<Core::DataReference> analyze(
             insns, region_addr, region_size, lookup, ctx.symbols);
         auto l3 = analyzePatterns<Segmentator::ARM64ArchTraits>(
             insns, region_addr, region_size,
-            ctx.symbols, lookup, ctx.rodata_sections, ctx.mode);
+            ctx.symbols, lookup, ctx.sections, ctx.mode);
         return RefMerger::merge(
             std::move(l1), std::move(l2), std::move(l3));
     }
@@ -50,14 +50,13 @@ std::vector<Core::DataReference> analyze(
 std::vector<Core::DataReference> analyze(
     const std::vector<Capstone::Instruction>& insns,
     uint64_t region_addr, uint64_t region_size,
-    const std::vector<Core::SectionInfo>& sections,
+    const std::vector<Core::Section>& sections,
     const std::vector<Core::RelocationEntry>& text_relocations,
     const Segmentator::NativeSymbolTable& symbols,
-    const std::vector<Segmentator::ReadOnlySection>& rodata_sections,
     Segmentator::Arch arch, Segmentator::Mode mode) noexcept {
     auto ctx = AnalysisContext::build(
         sections, text_relocations, symbols,
-        rodata_sections, arch, mode);
+        arch, mode);
     return analyze(insns, region_addr, region_size, ctx);
 }
 

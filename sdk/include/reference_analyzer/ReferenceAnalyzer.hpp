@@ -5,8 +5,7 @@
 #include <AnalysisContext.hpp>
 #include <DataReference.hpp>
 #include <NativeSymbolTable.hpp>
-#include <ReadOnlySection.hpp>
-#include <SectionInfo.hpp>
+#include <Section.hpp>
 #include <capstone.hpp>
 
 #include <ArchEnum.hpp>
@@ -38,10 +37,9 @@ std::vector<Core::DataReference> analyze(
 std::vector<Core::DataReference> analyze(
     const std::vector<Capstone::Instruction>& insns,
     uint64_t region_addr, uint64_t region_size,
-    const std::vector<Core::SectionInfo>& sections,
+    const std::vector<Core::Section>& sections,
     const std::vector<Core::RelocationEntry>& text_relocations,
     const Segmentator::NativeSymbolTable& symbols,
-    const std::vector<Segmentator::ReadOnlySection>& rodata_sections,
     Segmentator::Arch arch, Segmentator::Mode mode) noexcept;
 
 }  // namespace VMPilot::SDK::ReferenceAnalyzer

@@ -1,5 +1,6 @@
 #include <PEHandler.hpp>
 #include <HandlerRegistry.hpp>
+#include <Section.hpp>
 #include <utilities.hpp>
 
 #include <cstring>
@@ -202,24 +203,52 @@ uint64_t PEFileHandlerStrategy::doGetTextBaseAddr() noexcept {
     return static_cast<uint64_t>(-1);
 }
 
-std::vector<ReadOnlySection>
-PEFileHandlerStrategy::doGetReadOnlySections() noexcept {
-    std::vector<ReadOnlySection> result;
+std::vector<VMPilot::SDK::Core::Section>
+PEFileHandlerStrategy::doGetSections() noexcept {
+    namespace Core = VMPilot::SDK::Core;
+    std::vector<Core::Section> result;
+
     auto& sections = pImpl->reader.get_sections();
     for (size_t i = 0; i < sections.get_count(); ++i) {
         auto* sec = sections[i];
-        if (sec->get_name() == ".rdata") {
-            auto size = sec->get_data_size();
-            const char* data = sec->get_data();
-            if (data && size > 0) {
-                result.push_back(
-                    {std::vector<uint8_t>(data, data + size),
-                     pImpl->image_base + sec->get_virtual_address()});
-            }
-            break;
+        if (!sec || sec->get_data_size() == 0)
+            continue;
+
+        Core::Section s;
+        s.base_addr = pImpl->image_base + sec->get_virtual_address();
+        s.size = sec->get_data_size();
+        s.name = sec->get_name();
+
+        if (s.name == ".text")
+            s.kind = Core::SectionKind::Text;
+        else if (s.name == ".rdata")
+            s.kind = Core::SectionKind::Rodata;
+        else if (s.name == ".data")
+            s.kind = Core::SectionKind::Data;
+        else if (s.name == ".bss")
+            s.kind = Core::SectionKind::Bss;
+        else if (s.name == ".tls")
+            s.kind = Core::SectionKind::Tls;
+        else
+            s.kind = Core::SectionKind::Unknown;
+
+        // .text data lives in CompilationUnit.code; .bss is zero-initialized
+        const bool skip_data =
+            s.kind == Core::SectionKind::Text ||
+            s.kind == Core::SectionKind::Bss;
+        const char* data = sec->get_data();
+        if (!skip_data && data) {
+            s.data.assign(data, data + s.size);
         }
+
+        result.push_back(std::move(s));
     }
+
     return result;
+}
+
+uint64_t PEFileHandlerStrategy::doGetImageBase() noexcept {
+    return pImpl->image_base;
 }
 
 NativeSymbolTable PEFileHandlerStrategy::doGetSymbols() noexcept {
@@ -283,41 +312,6 @@ std::string PEFileHandlerStrategy::doGetCompilerInfo() noexcept {
     uint8_t minor = opt_hdr->get_minor_linker_version();
     return "MSVC Linker " + std::to_string(major) + "." +
            std::to_string(minor);
-}
-
-std::vector<VMPilot::SDK::Core::SectionInfo>
-PEFileHandlerStrategy::doGetAllSections() noexcept {
-    namespace Core = VMPilot::SDK::Core;
-    std::vector<Core::SectionInfo> result;
-
-    auto& sections = pImpl->reader.get_sections();
-    for (size_t i = 0; i < sections.get_count(); ++i) {
-        auto* sec = sections[i];
-        if (!sec || sec->get_data_size() == 0)
-            continue;
-
-        Core::SectionInfo info;
-        info.base_addr = pImpl->image_base + sec->get_virtual_address();
-        info.size = sec->get_data_size();
-        info.name = sec->get_name();
-
-        if (info.name == ".text")
-            info.kind = Core::SectionKind::Text;
-        else if (info.name == ".rdata")
-            info.kind = Core::SectionKind::Rodata;
-        else if (info.name == ".data")
-            info.kind = Core::SectionKind::Data;
-        else if (info.name == ".bss")
-            info.kind = Core::SectionKind::Bss;
-        else if (info.name == ".tls")
-            info.kind = Core::SectionKind::Tls;
-        else
-            info.kind = Core::SectionKind::Unknown;
-
-        result.push_back(std::move(info));
-    }
-
-    return result;
 }
 
 std::vector<CallTarget>

@@ -3,7 +3,7 @@
 #include "SectionLookup.hpp"
 
 #include <DataReference.hpp>
-#include <ReadOnlySection.hpp>
+#include <Section.hpp>
 #include <capstone.hpp>
 
 #include <cstdint>
@@ -25,10 +25,10 @@ struct JumpTableLayout {
 /// Read bytes from rodata_sections at a given VA.
 /// Returns true if the read succeeded.
 inline bool readRodataBytes(
-    const std::vector<Segmentator::ReadOnlySection>& rodata_sections,
+    const std::vector<Core::Section>& rodata_sections,
     uint64_t va, void* buf, size_t len) noexcept {
     for (const auto& sec : rodata_sections) {
-        if (!sec.contains(va))
+        if (!sec.has_data() || !sec.contains(va))
             continue;
         uint64_t end_va = va + len;
         if (end_va > sec.base_addr + sec.data.size())
@@ -48,7 +48,7 @@ inline bool readRodataBytes(
 ///   - 1-byte offset with shift (ARM64 Apple Clang)
 inline Core::JumpTableRef resolveEntries(
     const JumpTableLayout& layout,
-    const std::vector<Segmentator::ReadOnlySection>& rodata_sections,
+    const std::vector<Core::Section>& rodata_sections,
     const SectionLookup& sections) noexcept {
     Core::JumpTableRef jt;
     jt.table_base = layout.table_base;

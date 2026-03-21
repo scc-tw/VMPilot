@@ -5,8 +5,7 @@
 #include <DataReference.hpp>
 #include <NativeFunctionBase.hpp>
 #include <NativeSymbolTable.hpp>
-#include <ReadOnlySection.hpp>
-#include <SectionInfo.hpp>
+#include <Section.hpp>
 
 #include <cstdint>
 #include <functional>
@@ -33,10 +32,12 @@ class FileHandlerStrategy {
     virtual std::vector<uint8_t> doGetTextSection() noexcept;
     virtual uint64_t doGetTextBaseAddr() noexcept;
 
-    /// Read-only data sections for string/data resolution.
-    /// (ELF: .rodata, PE: .rdata, Mach-O: __TEXT,__const + __TEXT,__cstring)
-    /// Used by __FUNCTION__ extraction and BytecodeCompiler.
-    virtual std::vector<ReadOnlySection> doGetReadOnlySections() noexcept;
+    /// Return all loadable sections with classified kinds and data bytes.
+    /// (ELF: all sections, PE: all sections, Mach-O: all sections)
+    virtual std::vector<Core::Section> doGetSections() noexcept;
+
+    /// Return the image base address (lowest PT_LOAD vaddr for ELF).
+    virtual uint64_t doGetImageBase() noexcept { return 0; }
 
     /// Collect function symbols from the binary
     /// (ELF: .dynsym, PE: export table, Mach-O: LC_SYMTAB)
@@ -54,9 +55,6 @@ class FileHandlerStrategy {
     /// (ELF: .comment section, PE: linker version, MachO: CPU type fallback)
     virtual std::string doGetCompilerInfo() noexcept;
 
-    /// Return all sections with classified kinds for reference analysis.
-    virtual std::vector<Core::SectionInfo> doGetAllSections() noexcept;
-
     /// Return .rela.text / .rel.text relocation entries for reference analysis.
     virtual std::vector<Core::RelocationEntry> doGetTextRelocations() noexcept;
 
@@ -64,7 +62,12 @@ class FileHandlerStrategy {
     virtual ~FileHandlerStrategy() = default;
     std::vector<uint8_t> getTextSection();
     uint64_t getTextBaseAddr();
-    std::vector<ReadOnlySection> getReadOnlySections();
+
+    /// Return all loadable sections with classified kinds and data bytes.
+    std::vector<Core::Section> getSections();
+
+    /// Return the image base address.
+    uint64_t getImageBase();
 
     /// Assemble a complete symbol table from the three sources above.
     /// Not virtual --- subclasses override doGetSymbols/Direct/Indirect instead.
@@ -72,9 +75,6 @@ class FileHandlerStrategy {
 
     /// Return compiler/linker identification string.
     std::string getCompilerInfo();
-
-    /// Return all sections with classified kinds.
-    std::vector<Core::SectionInfo> getAllSections();
 
     /// Return text relocation entries.
     std::vector<Core::RelocationEntry> getTextRelocations();

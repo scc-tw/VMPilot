@@ -19,8 +19,8 @@ uint64_t FileHandlerStrategy::doGetTextBaseAddr() noexcept {
     return static_cast<uint64_t>(-1);
 }
 
-std::vector<ReadOnlySection>
-FileHandlerStrategy::doGetReadOnlySections() noexcept {
+std::vector<VMPilot::SDK::Core::Section>
+FileHandlerStrategy::doGetSections() noexcept {
     return {};
 }
 
@@ -45,11 +45,6 @@ std::string FileHandlerStrategy::doGetCompilerInfo() noexcept {
     return {};
 }
 
-std::vector<VMPilot::SDK::Core::SectionInfo>
-FileHandlerStrategy::doGetAllSections() noexcept {
-    return {};
-}
-
 std::vector<VMPilot::SDK::Core::RelocationEntry>
 FileHandlerStrategy::doGetTextRelocations() noexcept {
     return {};
@@ -63,17 +58,16 @@ uint64_t FileHandlerStrategy::getTextBaseAddr() {
     return doGetTextBaseAddr();
 }
 
-std::vector<ReadOnlySection> FileHandlerStrategy::getReadOnlySections() {
-    return doGetReadOnlySections();
+std::vector<VMPilot::SDK::Core::Section> FileHandlerStrategy::getSections() {
+    return doGetSections();
+}
+
+uint64_t FileHandlerStrategy::getImageBase() {
+    return doGetImageBase();
 }
 
 std::string FileHandlerStrategy::getCompilerInfo() {
     return doGetCompilerInfo();
-}
-
-std::vector<VMPilot::SDK::Core::SectionInfo>
-FileHandlerStrategy::getAllSections() {
-    return doGetAllSections();
 }
 
 std::vector<VMPilot::SDK::Core::RelocationEntry>

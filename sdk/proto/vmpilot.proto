@@ -19,6 +19,7 @@ message SectionInfo {
   uint64 size = 2;
   uint32 kind = 3;
   string name = 4;
+  bytes data = 5;
 }
 
 message RelocationEntry {

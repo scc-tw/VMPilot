@@ -1,5 +1,6 @@
 #include <MachOHandler.hpp>
 #include <HandlerRegistry.hpp>
+#include <Section.hpp>
 #include <utilities.hpp>
 
 #include <macho_parser.hpp>
@@ -68,21 +69,76 @@ uint64_t MachOFileHandlerStrategy::doGetTextBaseAddr() noexcept {
     return pImpl->text_base_addr;
 }
 
-std::vector<ReadOnlySection>
-MachOFileHandlerStrategy::doGetReadOnlySections() noexcept {
-    std::vector<ReadOnlySection> sections;
-    // Mach-O has multiple read-only sections in __TEXT:
-    //   __const   — constant data (arrays, structs)
-    //   __cstring — C string literals (__FUNCTION__, string constants)
-    for (const char* name : {"__const", "__cstring"}) {
-        auto sect = pImpl->parser.findSection("__TEXT", name);
-        if (sect) {
-            auto data = pImpl->parser.readSectionData(*sect);
-            if (!data.empty())
-                sections.push_back({std::move(data), sect->addr});
+std::vector<VMPilot::SDK::Core::Section>
+MachOFileHandlerStrategy::doGetSections() noexcept {
+    namespace Core = VMPilot::SDK::Core;
+    std::vector<Core::Section> result;
+
+    for (const auto& sec : pImpl->parser.sections()) {
+        if (sec.size == 0)
+            continue;
+
+        Core::Section s;
+        s.base_addr = sec.addr;
+        s.size = sec.size;
+        s.name = sec.segname + "," + sec.sectname;
+
+        // Classify by segment+section name
+        if (sec.segname == "__TEXT" && sec.sectname == "__text")
+            s.kind = Core::SectionKind::Text;
+        else if (sec.segname == "__TEXT" &&
+                 (sec.sectname == "__const" || sec.sectname == "__cstring" ||
+                  sec.sectname == "__literal4" || sec.sectname == "__literal8"))
+            s.kind = Core::SectionKind::Rodata;
+        else if ((sec.segname == "__DATA" || sec.segname == "__DATA_CONST") &&
+                 sec.sectname == "__data")
+            s.kind = Core::SectionKind::Data;
+        else if (sec.segname == "__DATA" &&
+                 (sec.sectname == "__bss" || sec.sectname == "__common"))
+            s.kind = Core::SectionKind::Bss;
+        else if (sec.segname == "__DATA" &&
+                 (sec.sectname == "__thread_data" ||
+                  sec.sectname == "__thread_bss" ||
+                  sec.sectname == "__thread_vars"))
+            s.kind = Core::SectionKind::Tls;
+        else if ((sec.segname == "__DATA" || sec.segname == "__DATA_CONST") &&
+                 sec.sectname == "__got")
+            s.kind = Core::SectionKind::Got;
+        else if (sec.segname == "__TEXT" && sec.sectname == "__stubs")
+            s.kind = Core::SectionKind::Plt;
+        else
+            s.kind = Core::SectionKind::Unknown;
+
+        // Populate data for sections that carry loadable content.
+        // Text: code bytes live in CompilationUnit.code, skip here.
+        // Bss: zero-initialized at runtime, no file content.
+        if (s.kind != Core::SectionKind::Text &&
+            s.kind != Core::SectionKind::Bss) {
+            s.data = pImpl->parser.readSectionData(sec);
         }
+
+        result.push_back(std::move(s));
     }
-    return sections;
+
+    return result;
+}
+
+uint64_t MachOFileHandlerStrategy::doGetImageBase() noexcept {
+    // The image base is the vmaddr of the __TEXT segment.
+    // Approximate by finding __TEXT,__text and computing addr - offset.
+    auto sect = pImpl->parser.findSection("__TEXT", "__text");
+    if (!sect) {
+        spdlog::error("Could not find __TEXT,__text for image base");
+        return 0;
+    }
+    // sec.addr is the virtual address, sec.offset is the file offset.
+    // For the __TEXT segment, vmaddr = addr - (addr_within_segment),
+    // and offset within segment equals file offset within segment.
+    // Since __text is typically at the start of loadable content:
+    //   segment_vmaddr = section_addr - (section_file_offset - segment_file_offset)
+    // For __TEXT segment, the segment file offset is typically 0, so:
+    //   segment_vmaddr = section_addr - section_file_offset
+    return sect->addr - sect->offset;
 }
 
 NativeSymbolTable MachOFileHandlerStrategy::doGetSymbols() noexcept {
@@ -130,52 +186,6 @@ std::string MachOFileHandlerStrategy::doGetCompilerInfo() noexcept {
         case 0x01000007: return "Mach-O X86_64";
         default: return "Mach-O CPU " + std::to_string(cputype);
     }
-}
-
-std::vector<VMPilot::SDK::Core::SectionInfo>
-MachOFileHandlerStrategy::doGetAllSections() noexcept {
-    namespace Core = VMPilot::SDK::Core;
-    std::vector<Core::SectionInfo> result;
-
-    for (const auto& sec : pImpl->parser.sections()) {
-        if (sec.size == 0)
-            continue;
-
-        Core::SectionInfo info;
-        info.base_addr = sec.addr;
-        info.size = sec.size;
-        info.name = sec.segname + "," + sec.sectname;
-
-        // Classify by segment+section name
-        if (sec.segname == "__TEXT" && sec.sectname == "__text")
-            info.kind = Core::SectionKind::Text;
-        else if (sec.segname == "__TEXT" &&
-                 (sec.sectname == "__const" || sec.sectname == "__cstring" ||
-                  sec.sectname == "__literal4" || sec.sectname == "__literal8"))
-            info.kind = Core::SectionKind::Rodata;
-        else if ((sec.segname == "__DATA" || sec.segname == "__DATA_CONST") &&
-                 sec.sectname == "__data")
-            info.kind = Core::SectionKind::Data;
-        else if (sec.segname == "__DATA" &&
-                 (sec.sectname == "__bss" || sec.sectname == "__common"))
-            info.kind = Core::SectionKind::Bss;
-        else if (sec.segname == "__DATA" &&
-                 (sec.sectname == "__thread_data" ||
-                  sec.sectname == "__thread_bss" ||
-                  sec.sectname == "__thread_vars"))
-            info.kind = Core::SectionKind::Tls;
-        else if ((sec.segname == "__DATA" || sec.segname == "__DATA_CONST") &&
-                 sec.sectname == "__got")
-            info.kind = Core::SectionKind::Got;
-        else if (sec.segname == "__TEXT" && sec.sectname == "__stubs")
-            info.kind = Core::SectionKind::Plt;
-        else
-            info.kind = Core::SectionKind::Unknown;
-
-        result.push_back(std::move(info));
-    }
-
-    return result;
 }
 
 std::vector<CallTarget>

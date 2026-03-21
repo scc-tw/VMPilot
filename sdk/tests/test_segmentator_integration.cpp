@@ -190,7 +190,7 @@ TEST_F(SegmentatorIntegrationX64, FunctionNameExtraction) {
     ctx.symbols = elf.getNativeSymbolTable();
     ctx.arch = metadata.arch;
     ctx.mode = metadata.mode;
-    ctx.rodata_sections = elf.getReadOnlySections();
+    ctx.sections = elf.getSections();
 
     X86Handler x86(metadata.mode, symbols);
     x86.setCompilationContext(std::move(ctx));

@@ -17,9 +17,10 @@ TEST(CompilationUnit, DefaultConstruction) {
 }
 
 TEST(CompilationUnit, PopulatedUnit) {
-    auto ctx = std::make_shared<const CompilationContext>(CompilationContext{
-        {}, {}, {}, VMPilot::SDK::Segmentator::Arch::X86,
-        VMPilot::SDK::Segmentator::Mode::MODE_32});
+    CompilationContext ctx_val;
+    ctx_val.arch = VMPilot::SDK::Segmentator::Arch::X86;
+    ctx_val.mode = VMPilot::SDK::Segmentator::Mode::MODE_32;
+    auto ctx = std::make_shared<const CompilationContext>(std::move(ctx_val));
 
     CompilationUnit unit;
     unit.name = "test_function";

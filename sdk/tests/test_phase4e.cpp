@@ -5,8 +5,7 @@
 #include <AnalysisContext.hpp>
 
 #include <DataReference.hpp>
-#include <ReadOnlySection.hpp>
-#include <SectionInfo.hpp>
+#include <Section.hpp>
 
 #include <cstdint>
 #include <vector>
@@ -142,13 +141,14 @@ TEST(JumpTableResolver, Absolute8ByteEntries) {
         0x10, 0x10, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00,  // 0x401010
         0x20, 0x10, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00,  // 0x401020
     };
-    ReadOnlySection sec;
+    Section sec;
     sec.base_addr = 0x402000;
     sec.data.assign(rodata, rodata + sizeof(rodata));
+    sec.size = sec.data.size();
 
-    std::vector<SectionInfo> sections = {
-        {0x401000, 0x1000, SectionKind::Text, ".text"},
-        {0x402000, 0x100, SectionKind::Rodata, ".rodata"},
+    std::vector<Section> sections = {
+        {0x401000, 0x1000, SectionKind::Text, ".text", {}},
+        {0x402000, 0x100, SectionKind::Rodata, ".rodata", {}},
     };
     SectionLookup lookup(sections);
 
@@ -180,13 +180,14 @@ TEST(JumpTableResolver, Relative4ByteEntries) {
     uint8_t rodata[4];
     std::memcpy(rodata, &raw, 4);
 
-    ReadOnlySection sec;
+    Section sec;
     sec.base_addr = 0x402000;
     sec.data.assign(rodata, rodata + 4);
+    sec.size = sec.data.size();
 
-    std::vector<SectionInfo> sections = {
-        {0x401000, 0x1000, SectionKind::Text, ".text"},
-        {0x402000, 0x100, SectionKind::Rodata, ".rodata"},
+    std::vector<Section> sections = {
+        {0x401000, 0x1000, SectionKind::Text, ".text", {}},
+        {0x402000, 0x100, SectionKind::Rodata, ".rodata", {}},
     };
     SectionLookup lookup(sections);
 
@@ -210,13 +211,14 @@ TEST(JumpTableResolver, ByteOffsetWithShift) {
     // entry[1] = 4 → target = 0x401000 + (4 << 2) = 0x401010
     uint8_t rodata[] = {0x00, 0x04};
 
-    ReadOnlySection sec;
+    Section sec;
     sec.base_addr = 0x402000;
     sec.data.assign(rodata, rodata + 2);
+    sec.size = sec.data.size();
 
-    std::vector<SectionInfo> sections = {
-        {0x401000, 0x1000, SectionKind::Text, ".text"},
-        {0x402000, 0x100, SectionKind::Rodata, ".rodata"},
+    std::vector<Section> sections = {
+        {0x401000, 0x1000, SectionKind::Text, ".text", {}},
+        {0x402000, 0x100, SectionKind::Rodata, ".rodata", {}},
     };
     SectionLookup lookup(sections);
 
@@ -240,13 +242,14 @@ TEST(JumpTableResolver, InvalidEntryTruncates) {
         0x00, 0x10, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00,  // 0x401000 valid
         0x00, 0x00, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00,  // 0x500000 invalid
     };
-    ReadOnlySection sec;
+    Section sec;
     sec.base_addr = 0x402000;
     sec.data.assign(rodata, rodata + sizeof(rodata));
+    sec.size = sec.data.size();
 
-    std::vector<SectionInfo> sections = {
-        {0x401000, 0x1000, SectionKind::Text, ".text"},
-        {0x402000, 0x100, SectionKind::Rodata, ".rodata"},
+    std::vector<Section> sections = {
+        {0x401000, 0x1000, SectionKind::Text, ".text", {}},
+        {0x402000, 0x100, SectionKind::Rodata, ".rodata", {}},
     };
     SectionLookup lookup(sections);
 
@@ -267,13 +270,14 @@ TEST(JumpTableResolver, MaxEntriesLimit) {
         0x10, 0x10, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x20, 0x10, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00,
     };
-    ReadOnlySection sec;
+    Section sec;
     sec.base_addr = 0x402000;
     sec.data.assign(rodata, rodata + sizeof(rodata));
+    sec.size = sec.data.size();
 
-    std::vector<SectionInfo> sections = {
-        {0x401000, 0x1000, SectionKind::Text, ".text"},
-        {0x402000, 0x100, SectionKind::Rodata, ".rodata"},
+    std::vector<Section> sections = {
+        {0x401000, 0x1000, SectionKind::Text, ".text", {}},
+        {0x402000, 0x100, SectionKind::Rodata, ".rodata", {}},
     };
     SectionLookup lookup(sections);
 
@@ -300,10 +304,9 @@ TEST(AnalysisContext, BuildPopulatesSymbolLookup) {
     symbols.push_back(sym);
 
     auto ctx = AnalysisContext::build(
-        {{0x401000, 0x1000, SectionKind::Text, ".text"}},
+        {{0x401000, 0x1000, SectionKind::Text, ".text", {}}},
         {},
         std::move(symbols),
-        {},
         Arch::X86,
         Mode::MODE_64);
 
@@ -329,7 +332,7 @@ TEST(AnalysisContext, EmptySymbolsSkipped) {
     zero_addr.address = 0;
     symbols.push_back(zero_addr);
 
-    auto ctx = AnalysisContext::build({}, {}, std::move(symbols), {},
+    auto ctx = AnalysisContext::build({}, {}, std::move(symbols),
                                       Arch::ARM64, Mode::MODE_64);
 
     EXPECT_TRUE(ctx.symbol_lookup.empty());

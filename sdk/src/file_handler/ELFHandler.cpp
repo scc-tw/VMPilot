@@ -77,19 +77,68 @@ uint64_t ELFFileHandlerStrategy::doGetTextBaseAddr() noexcept {
     return pImpl->text_base_addr;
 }
 
-std::vector<ReadOnlySection>
-ELFFileHandlerStrategy::doGetReadOnlySections() noexcept {
-    std::vector<ReadOnlySection> sections;
-    const auto it = pImpl->section_table.find(".rodata");
-    if (it == pImpl->section_table.end())
-        return sections;
-    auto section = it->second.getSection();
-    if (!section || section->get_size() == 0)
-        return sections;
-    std::vector<uint8_t> data(section->get_size());
-    std::memcpy(data.data(), section->get_data(), section->get_size());
-    sections.push_back({std::move(data), section->get_address()});
-    return sections;
+std::vector<VMPilot::SDK::Core::Section>
+ELFFileHandlerStrategy::doGetSections() noexcept {
+    namespace Core = VMPilot::SDK::Core;
+    std::vector<Core::Section> result;
+
+    for (auto& [name, viewer] : pImpl->section_table) {
+        auto sec = viewer.getSection();
+        if (!sec || sec->get_size() == 0)
+            continue;
+
+        Core::Section s;
+        s.base_addr = sec->get_address();
+        s.size = sec->get_size();
+        s.name = name;
+
+        // Classify by name
+        if (name == ".text")
+            s.kind = Core::SectionKind::Text;
+        else if (name == ".rodata" || name == ".rodata.str1.1" ||
+                 name == ".rodata.str1.8" || name == ".rodata.cst4" ||
+                 name == ".rodata.cst8" || name == ".rodata.cst16")
+            s.kind = Core::SectionKind::Rodata;
+        else if (name == ".data" || name == ".data.rel.ro")
+            s.kind = Core::SectionKind::Data;
+        else if (name == ".bss")
+            s.kind = Core::SectionKind::Bss;
+        else if (name == ".tdata" || name == ".tbss")
+            s.kind = Core::SectionKind::Tls;
+        else if (name.substr(0, 4) == ".got")
+            s.kind = Core::SectionKind::Got;
+        else if (name.substr(0, 4) == ".plt")
+            s.kind = Core::SectionKind::Plt;
+        else
+            s.kind = Core::SectionKind::Unknown;
+
+        // Populate data bytes for all sections except:
+        // - .bss (zero-initialized, no file data)
+        // - .text (code bytes already in CompilationUnit.code)
+        // - sections with no raw data
+        if (s.kind != Core::SectionKind::Bss &&
+            s.kind != Core::SectionKind::Text &&
+            sec->get_data() != nullptr) {
+            s.data.resize(sec->get_size());
+            std::memcpy(s.data.data(), sec->get_data(), sec->get_size());
+        }
+
+        result.push_back(std::move(s));
+    }
+
+    return result;
+}
+
+uint64_t ELFFileHandlerStrategy::doGetImageBase() noexcept {
+    uint64_t lowest = UINT64_MAX;
+    for (auto& seg : pImpl->reader.segments) {
+        if (seg->get_type() == ELFIO::PT_LOAD) {
+            uint64_t vaddr = seg->get_virtual_address();
+            if (vaddr < lowest)
+                lowest = vaddr;
+        }
+    }
+    return (lowest == UINT64_MAX) ? 0 : lowest;
 }
 
 std::unordered_map<uint64_t, ELFFileHandlerStrategy::RelaInfo>
@@ -321,47 +370,6 @@ std::string ELFFileHandlerStrategy::doGetCompilerInfo() noexcept {
     if (start == std::string::npos) return {};
     auto end = info.find_last_not_of(' ');
     return info.substr(start, end - start + 1);
-}
-
-std::vector<VMPilot::SDK::Core::SectionInfo>
-ELFFileHandlerStrategy::doGetAllSections() noexcept {
-    namespace Core = VMPilot::SDK::Core;
-    std::vector<Core::SectionInfo> result;
-
-    for (auto& [name, viewer] : pImpl->section_table) {
-        auto sec = viewer.getSection();
-        if (!sec || sec->get_size() == 0)
-            continue;
-
-        Core::SectionInfo info;
-        info.base_addr = sec->get_address();
-        info.size = sec->get_size();
-        info.name = name;
-
-        // Classify by name
-        if (name == ".text")
-            info.kind = Core::SectionKind::Text;
-        else if (name == ".rodata" || name == ".rodata.str1.1" ||
-                 name == ".rodata.str1.8" || name == ".rodata.cst4" ||
-                 name == ".rodata.cst8" || name == ".rodata.cst16")
-            info.kind = Core::SectionKind::Rodata;
-        else if (name == ".data" || name == ".data.rel.ro")
-            info.kind = Core::SectionKind::Data;
-        else if (name == ".bss")
-            info.kind = Core::SectionKind::Bss;
-        else if (name == ".tdata" || name == ".tbss")
-            info.kind = Core::SectionKind::Tls;
-        else if (name.substr(0, 4) == ".got")
-            info.kind = Core::SectionKind::Got;
-        else if (name.substr(0, 4) == ".plt")
-            info.kind = Core::SectionKind::Plt;
-        else
-            info.kind = Core::SectionKind::Unknown;
-
-        result.push_back(std::move(info));
-    }
-
-    return result;
 }
 
 std::vector<VMPilot::SDK::Core::RelocationEntry>

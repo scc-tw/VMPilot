@@ -13,7 +13,7 @@
 #include <compile_pipeline.hpp>
 #include <ReferenceAnalyzer.hpp>
 #include <Serializer.hpp>
-#include <SectionInfo.hpp>
+#include <Section.hpp>
 #include <capstone.hpp>
 #include <diagnostic_collector.hpp>
 #include <instruction_t.hpp>
@@ -155,16 +155,15 @@ int main(int argc, char* argv[]) {
     printf("Arch:          %s\n", Segmentator::to_string(seg->context.arch));
     printf("Mode:          %s\n", Segmentator::to_string(seg->context.mode));
     printf("Symbols:       %zu\n", seg->context.symbols.size());
-    printf("RO sections:   %zu\n", seg->context.rodata_sections.size());
-    printf("All sections:  %zu\n", seg->context.all_sections.size());
+    printf("Sections:      %zu\n", seg->context.sections.size());
     printf("Regions:       %zu (after refine)\n",
            seg->refined_regions.size());
     printf("\n");
 
     // Section map — critical for understanding ReferenceAnalyzer classification
-    if (!seg->context.all_sections.empty()) {
+    if (!seg->context.sections.empty()) {
         printf("  Section Map (what ReferenceAnalyzer sees):\n");
-        for (const auto& sec : seg->context.all_sections) {
+        for (const auto& sec : seg->context.sections) {
             printf("    0x%" PRIx64 " - 0x%" PRIx64 "  %-7s  %s\n",
                    sec.base_addr, sec.base_addr + sec.size,
                    sectionKindStr(sec.kind), sec.name.c_str());
@@ -235,13 +234,11 @@ int main(int argc, char* argv[]) {
         auto unit_insns = cs.disasm(unit.code, unit.addr);
         unit.data_references = ReferenceAnalyzer::analyze(
             unit_insns, unit.addr, unit.size,
-            unit.context ? unit.context->all_sections
-                         : std::vector<Core::SectionInfo>{},
+            unit.context ? unit.context->sections
+                         : std::vector<Core::Section>{},
             seg->text_relocations,
             unit.context ? unit.context->symbols
                          : Segmentator::NativeSymbolTable{},
-            unit.context ? unit.context->rodata_sections
-                         : std::vector<Segmentator::ReadOnlySection>{},
             seg->context.arch, seg->context.mode);
     }
 

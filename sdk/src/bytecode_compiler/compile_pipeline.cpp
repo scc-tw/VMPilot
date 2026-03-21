@@ -57,10 +57,9 @@ compile_binary(const std::string& binary_path,
 
         // Build AnalysisContext once, share across all units
         auto analysis_ctx = ReferenceAnalyzer::AnalysisContext::build(
-            seg_result->context.all_sections,
+            seg_result->context.sections,
             seg_result->text_relocations,
             seg_result->context.symbols,
-            seg_result->context.rodata_sections,
             seg_result->context.arch,
             seg_result->context.mode);
 

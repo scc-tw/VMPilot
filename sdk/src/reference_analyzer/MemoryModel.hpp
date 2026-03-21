@@ -1,6 +1,6 @@
 #pragma once
 
-#include <SectionInfo.hpp>
+#include <Section.hpp>
 
 #include <cstdint>
 #include <cstring>

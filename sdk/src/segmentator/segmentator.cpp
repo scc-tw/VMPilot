@@ -82,8 +82,8 @@ VMPilot::SDK::Segmentator::segment(
     ctx.symbols = std::move(symbols);
     ctx.arch = metadata.arch;
     ctx.mode = metadata.mode;
-    ctx.rodata_sections = fh->getReadOnlySections();
-    ctx.all_sections = fh->getAllSections();
+    ctx.sections = fh->getSections();
+    ctx.image_base = fh->getImageBase();
 
     ah->setCompilationContext(ctx);
 

@@ -17,8 +17,11 @@ protected:
     CompileConfig config{TEST_KEY, false};
 
     std::vector<CompilationUnit> make_units(int count) {
+        CompilationContext ctx_val;
+        ctx_val.arch = Arch::X86;
+        ctx_val.mode = Mode::MODE_32;
         auto ctx = std::make_shared<const CompilationContext>(
-            CompilationContext{{}, {}, {}, Arch::X86, Mode::MODE_32});
+            std::move(ctx_val));
 
         std::vector<CompilationUnit> units;
         for (int i = 0; i < count; ++i) {

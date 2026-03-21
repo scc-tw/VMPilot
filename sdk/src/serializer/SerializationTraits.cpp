@@ -1,7 +1,7 @@
 #include <SerializationTraits.hpp>
 
 #include <DataReference.hpp>
-#include <SectionInfo.hpp>
+#include <Section.hpp>
 #include <VMPilot_crypto.hpp>
 #include <vmpilot.pb.h>
 
@@ -28,18 +28,14 @@ SerializationTraits<Segmentator::CompilationContext>::to_bytes(
         s->set_is_global(sym.isGlobal);
     }
 
-    for (const auto& sec : ctx.rodata_sections) {
-        auto* r = pb.add_rodata_sections();
-        r->set_base_addr(sec.base_addr);
-        r->set_data(sec.data.data(), sec.data.size());
-    }
-
-    for (const auto& sec : ctx.all_sections) {
+    for (const auto& sec : ctx.sections) {
         auto* s = pb.add_all_sections();
         s->set_base_addr(sec.base_addr);
         s->set_size(sec.size);
         s->set_kind(static_cast<uint32_t>(sec.kind));
         s->set_name(sec.name);
+        if (sec.has_data())
+            s->set_data(sec.data.data(), sec.data.size());
     }
 
     std::string bytes;
@@ -73,22 +69,16 @@ SerializationTraits<Segmentator::CompilationContext>::from_bytes(
         ctx.symbols.push_back(std::move(entry));
     }
 
-    for (int i = 0; i < pb.rodata_sections_size(); ++i) {
-        const auto& r = pb.rodata_sections(i);
-        Segmentator::ReadOnlySection sec;
-        sec.base_addr = r.base_addr();
-        sec.data.assign(r.data().begin(), r.data().end());
-        ctx.rodata_sections.push_back(std::move(sec));
-    }
-
     for (int i = 0; i < pb.all_sections_size(); ++i) {
         const auto& s = pb.all_sections(i);
-        Core::SectionInfo sec;
+        Core::Section sec;
         sec.base_addr = s.base_addr();
         sec.size = s.size();
         sec.kind = static_cast<Core::SectionKind>(s.kind());
         sec.name = s.name();
-        ctx.all_sections.push_back(std::move(sec));
+        if (!s.data().empty())
+            sec.data.assign(s.data().begin(), s.data().end());
+        ctx.sections.push_back(std::move(sec));
     }
 
     return ctx;

@@ -8,7 +8,7 @@
 #include <ARM64Traits.hpp>
 #include <DataReference.hpp>
 #include <NativeSymbolTable.hpp>
-#include <ReadOnlySection.hpp>
+#include <Section.hpp>
 #include <X86Traits.hpp>
 #include <capstone.hpp>
 
@@ -30,15 +30,15 @@ using namespace VMPilot::SDK::ReferenceAnalyzer;
 
 namespace {
 
-std::vector<SectionInfo> makeTestSections() {
+std::vector<Section> makeTestSections() {
     return {
-        {0x401000, 0x1000, SectionKind::Text, ".text"},
-        {0x402000, 0x200, SectionKind::Rodata, ".rodata"},
-        {0x403000, 0x200, SectionKind::Data, ".data"},
-        {0x404000, 0x100, SectionKind::Bss, ".bss"},
-        {0x405000, 0x100, SectionKind::Tls, ".tdata"},
-        {0x406000, 0x100, SectionKind::Got, ".got"},
-        {0x407000, 0x100, SectionKind::Plt, ".plt"},
+        {0x401000, 0x1000, SectionKind::Text, ".text", {}},
+        {0x402000, 0x200, SectionKind::Rodata, ".rodata", {}},
+        {0x403000, 0x200, SectionKind::Data, ".data", {}},
+        {0x404000, 0x100, SectionKind::Bss, ".bss", {}},
+        {0x405000, 0x100, SectionKind::Tls, ".tdata", {}},
+        {0x406000, 0x100, SectionKind::Got, ".got", {}},
+        {0x407000, 0x100, SectionKind::Plt, ".plt", {}},
     };
 }
 
@@ -56,8 +56,8 @@ Capstone::Instruction makeSyntheticInsn(
     insn.size = size;
     insn.mnemonic = mnemonic;
     insn.op_str = op_str;
-    insn.operands = operands;
-    insn.groups = groups;
+    for (const auto& op : operands) insn.operands.push_back(op);
+    for (const auto& g : groups) insn.groups.push_back(g);
     std::memset(insn.x86_prefix, 0, sizeof(insn.x86_prefix));
     return insn;
 }
@@ -454,8 +454,11 @@ TEST(SymbolicResolver, ResolveLoadChain) {
 // ============================================================================
 
 TEST(PatternLayer_JumpTableHelpers, ReadRodataBytes) {
-    Segmentator::ReadOnlySection sec;
+    Section sec;
     sec.base_addr = 0x402000;
+    sec.size = 5;
+    sec.kind = SectionKind::Rodata;
+    sec.name = ".rodata";
     sec.data = {0x01, 0x02, 0x03, 0x04, 0x05};
 
     uint8_t buf[4] = {};

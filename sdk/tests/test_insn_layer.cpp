@@ -6,7 +6,7 @@
 
 #include <DataReference.hpp>
 #include <NativeSymbolTable.hpp>
-#include <SectionInfo.hpp>
+#include <Section.hpp>
 #include <capstone.hpp>
 
 #include <capstone/arm64.h>
@@ -24,13 +24,13 @@ using namespace VMPilot::SDK::ReferenceAnalyzer;
 namespace {
 
 /// Standard section layout for tests.
-std::vector<SectionInfo> makeTestSections() {
+std::vector<Section> makeTestSections() {
     return {
-        {0x400000, 0x1000, SectionKind::Text, ".text"},
-        {0x401000, 0x100, SectionKind::Rodata, ".rodata"},
-        {0x402000, 0x100, SectionKind::Data, ".data"},
-        {0x403000, 0x100, SectionKind::Bss, ".bss"},
-        {0x404000, 0x100, SectionKind::Got, ".got"},
+        {0x400000, 0x1000, SectionKind::Text, ".text", {}},
+        {0x401000, 0x100, SectionKind::Rodata, ".rodata", {}},
+        {0x402000, 0x100, SectionKind::Data, ".data", {}},
+        {0x403000, 0x100, SectionKind::Bss, ".bss", {}},
+        {0x404000, 0x100, SectionKind::Got, ".got", {}},
     };
 }
 

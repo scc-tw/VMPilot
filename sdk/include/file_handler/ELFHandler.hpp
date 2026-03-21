@@ -25,15 +25,14 @@ class ELFFileHandlerStrategy : public FileHandlerStrategy {
    protected:
     virtual std::vector<uint8_t> doGetTextSection() noexcept override;
     virtual uint64_t doGetTextBaseAddr() noexcept override;
-    virtual std::vector<ReadOnlySection> doGetReadOnlySections() noexcept
-        override;
+    virtual std::vector<Core::Section> doGetSections() noexcept override;
+    virtual uint64_t doGetImageBase() noexcept override;
 
     virtual NativeSymbolTable doGetSymbols() noexcept override;
     virtual std::vector<CallTarget> doGetStubCallTargets() noexcept override;
     virtual std::vector<CallTarget> doGetPointerTableTargets() noexcept
         override;
     virtual std::string doGetCompilerInfo() noexcept override;
-    virtual std::vector<Core::SectionInfo> doGetAllSections() noexcept override;
     virtual std::vector<Core::RelocationEntry>
         doGetTextRelocations() noexcept override;
 

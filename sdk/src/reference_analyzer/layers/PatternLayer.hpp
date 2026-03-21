@@ -8,7 +8,7 @@
 #include <ModeEnum.hpp>
 #include <DataReference.hpp>
 #include <NativeSymbolTable.hpp>
-#include <ReadOnlySection.hpp>
+#include <Section.hpp>
 #include <X86Traits.hpp>
 #include <capstone.hpp>
 
@@ -35,10 +35,10 @@ namespace VMPilot::SDK::ReferenceAnalyzer {
 /// Read bytes from rodata_sections at a given VA.
 /// Returns true if the read succeeded.
 inline bool readRodataBytes(
-    const std::vector<Segmentator::ReadOnlySection>& rodata_sections,
+    const std::vector<Core::Section>& rodata_sections,
     uint64_t va, void* buf, size_t len) {
     for (const auto& sec : rodata_sections) {
-        if (!sec.contains(va))
+        if (!sec.has_data() || !sec.contains(va))
             continue;
         uint64_t end_va = va + len;
         if (end_va > sec.base_addr + sec.data.size())
@@ -54,7 +54,7 @@ inline bool readRodataBytes(
 inline Core::JumpTableRef resolveJumpTableEntries(
     uint64_t table_base, uint32_t entry_size, bool relative_entries,
     uint32_t entry_count_hint,
-    const std::vector<Segmentator::ReadOnlySection>& rodata_sections,
+    const std::vector<Core::Section>& rodata_sections,
     const SectionLookup& sections) {
     Core::JumpTableRef jt;
     jt.table_base = table_base;
@@ -144,7 +144,7 @@ inline uint32_t findBoundsCheck(
 inline Core::JumpTableRef resolveByteOffsetJumpTable(
     uint64_t table_base, uint64_t case_base, unsigned shift,
     uint32_t entry_count_hint,
-    const std::vector<Segmentator::ReadOnlySection>& rodata_sections,
+    const std::vector<Core::Section>& rodata_sections,
     const SectionLookup& sections) {
     Core::JumpTableRef jt;
     jt.table_base = table_base;
@@ -176,7 +176,7 @@ inline void detectX86JumpTablePatterns(
     const std::vector<Capstone::Instruction>& insns,
     uint64_t region_addr, uint64_t region_size,
     const SectionLookup& sections,
-    const std::vector<Segmentator::ReadOnlySection>& rodata_sections,
+    const std::vector<Core::Section>& rodata_sections,
     bool is_64bit,
     std::vector<Core::DataReference>& refs) {
     const uint64_t region_end = region_addr + region_size;
@@ -282,7 +282,7 @@ inline void detectARM64JumpTablePatterns(
     const std::vector<Capstone::Instruction>& insns,
     uint64_t region_addr, uint64_t region_size,
     const SectionLookup& sections,
-    const std::vector<Segmentator::ReadOnlySection>& rodata_sections,
+    const std::vector<Core::Section>& rodata_sections,
     std::vector<Core::DataReference>& refs) {
     const uint64_t region_end = region_addr + region_size;
 
@@ -414,7 +414,7 @@ std::vector<Core::DataReference> analyzePatterns(
     uint64_t region_addr, uint64_t region_size,
     const Segmentator::NativeSymbolTable& symbols,
     const SectionLookup& sections,
-    const std::vector<Segmentator::ReadOnlySection>& rodata_sections,
+    const std::vector<Core::Section>& rodata_sections,
     Segmentator::Mode mode = Segmentator::Mode::MODE_64) noexcept {
     std::vector<Core::DataReference> refs;
     const uint64_t region_end = region_addr + region_size;

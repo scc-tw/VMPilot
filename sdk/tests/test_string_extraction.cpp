@@ -6,7 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <CompilationContext.hpp>
-#include <ReadOnlySection.hpp>
+#include <Section.hpp>
 #include <X86Handler.hpp>
 #include <utilities.hpp>
 
@@ -59,7 +59,13 @@ static CompilationContext makeContext() {
     CompilationContext ctx;
     ctx.arch = VMPilot::Common::FileArch::X86;
     ctx.mode = VMPilot::Common::FileMode::MODE_64;
-    ctx.rodata_sections.push_back({std::move(rodata), kRodataBase});
+    VMPilot::SDK::Core::Section rodata_sec;
+    rodata_sec.base_addr = kRodataBase;
+    rodata_sec.size = rodata.size();
+    rodata_sec.kind = VMPilot::SDK::Core::SectionKind::Rodata;
+    rodata_sec.name = ".rodata";
+    rodata_sec.data = std::move(rodata);
+    ctx.sections.push_back(std::move(rodata_sec));
     return ctx;
 }
 
