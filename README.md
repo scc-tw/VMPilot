@@ -31,6 +31,36 @@ square:
     ret
 ```
 
+### Important: Compiler Optimization and Protected Regions
+
+At `-O2`/`-O3`, the compiler may **reorder pure arithmetic** across
+`VMPilot_Begin`/`VMPilot_End` boundaries, moving computation outside
+the protected region. These markers are opaque function calls that act
+as side-effect barriers, but the compiler is free to schedule
+instructions that have no data dependency on the call.
+
+To ensure all intended code stays inside the protected region, use a
+compiler barrier:
+
+```cpp
+template <typename T>
+T square(T x) {
+    VMPilot_Begin(__FUNCTION__);
+    asm volatile("" ::: "memory");  // GCC/Clang: prevent reordering
+    auto result = x * x;
+    asm volatile("" ::: "memory");
+    VMPilot_End(__FUNCTION__);
+    return result;
+}
+```
+
+On MSVC, use `_ReadWriteBarrier()` for the same effect.
+
+Additionally, mark protected functions with
+`__attribute__((noinline))` (GCC/Clang) or `__declspec(noinline)`
+(MSVC) to prevent the compiler from inlining them into callers, which
+would create nested marker pairs.
+
 ## SDK Pipeline
 
 ```
