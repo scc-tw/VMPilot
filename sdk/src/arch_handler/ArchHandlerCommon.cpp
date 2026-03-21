@@ -120,13 +120,18 @@ std::vector<NativeFunctionBase> extractNativeFunctions(
             stub_addrs.insert(sym.address);
     }
 
-    // Scan for pairs of VMPilot_Begin / VMPilot_End calls
+    // Scan for pairs of VMPilot_Begin / VMPilot_End calls.
+    // Uses a stack to handle nested pairs (e.g. when GCC inlines a
+    // protected function into another protected function at -O2/-O3).
     struct Region {
         size_t begin_idx;
         size_t end_idx;
     };
     std::vector<Region> regions;
-    size_t pending_begin = static_cast<size_t>(-1);
+    std::vector<size_t> begin_stack;
+    // TODO: name-aware matching — resolve __FUNCTION__ at scan time and
+    // match End("X") to the nearest Begin("X") on the stack, instead of
+    // relying purely on LIFO order.
 
     for (size_t i = 0; i < instructions.size(); ++i) {
         const auto& insn = instructions[i];
@@ -144,26 +149,36 @@ std::vector<NativeFunctionBase> extractNativeFunctions(
             continue;
 
         if (insn.isCall() && matchesAny(*sym, begin_sigs)) {
-            if (pending_begin != static_cast<size_t>(-1)) {
+            if (!begin_stack.empty()) {
                 spdlog::warn(
-                    "Nested VMPilot_Begin at 0x{:x}, previous begin at 0x{:x}",
-                    insn.address, instructions[pending_begin].address);
+                    "Nested VMPilot_Begin at 0x{:x} (depth {}), "
+                    "outer begin at 0x{:x}",
+                    insn.address, begin_stack.size() + 1,
+                    instructions[begin_stack.back()].address);
             }
-            pending_begin = i;
+            begin_stack.push_back(i);
         } else if (matchesAny(*sym, end_sigs)) {
-            if (pending_begin == static_cast<size_t>(-1)) {
+            if (begin_stack.empty()) {
                 spdlog::warn("VMPilot_End at 0x{:x} without matching Begin",
                              insn.address);
                 continue;
             }
-            regions.push_back({pending_begin, i});
-            pending_begin = static_cast<size_t>(-1);
+            regions.push_back({begin_stack.back(), i});
+            begin_stack.pop_back();
         }
     }
 
-    if (pending_begin != static_cast<size_t>(-1)) {
-        spdlog::warn("Unmatched VMPilot_Begin at 0x{:x}",
-                     instructions[pending_begin].address);
+    // Unmatched Begin entries — error, but salvage each as a best-effort
+    // region extending to the last instruction in the function.
+    for (auto it = begin_stack.rbegin(); it != begin_stack.rend(); ++it) {
+        spdlog::error("Unmatched VMPilot_Begin at 0x{:x}, "
+                      "no corresponding VMPilot_End found",
+                      instructions[*it].address);
+        // Best-effort: pair with the last instruction so we don't
+        // silently lose the region entirely.
+        if (!instructions.empty()) {
+            regions.push_back({*it, instructions.size() - 1});
+        }
     }
 
     // Extract each region as a NativeFunctionBase
