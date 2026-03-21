@@ -74,9 +74,7 @@ add_executable(test_compilation_orchestrator test_compilation_orchestrator.cpp)
 target_link_libraries(test_compilation_orchestrator GTest::gtest_main VMPilot_SDK_Bytecode_Compiler opcode_table)
 
 add_executable(test_compile_pipeline test_compile_pipeline.cpp)
-if (MSVC)
-    target_compile_options(test_compile_pipeline PRIVATE /WX-)
-endif()
+suppress_thirdparty_warnings(test_compile_pipeline)
 target_link_libraries(test_compile_pipeline
     GTest::gtest_main
     VMPilot_SDK_LIB
@@ -100,21 +98,10 @@ target_link_libraries(test_string_extraction GTest::gtest_main VMPilot_SDK_Segme
 add_executable(test_segment_api test_segment_api.cpp)
 target_link_libraries(test_segment_api GTest::gtest_main VMPilot_SDK_Segmentator VMPilot_SDK_RegionRefiner capstone_wrapper opcode_table)
 
+include(${CMAKE_SOURCE_DIR}/cmake/SuppressThirdPartyWarnings.cmake)
+
 add_executable(test_serializer test_serializer.cpp)
-if (MSVC)
-    target_compile_options(test_serializer PRIVATE /WX-)
-else()
-    # Abseil/protobuf use Clang extensions that trigger warnings with -Werror
-    target_compile_options(test_serializer PRIVATE
-        -Wno-nullability-extension
-        -Wno-variadic-macro-arguments-omitted
-        -Wno-gcc-compat
-        -Wno-gnu-anonymous-struct
-        -Wno-nested-anon-types
-        -Wno-sign-compare
-        -Wno-unused-result
-    )
-endif()
+suppress_thirdparty_warnings(test_serializer)
 target_include_directories(test_serializer PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/serializer
 )
@@ -166,9 +153,7 @@ gtest_discover_tests(test_compile_pipeline)
 gtest_discover_tests(test_reference_analyzer)
 
 add_executable(test_integration_pipeline test_integration_pipeline.cpp)
-if (MSVC)
-    target_compile_options(test_integration_pipeline PRIVATE /WX-)
-endif()
+suppress_thirdparty_warnings(test_integration_pipeline)
 target_include_directories(test_integration_pipeline PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/serializer
 )

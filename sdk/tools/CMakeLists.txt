@@ -30,14 +30,12 @@ target_link_libraries(dump_regions
     opcode_table
 )
 
+include(${CMAKE_SOURCE_DIR}/cmake/SuppressThirdPartyWarnings.cmake)
+
 add_executable(dump_compile dump_compile.cpp)
-if (MSVC)
-    target_compile_options(dump_compile PRIVATE /WX-)
-endif()
+suppress_thirdparty_warnings(dump_compile)
 target_link_libraries(dump_compile VMPilot_SDK_LIB opcode_table)
 
 add_executable(verify_roundtrip verify_roundtrip.cpp)
-if (MSVC)
-    target_compile_options(verify_roundtrip PRIVATE /WX-)
-endif()
+suppress_thirdparty_warnings(verify_roundtrip)
 target_link_libraries(verify_roundtrip VMPilot_SDK_LIB opcode_table)

@@ -40,23 +40,9 @@ set(INCLUDE_DIRS
 add_library(${TARGET_NAME} STATIC ${SRC_FILES})
 
 # Generated protobuf code and protobuf headers emit warnings under strict settings.
-# Disable warnings-as-errors for this target so third-party headers compile.
-if (MSVC)
-    target_compile_options(${TARGET_NAME} PRIVATE /WX-)
-else()
-    # Abseil/protobuf headers trigger warnings under -Werror -pedantic.
-    # Suppress for this target since it transitively includes third-party headers.
-    target_compile_options(${TARGET_NAME} PRIVATE
-        -Wno-error
-        -Wno-pedantic
-        -Wno-nullability-extension
-        -Wno-variadic-macro-arguments-omitted
-        -Wno-gcc-compat
-        -Wno-gnu-anonymous-struct
-        -Wno-nested-anon-types
-        -Wno-sign-compare
-    )
-endif()
+# Suppress third-party warnings with per-compiler flags.
+include(${CMAKE_SOURCE_DIR}/cmake/SuppressThirdPartyWarnings.cmake)
+suppress_thirdparty_warnings(${TARGET_NAME})
 
 target_include_directories(${TARGET_NAME} PUBLIC
     ${INCLUDE_DIRS}
