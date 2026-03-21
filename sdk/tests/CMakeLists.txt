@@ -114,6 +114,92 @@ target_link_libraries(test_serializer
     opcode_table
 )
 
+add_executable(test_write_classification test_write_classification.cpp)
+target_link_libraries(test_write_classification GTest::gtest_main capstone_wrapper)
+
+add_executable(test_atomic_traits test_atomic_traits.cpp)
+target_include_directories(test_atomic_traits PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/reference_analyzer/traits
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/core
+)
+target_link_libraries(test_atomic_traits GTest::gtest_main capstone_wrapper)
+
+add_executable(test_phase4e test_phase4e.cpp)
+target_include_directories(test_phase4e PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/reference_analyzer
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/reference_analyzer
+)
+target_link_libraries(test_phase4e GTest::gtest_main)
+
+add_executable(test_pattern_layer test_pattern_layer.cpp)
+target_include_directories(test_pattern_layer PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/reference_analyzer
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/reference_analyzer/traits
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/reference_analyzer/layers
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/reference_analyzer
+)
+target_link_libraries(test_pattern_layer
+    GTest::gtest_main
+    VMPilot_SDK_ReferenceAnalyzer
+    VMPilot_SDK_Segmentator
+    capstone_wrapper
+    opcode_table
+)
+
+add_executable(test_insn_layer test_insn_layer.cpp)
+target_include_directories(test_insn_layer PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/reference_analyzer
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/reference_analyzer/traits
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/reference_analyzer/layers
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/reference_analyzer
+)
+target_link_libraries(test_insn_layer
+    GTest::gtest_main
+    VMPilot_SDK_ReferenceAnalyzer
+    capstone_wrapper
+)
+
+add_executable(test_relocation_layer test_relocation_layer.cpp)
+target_include_directories(test_relocation_layer PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/reference_analyzer/traits
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/reference_analyzer/layers
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/core
+)
+target_link_libraries(test_relocation_layer GTest::gtest_main)
+
+add_executable(test_sym_expr test_sym_expr.cpp)
+target_include_directories(test_sym_expr PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/reference_analyzer
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/reference_analyzer
+)
+target_link_libraries(test_sym_expr
+    GTest::gtest_main
+    VMPilot_SDK_ReferenceAnalyzer
+)
+
+add_executable(test_symbolic_resolver test_symbolic_resolver.cpp)
+target_include_directories(test_symbolic_resolver PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/reference_analyzer
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/reference_analyzer
+)
+target_link_libraries(test_symbolic_resolver
+    GTest::gtest_main
+    VMPilot_SDK_ReferenceAnalyzer
+    VMPilot_SDK_Segmentator
+    capstone_wrapper
+    opcode_table
+)
+
+add_executable(test_memory_model test_memory_model.cpp)
+target_include_directories(test_memory_model PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/reference_analyzer
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/reference_analyzer
+)
+target_link_libraries(test_memory_model
+    GTest::gtest_main
+    VMPilot_SDK_ReferenceAnalyzer
+)
+
 add_executable(test_reference_analyzer test_reference_analyzer.cpp)
 target_include_directories(test_reference_analyzer PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/reference_analyzer
@@ -151,6 +237,15 @@ gtest_discover_tests(test_compiler_backend)
 gtest_discover_tests(test_compilation_orchestrator)
 gtest_discover_tests(test_compile_pipeline)
 gtest_discover_tests(test_reference_analyzer)
+gtest_discover_tests(test_write_classification)
+gtest_discover_tests(test_memory_model)
+gtest_discover_tests(test_sym_expr)
+gtest_discover_tests(test_symbolic_resolver)
+gtest_discover_tests(test_relocation_layer)
+gtest_discover_tests(test_atomic_traits)
+gtest_discover_tests(test_insn_layer)
+gtest_discover_tests(test_pattern_layer)
+gtest_discover_tests(test_phase4e)
 
 add_executable(test_integration_pipeline test_integration_pipeline.cpp)
 suppress_thirdparty_warnings(test_integration_pipeline)

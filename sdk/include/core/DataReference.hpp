@@ -97,6 +97,10 @@ struct DataReference {
 
     /// Jump table metadata (populated when kind == JumpTable)
     std::optional<JumpTableRef> jump_table;
+
+    /// True when target is in a mutable section (.data, .bss).
+    /// Backend must preserve memory ordering and not constant-fold.
+    bool is_mutable_target = false;
 };
 
 }  // namespace VMPilot::SDK::Core

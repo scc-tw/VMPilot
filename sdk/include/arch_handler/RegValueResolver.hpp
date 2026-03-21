@@ -13,6 +13,11 @@
 namespace VMPilot::SDK::Segmentator {
 
 // --- Write classification for backward constant propagation ---
+//
+// These types classify the effect of an instruction on a single register.
+// This is a CLOSED set: every scalar integer instruction falls into one of
+// these categories regardless of ISA.  Growth happens in the per-arch
+// Traits that map native instructions to these six effects.
 
 struct ResolvedConstant {
     uint64_t value;
@@ -27,11 +32,34 @@ struct ArithmeticAdjust {
     int64_t offset;
 };
 
+/// Memory load: register value = memory[base + offset].
+/// When base_reg == 0, offset is an absolute virtual address
+/// (e.g. resolved from a RIP-relative or absolute addressing mode).
+struct MemoryLoad {
+    unsigned base_reg;
+    int64_t offset;
+    uint8_t load_size;     // 1, 2, 4, 8 bytes
+};
+
+/// Opaque value source that cannot be traced further through the
+/// instruction stream.  Carries enough metadata for downstream
+/// symbolic analysis (Phase 3+) to classify the reference.
+struct OpaqueSource {
+    enum class Kind : uint8_t {
+        SystemReg,     // ARM64 MRS (e.g. TPIDR_EL0)
+        SegmentBase,   // x86 FS / GS segment base
+        CallResult,    // Return value of a function call
+    };
+    Kind kind;
+    unsigned id = 0;           // Segment register or system register ID
+    uint64_t call_target = 0;  // For CallResult: address of the callee
+};
+
 struct Unresolvable {};
 
 using WriteClassification =
     std::variant<ResolvedConstant, RegisterForward, ArithmeticAdjust,
-                 Unresolvable>;
+                 MemoryLoad, OpaqueSource, Unresolvable>;
 
 // --- Helpers ---
 
@@ -110,6 +138,17 @@ uint64_t resolveRegValue(unsigned reg, size_t from_idx,
                         return static_cast<uint64_t>(
                             static_cast<int64_t>(base) + aa.offset);
                     return uint64_t{0};
+                },
+                [](MemoryLoad) -> uint64_t {
+                    // Cannot resolve without a memory oracle.
+                    // Future: MemoryModel integration (Phase 2+).
+                    return 0;
+                },
+                [](OpaqueSource) -> uint64_t {
+                    // Opaque sources (system regs, segment bases,
+                    // call results) are not derivable from the
+                    // instruction stream alone.
+                    return 0;
                 },
                 [](Unresolvable) -> uint64_t { return 0; },
             },

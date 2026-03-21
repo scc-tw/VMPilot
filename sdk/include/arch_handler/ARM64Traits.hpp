@@ -41,6 +41,30 @@ struct ARM64ArchTraits {
             return ArithmeticAdjust{insn.operands[1].reg,
                                     -insn.operands[2].imm};
 
+        // --- Memory load patterns ---
+        // LDR / LDUR family (excluding atomic loads: ldar, ldxr, ldaxr).
+        // Detects base-register + displacement loads without index register.
+        if (insn.operands.size() >= 2 &&
+            insn.operands[0].type == Capstone::OpType::REG &&
+            insn.operands[1].type == Capstone::OpType::MEM &&
+            insn.operands[1].mem.base != 0 &&
+            insn.operands[1].mem.index == 0 &&
+            insn.mnemonic.size() >= 3 &&
+            (insn.mnemonic.compare(0, 4, "ldur") == 0 ||
+             insn.mnemonic.compare(0, 3, "ldr") == 0)) {
+            return MemoryLoad{insn.operands[1].mem.base,
+                              insn.operands[1].mem.disp,
+                              insn.operands[1].size};
+        }
+
+        // --- System register read ---
+        // MRS: Move from system register (e.g. mrs x0, tpidr_el0)
+        if (insn.mnemonic == "mrs" &&
+            !insn.operands.empty() &&
+            insn.operands[0].type == Capstone::OpType::REG) {
+            return OpaqueSource{OpaqueSource::Kind::SystemReg, 0, 0};
+        }
+
         return Unresolvable{};
     }
 };

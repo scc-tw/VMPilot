@@ -2,9 +2,9 @@ set(TARGET_NAME VMPilot_SDK_ReferenceAnalyzer)
 
 set(SRC_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/ReferenceAnalyzer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/RelocationAnalyzer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/InsnAnalyzer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/PatternAnalyzer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/MemoryModel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/SymExpr.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/layers/InsnLayer.cpp
 )
 
 set(INCLUDE_DIRS
@@ -19,6 +19,8 @@ set(INCLUDE_DIRS
     ${spdlog_SOURCE_DIR}/include
     # Internal headers (SectionLookup.hpp, etc.)
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/traits
+    ${CMAKE_CURRENT_SOURCE_DIR}/layers
 )
 
 include_directories(${INCLUDE_DIRS})
