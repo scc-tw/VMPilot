@@ -1,4 +1,5 @@
 #include <compile_pipeline.hpp>
+#include <AnalysisContext.hpp>
 #include <ReferenceAnalyzer.hpp>
 #include <Serializer.hpp>
 #include <segmentator.hpp>
@@ -54,19 +55,19 @@ compile_binary(const std::string& binary_path,
             toCapstoneArch(seg_result->context.arch),
             static_cast<Capstone::Mode>(seg_result->context.mode));
 
+        // Build AnalysisContext once, share across all units
+        auto analysis_ctx = ReferenceAnalyzer::AnalysisContext::build(
+            seg_result->context.all_sections,
+            seg_result->text_relocations,
+            seg_result->context.symbols,
+            seg_result->context.rodata_sections,
+            seg_result->context.arch,
+            seg_result->context.mode);
+
         for (auto& unit : units) {
             auto insns = cs.disasm(unit.code, unit.addr);
             auto refs = ReferenceAnalyzer::analyze(
-                insns, unit.addr, unit.size,
-                unit.context ? unit.context->all_sections
-                             : std::vector<Core::SectionInfo>{},
-                seg_result->text_relocations,
-                unit.context ? unit.context->symbols
-                             : Segmentator::NativeSymbolTable{},
-                unit.context
-                    ? unit.context->rodata_sections
-                    : std::vector<Segmentator::ReadOnlySection>{},
-                seg_result->context.arch, seg_result->context.mode);
+                insns, unit.addr, unit.size, analysis_ctx);
             unit.data_references = std::move(refs);
         }
     } catch (...) {

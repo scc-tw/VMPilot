@@ -52,6 +52,39 @@ struct X86ArchTraits {
             return ArithmeticAdjust{insn.operands[0].reg,
                                     -insn.operands[1].imm};
 
+        // --- Memory load patterns ---
+        // Pure data movement from memory to register.
+        // Mnemonic check excludes arithmetic ops (add reg, [mem]) that
+        // share the REG + MEM operand layout but are not loads.
+        if (insn.operands.size() == 2 &&
+            insn.operands[0].type == Capstone::OpType::REG &&
+            insn.operands[1].type == Capstone::OpType::MEM &&
+            (insn.mnemonic == "mov" || insn.mnemonic == "movzx" ||
+             insn.mnemonic == "movsxd")) {
+            const auto& mem = insn.operands[1].mem;
+
+            // Segment override (FS/GS) → opaque TLS base access
+            if (mem.segment != 0)
+                return OpaqueSource{OpaqueSource::Kind::SegmentBase,
+                                    mem.segment, 0};
+
+            // RIP-relative load: concrete address known at analysis time
+            if (mem.isRipRelative()) {
+                uint64_t addr = insn.address + insn.size + mem.disp;
+                return MemoryLoad{0, static_cast<int64_t>(addr),
+                                  insn.operands[1].size};
+            }
+
+            // Base register + displacement (no index)
+            if (mem.base != 0 && mem.index == 0)
+                return MemoryLoad{mem.base, mem.disp,
+                                  insn.operands[1].size};
+
+            // Absolute address (no base, no index)
+            if (mem.base == 0 && mem.index == 0)
+                return MemoryLoad{0, mem.disp, insn.operands[1].size};
+        }
+
         return Unresolvable{};
     }
 };
