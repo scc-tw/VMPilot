@@ -1,2 +1,6 @@
+# Build directories
 build*/
-CMakeCache.txt
+
+# MSVC import libraries and export files
+bin/*.lib
+bin/*.exp
