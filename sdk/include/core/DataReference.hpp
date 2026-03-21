@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#include <small_vector.hpp>
+
 namespace VMPilot::SDK::Core {
 
 enum class DataRefKind : uint8_t {
@@ -67,7 +69,7 @@ struct JumpTableRef {
     uint32_t entry_size = 0;       // 4 or 8 bytes per entry
     uint32_t entry_count = 0;      // 0 = unknown
     bool relative_entries = false;  // true = entries are relative offsets
-    std::vector<uint64_t> targets;  // resolved code target addresses
+    VMPilot::Common::SmallVector<uint64_t, 16> targets;  // resolved code target addresses
 };
 
 struct RelocationEntry {

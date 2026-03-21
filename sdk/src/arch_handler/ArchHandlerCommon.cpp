@@ -3,6 +3,8 @@
 #include <CompilationContext.hpp>
 #include <utilities.hpp>
 
+#include <small_vector.hpp>
+
 #include <algorithm>
 #include <cstdio>
 #include <unordered_set>
@@ -26,18 +28,11 @@ static std::string resolveStringArg(
     const CompilationContext& ctx,
     const AddrToSymbol& lookup,
     const ArchCallbacks& callbacks) {
-    if (ctx.rodata_sections.empty())
-        return {};
-
     auto va = callbacks.extract_string_arg(call_idx, instructions, lookup);
     if (!va)
         return {};
 
-    for (const auto& section : ctx.rodata_sections) {
-        if (section.contains(*va))
-            return section.readCString(*va);
-    }
-    return {};
+    return ctx.readCString(*va);
 }
 
 std::optional<std::string> findEnclosingSymbol(
@@ -128,7 +123,7 @@ std::vector<NativeFunctionBase> extractNativeFunctions(
         size_t end_idx;
     };
     std::vector<Region> regions;
-    std::vector<size_t> begin_stack;
+    VMPilot::Common::SmallVector<size_t, 4> begin_stack;
     // TODO: name-aware matching — resolve __FUNCTION__ at scan time and
     // match End("X") to the nearest Begin("X") on the stack, instead of
     // relying purely on LIFO order.

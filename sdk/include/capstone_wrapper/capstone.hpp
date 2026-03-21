@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include <small_vector.hpp>
+
 namespace Capstone {
 
 enum class Arch : uint8_t {
@@ -74,18 +76,18 @@ class Instruction {
     uint32_t id = 0;
     uint64_t address = 0;
     uint16_t size = 0;
-    std::vector<uint8_t> bytes;
+    VMPilot::Common::SmallVector<uint8_t, 16> bytes;
     std::string mnemonic;
     std::string op_str;
 
     // Architecture-neutral operand details
-    std::vector<Operand> operands;
+    VMPilot::Common::SmallVector<Operand, 4> operands;
 
     // x86 prefix bytes from capstone detail (prefix[0..3])
     uint8_t x86_prefix[4] = {};
 
     // Instruction group membership
-    std::vector<uint8_t> groups;
+    VMPilot::Common::SmallVector<uint8_t, 4> groups;
 
     /// Check if this instruction belongs to the CALL group
     bool isCall() const noexcept;

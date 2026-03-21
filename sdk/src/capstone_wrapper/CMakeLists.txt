@@ -9,6 +9,7 @@ set(SRC_FILES
 set(INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../../include/capstone_wrapper
     ${CMAKE_SOURCE_DIR}/third_party/capstone/include
+    ${CMAKE_SOURCE_DIR}/common/include
 )
 
 add_library(${TARGET_NAME} STATIC ${SRC_FILES})

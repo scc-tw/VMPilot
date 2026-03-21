@@ -17,7 +17,7 @@ bool MemOp::isRipRelative() const noexcept {
 
 // --- Instruction helpers ---
 
-static bool hasGroup(const std::vector<uint8_t>& groups, uint8_t group) {
+static bool hasGroup(const VMPilot::Common::SmallVector<uint8_t, 4>& groups, uint8_t group) {
     return std::find(groups.begin(), groups.end(), group) != groups.end();
 }
 
