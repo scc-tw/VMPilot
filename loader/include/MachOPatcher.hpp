@@ -3,12 +3,10 @@
 #pragma once
 
 #include <FormatPatcher.hpp>
-#include <MachOPatcherTraits.hpp>
+#include <MachOEditor.hpp>
 
 namespace VMPilot::Loader {
-
-using MachOPatcher = FormatPatcher<MachOPatcherTraits>;
-
-}  // namespace VMPilot::Loader
+using MachOPatcher = FormatPatcher<MachOEditor>;
+}
 
 #endif  // __LOADER_MACHO_PATCHER_HPP__

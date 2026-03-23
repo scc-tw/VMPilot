@@ -335,4 +335,43 @@ size_t StubGenerator::min_region_size(
     }
 }
 
+int64_t StubGenerator::max_branch_distance(Common::FileArch arch) noexcept {
+    switch (arch) {
+        case Common::FileArch::X86:   return INT32_MAX;          // ±2GB
+        case Common::FileArch::ARM64: return 128LL * 1024 * 1024; // ±128MB
+        default:                      return 0;
+    }
+}
+
+tl::expected<void, Common::DiagnosticCode>
+StubGenerator::fixup_blob_displacement(Stub& stub, int64_t displacement,
+                                       Common::FileArch arch) noexcept {
+    using DC = Common::DiagnosticCode;
+
+    if (arch == Common::FileArch::ARM64) {
+        // ARM64 ADR: 21-bit signed, byte granularity → ±1MB
+        constexpr int64_t ADR_RANGE = 1 << 20;  // 1048576
+        if (displacement < -ADR_RANGE || displacement >= ADR_RANGE)
+            return tl::unexpected(DC::PatchStubGenerationFailed);
+
+        const auto ud = static_cast<uint32_t>(static_cast<int32_t>(displacement));
+        const uint32_t immlo = (ud & 0x3) << 29;
+        const uint32_t immhi = ((ud >> 2) & 0x7FFFF) << 5;
+        const uint32_t adr = 0x10000000 | immhi | immlo;
+
+        stub.code[stub.blob_fixup_offset + 0] = static_cast<uint8_t>(adr);
+        stub.code[stub.blob_fixup_offset + 1] = static_cast<uint8_t>(adr >> 8);
+        stub.code[stub.blob_fixup_offset + 2] = static_cast<uint8_t>(adr >> 16);
+        stub.code[stub.blob_fixup_offset + 3] = static_cast<uint8_t>(adr >> 24);
+    } else {
+        // x86: disp32 → ±2GB
+        if (displacement < INT32_MIN || displacement > INT32_MAX)
+            return tl::unexpected(DC::PatchStubGenerationFailed);
+
+        const auto d32 = static_cast<int32_t>(displacement);
+        std::memcpy(stub.code.data() + stub.blob_fixup_offset, &d32, 4);
+    }
+    return {};
+}
+
 }  // namespace VMPilot::Loader

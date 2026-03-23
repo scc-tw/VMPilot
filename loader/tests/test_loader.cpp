@@ -393,3 +393,72 @@ TEST(MachOPatcher, PatchProducesValidOutput) {
     // Clean up
     std::remove(output_path.c_str());
 }
+
+TEST(MachOPatcher, RejectsMismatchedRegionName) {
+    std::ifstream check(MACHO_TEST_BINARY);
+    if (!check.good()) GTEST_SKIP();
+
+    Loader::PatchRequest req;
+    req.input_path = MACHO_TEST_BINARY;
+    req.output_path = "/tmp/test_macho_mismatch";
+    req.arch = Common::FileArch::ARM64;
+    req.mode = Common::FileMode::MODE_LITTLE_ENDIAN;
+    req.format = Common::FileFormat::MachO;
+
+    // Region name doesn't match compiled output name
+    req.regions.push_back({"func_A", 0x1000038A8, 8});
+
+    SDK::BytecodeCompiler::CompilationOutput out;
+    out.name = "func_B";  // mismatch!
+    out.addr = 0x1000038A8;
+    Common::Instruction_t insn{};
+    out.bytecodes.push_back(insn);
+    req.compiled_outputs.push_back(std::move(out));
+
+    Common::DiagnosticCollector diag;
+    auto patcher = Loader::create_patcher(Common::FileFormat::MachO);
+    auto result = patcher->patch(req, diag);
+
+    EXPECT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), Common::DiagnosticCode::PatchInputInvalid);
+    std::remove("/tmp/test_macho_mismatch");
+}
+
+TEST(MachOPatcher, RejectsRegionOutsideText) {
+    std::ifstream check(MACHO_TEST_BINARY);
+    if (!check.good()) GTEST_SKIP();
+
+    // Use an address far outside __text
+    auto req = make_macho_request(MACHO_TEST_BINARY, "/tmp/test_macho_oob", 0xDEAD0000, 8);
+
+    Common::DiagnosticCollector diag;
+    auto patcher = Loader::create_patcher(Common::FileFormat::MachO);
+    auto result = patcher->patch(req, diag);
+
+    EXPECT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), Common::DiagnosticCode::PatchInputInvalid);
+    std::remove("/tmp/test_macho_oob");
+}
+
+TEST(MachOPatcher, RejectsEmptyRegions) {
+    Loader::PatchRequest req;
+    req.input_path = MACHO_TEST_BINARY;
+    req.output_path = "/tmp/test_macho_empty";
+    req.arch = Common::FileArch::ARM64;
+    req.mode = Common::FileMode::MODE_LITTLE_ENDIAN;
+    req.format = Common::FileFormat::MachO;
+    // No regions
+
+    SDK::BytecodeCompiler::CompilationOutput out;
+    out.name = "f";
+    Common::Instruction_t insn{};
+    out.bytecodes.push_back(insn);
+    req.compiled_outputs.push_back(std::move(out));
+
+    Common::DiagnosticCollector diag;
+    auto patcher = Loader::create_patcher(Common::FileFormat::MachO);
+    auto result = patcher->patch(req, diag);
+
+    EXPECT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), Common::DiagnosticCode::PatchInputInvalid);
+}

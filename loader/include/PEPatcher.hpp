@@ -3,12 +3,10 @@
 #pragma once
 
 #include <FormatPatcher.hpp>
-#include <PEPatcherTraits.hpp>
+#include <PEEditor.hpp>
 
 namespace VMPilot::Loader {
-
-using PEPatcher = FormatPatcher<PEPatcherTraits>;
-
-}  // namespace VMPilot::Loader
+using PEPatcher = FormatPatcher<PEEditor>;
+}
 
 #endif  // __LOADER_PE_PATCHER_HPP__

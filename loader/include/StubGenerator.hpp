@@ -15,60 +15,49 @@ namespace VMPilot::Loader {
 /// Machine-code stub with fixup metadata.
 struct Stub {
     std::vector<uint8_t> code;
-    /// Offset within code where the dispatcher call rel32/BL needs patching.
+    /// Offset within code where the dispatcher call needs patching (rel32 / BL).
     size_t call_fixup_offset = 0;
-    /// Offset within code where the blob-pointer displacement (LEA disp32 /
-    /// ADR imm21) needs patching after final layout is known.
+    /// Offset within code where the blob-pointer displacement needs patching
+    /// after final payload layout is known (LEA disp32 / ADR imm21).
     size_t blob_fixup_offset = 0;
-    /// Size of the LEA/ADR instruction that contains the blob displacement.
-    /// Used to compute RIP-relative: disp = blob_va - (stub_va + blob_fixup_offset + blob_insn_size)
+    /// Remaining bytes of the instruction at blob_fixup_offset.
+    /// For x86-64 LEA: 4 (disp32).  For ARM64 ADR: 4 (full instruction).
+    /// Used for RIP-relative: disp = target - (fixup_addr + blob_insn_size).
     size_t blob_insn_size = 0;
 };
 
 /// Generates architecture-specific machine-code stubs for binary patching.
-///
-/// Three kinds of stubs:
-///   1. **Region patch**: overwrites the start of a protected region with
-///      a JMP/B to the entry stub (+ NOP padding).
-///   2. **Entry stub**: saves callee-saved regs, loads blob pointer + region
-///      index, calls `_vmpilot_vm_entry`, restores regs, returns.
-///   3. **Exit stub**: (placeholder) — returns control to original call site.
 class StubGenerator {
 public:
-    /// Generate a JMP/B instruction to overwrite the start of a protected
-    /// region.  On x86-64 this is `E9 rel32` (5 bytes); on ARM64 this is
-    /// `B imm26` (4 bytes).  Remaining bytes are filled with NOPs.
-    ///
-    /// @param arch   Target architecture.
-    /// @param mode   Sub-mode (32/64).
-    /// @param region_size  Size of the original protected region.
-    /// @param from_addr    VA where the JMP will be placed.
-    /// @param to_addr      VA of the entry stub to jump to.
+    /// Generate a JMP/B to overwrite the start of a protected region.
+    /// x86: E9 rel32 (5 bytes) + NOP fill.  ARM64: B imm26 (4 bytes) + NOP fill.
     [[nodiscard]] static tl::expected<std::vector<uint8_t>, Common::DiagnosticCode>
     generate_region_patch(Common::FileArch arch, Common::FileMode mode,
                           uint64_t region_size,
                           uint64_t from_addr, uint64_t to_addr) noexcept;
 
-    /// Generate an entry stub that:
-    ///   - Saves callee-saved registers
-    ///   - Loads blob data pointer (RIP-relative on x86-64, ADR on ARM64)
-    ///   - Loads region index
-    ///   - Calls _vmpilot_vm_entry (placeholder address — needs relocation)
-    ///   - Restores registers and returns
-    ///
-    /// @param arch        Target architecture.
-    /// @param mode        Sub-mode.
-    /// @param region_idx  Region index (passed as argument to dispatcher).
-    /// @param blob_rel_offset  RIP-relative offset to blob data (from stub).
-    /// @return Stub with code and fixup offset for the call target.
+    /// Generate an entry stub (save regs → load blob ptr → call dispatcher → restore → ret).
+    /// The blob_rel_offset is a placeholder; call fixup_blob_displacement() after layout.
     [[nodiscard]] static tl::expected<Stub, Common::DiagnosticCode>
     generate_entry_stub(Common::FileArch arch, Common::FileMode mode,
                         uint32_t region_idx,
-                        int64_t blob_rel_offset) noexcept;
+                        int64_t blob_rel_offset = 0) noexcept;
+
+    /// Patch the blob-pointer displacement in a stub after final layout is known.
+    /// Encapsulates arch-specific encoding (x86 disp32, ARM64 ADR imm21).
+    /// Returns error if displacement exceeds the architecture's range.
+    [[nodiscard]] static tl::expected<void, Common::DiagnosticCode>
+    fixup_blob_displacement(Stub& stub, int64_t displacement,
+                            Common::FileArch arch) noexcept;
 
     /// Minimum region size required for a JMP/B patch.
     [[nodiscard]] static size_t
     min_region_size(Common::FileArch arch, Common::FileMode mode) noexcept;
+
+    /// Maximum branch distance for region patch → entry stub.
+    /// x86: ±2GB (rel32).  ARM64: ±128MB (B imm26).
+    [[nodiscard]] static int64_t
+    max_branch_distance(Common::FileArch arch) noexcept;
 };
 
 }  // namespace VMPilot::Loader

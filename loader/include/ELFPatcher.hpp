@@ -2,14 +2,11 @@
 #define __LOADER_ELF_PATCHER_HPP__
 #pragma once
 
-#include <ELFPatcherTraits.hpp>
+#include <ELFEditor.hpp>
 #include <FormatPatcher.hpp>
 
 namespace VMPilot::Loader {
-
-/// ELF binary patcher — FormatPatcher instantiated with ELF traits.
-using ELFPatcher = FormatPatcher<ELFPatcherTraits>;
-
-}  // namespace VMPilot::Loader
+using ELFPatcher = FormatPatcher<ELFEditor>;
+}
 
 #endif  // __LOADER_ELF_PATCHER_HPP__

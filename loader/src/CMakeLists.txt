@@ -19,9 +19,10 @@ set(SRC_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/BinaryPatcher.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/BlobSerializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/StubGenerator.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ELFPatcher.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/PEPatcher.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/MachOPatcher.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/PayloadBuilder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ELFEditor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/MachOEditor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/PEEditor.cpp
 )
 
 include_directories(${INCLUDE_DIRS})

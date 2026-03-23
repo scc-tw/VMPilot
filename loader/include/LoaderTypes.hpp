@@ -59,6 +59,22 @@ struct BlobEntry {
 };
 static_assert(sizeof(BlobEntry) == 16, "BlobEntry must be 16 bytes");
 
+// ---------------------------------------------------------------------------
+// Binary editor result types
+// ---------------------------------------------------------------------------
+
+/// Info about the .text section in the target binary.
+struct TextSectionInfo {
+    uint64_t base_addr = 0;
+    uint64_t size = 0;
+};
+
+/// Info about a newly added loadable segment/section.
+struct NewSegmentInfo {
+    uint64_t va = 0;       // Virtual address of the new segment
+    size_t size = 0;        // Size of injected data
+};
+
 }  // namespace VMPilot::Loader
 
 #endif  // __LOADER_TYPES_HPP__
