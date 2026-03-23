@@ -2,19 +2,12 @@
 #define __LOADER_PE_PATCHER_HPP__
 #pragma once
 
-#include <BinaryPatcher.hpp>
+#include <FormatPatcher.hpp>
+#include <PEPatcherTraits.hpp>
 
 namespace VMPilot::Loader {
 
-/// PE-specific binary patcher (stub — not yet implemented).
-class PEPatcher : public BinaryPatcher {
-public:
-    [[nodiscard]] tl::expected<PatchResult, Common::DiagnosticCode>
-    patch(const PatchRequest& request,
-          Common::DiagnosticCollector& diag) noexcept override;
-
-    [[nodiscard]] std::string name() const noexcept override { return "PE"; }
-};
+using PEPatcher = FormatPatcher<PEPatcherTraits>;
 
 }  // namespace VMPilot::Loader
 
