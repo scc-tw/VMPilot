@@ -19,36 +19,61 @@ const char* to_string(DiagnosticLevel level) noexcept {
     return "???";
 }
 
+const char* module_name(uint16_t module_id) noexcept {
+    switch (module_id) {
+        case 0x0000: return "common";
+        case 0x0001: return "segmentator";
+        case 0x0002: return "refiner";
+        case 0x0003: return "serializer";
+        case 0x0004: return "compiler";
+        case 0x0005: return "reference_analyzer";
+        case 0x0006: return "runtime";
+        case 0x0007: return "loader";
+    }
+    return "unknown_module";
+}
+
 const char* to_string(DiagnosticCode code) noexcept {
     switch (code) {
         case DiagnosticCode::None:                    return "none";
-        // Segmentator
-        case DiagnosticCode::FileNotFound:            return "file_not_found";
-        case DiagnosticCode::UnsupportedFormat:       return "unsupported_format";
-        case DiagnosticCode::UnsupportedArch:         return "unsupported_arch";
-        case DiagnosticCode::TextSectionMissing:      return "text_section_missing";
-        case DiagnosticCode::DisassemblyFailed:       return "disassembly_failed";
-        case DiagnosticCode::NoRegionsFound:          return "no_regions_found";
-        // RegionRefiner
-        case DiagnosticCode::ContainedRegionDropped:  return "contained_region_dropped";
-        case DiagnosticCode::OverlappingRegionMerged: return "overlapping_region_merged";
-        case DiagnosticCode::InvalidMergedRegion:     return "invalid_merged_region";
-        // Serializer
-        case DiagnosticCode::OrphanSiteSkipped:       return "orphan_site_skipped";
-        case DiagnosticCode::SerializationFailed:     return "serialization_failed";
-        case DiagnosticCode::LoadFailed:              return "load_failed";
-        case DiagnosticCode::MalformedManifestEntry:  return "malformed_manifest_entry";
-        case DiagnosticCode::PartialDumpCleanup:      return "partial_dump_cleanup";
-        case DiagnosticCode::NoUnitsToDump:           return "no_units_to_dump";
-        case DiagnosticCode::NullContext:             return "null_context";
-        // Compiler
-        case DiagnosticCode::InvalidInput:            return "invalid_input";
-        case DiagnosticCode::CompilerUnsupportedArch: return "compiler_unsupported_arch";
-        case DiagnosticCode::UnsupportedInstruction:  return "unsupported_instruction";
-        case DiagnosticCode::CompilerInternalError:   return "compiler_internal_error";
-        case DiagnosticCode::NotImplemented:          return "not_implemented";
-        case DiagnosticCode::BackendCreationFailed:   return "backend_creation_failed";
-        case DiagnosticCode::NullBackend:             return "null_backend";
+        // 0x0001: Segmentator
+        case DiagnosticCode::FileNotFound:            return "SEG:file_not_found";
+        case DiagnosticCode::UnsupportedFormat:       return "SEG:unsupported_format";
+        case DiagnosticCode::UnsupportedArch:         return "SEG:unsupported_arch";
+        case DiagnosticCode::TextSectionMissing:      return "SEG:text_section_missing";
+        case DiagnosticCode::DisassemblyFailed:       return "SEG:disassembly_failed";
+        case DiagnosticCode::NoRegionsFound:          return "SEG:no_regions_found";
+        // 0x0002: RegionRefiner
+        case DiagnosticCode::ContainedRegionDropped:  return "REF:contained_region_dropped";
+        case DiagnosticCode::OverlappingRegionMerged: return "REF:overlapping_region_merged";
+        case DiagnosticCode::InvalidMergedRegion:     return "REF:invalid_merged_region";
+        // 0x0003: Serializer
+        case DiagnosticCode::OrphanSiteSkipped:       return "SER:orphan_site_skipped";
+        case DiagnosticCode::SerializationFailed:     return "SER:serialization_failed";
+        case DiagnosticCode::LoadFailed:              return "SER:load_failed";
+        case DiagnosticCode::MalformedManifestEntry:  return "SER:malformed_manifest_entry";
+        case DiagnosticCode::PartialDumpCleanup:      return "SER:partial_dump_cleanup";
+        case DiagnosticCode::NoUnitsToDump:           return "SER:no_units_to_dump";
+        case DiagnosticCode::NullContext:             return "SER:null_context";
+        // 0x0004: Compiler
+        case DiagnosticCode::InvalidInput:            return "CMP:invalid_input";
+        case DiagnosticCode::CompilerUnsupportedArch: return "CMP:unsupported_arch";
+        case DiagnosticCode::UnsupportedInstruction:  return "CMP:unsupported_instruction";
+        case DiagnosticCode::CompilerInternalError:   return "CMP:internal_error";
+        case DiagnosticCode::NotImplemented:          return "CMP:not_implemented";
+        case DiagnosticCode::BackendCreationFailed:   return "CMP:backend_creation_failed";
+        case DiagnosticCode::NullBackend:             return "CMP:null_backend";
+        // 0x0007: Loader
+        case DiagnosticCode::PatchInputInvalid:          return "LDR:input_invalid";
+        case DiagnosticCode::PatchOutputFailed:          return "LDR:output_failed";
+        case DiagnosticCode::PatchRegionTooSmall:        return "LDR:region_too_small";
+        case DiagnosticCode::PatchFormatUnsupported:     return "LDR:format_unsupported";
+        case DiagnosticCode::PatchArchUnsupported:       return "LDR:arch_unsupported";
+        case DiagnosticCode::PatchBlobSerializationFailed: return "LDR:blob_serialization_failed";
+        case DiagnosticCode::PatchBinaryReadFailed:      return "LDR:binary_read_failed";
+        case DiagnosticCode::PatchBinaryWriteFailed:     return "LDR:binary_write_failed";
+        case DiagnosticCode::PatchStubGenerationFailed:  return "LDR:stub_generation_failed";
+        case DiagnosticCode::PatchSegmentCreationFailed: return "LDR:segment_creation_failed";
     }
     return "unknown";
 }

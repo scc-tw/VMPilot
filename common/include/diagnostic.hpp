@@ -12,46 +12,84 @@ enum class DiagnosticLevel : uint8_t {
     Error,      // prevents correct output
 };
 
-/// Unified diagnostic code across all SDK components.
-/// Ranges:
-///   0          = None
-///   1000-1999  = Segmentator + RegionRefiner
-///   2000-2999  = Serializer
-///   3000-3999  = Compiler
-enum class DiagnosticCode : uint16_t {
-    None = 0,
+/// Unified diagnostic code across all components.
+///
+/// 32-bit layout: 0xMMMM'CCCC
+///   upper 16 bits = module ID
+///   lower 16 bits = error code within module
+///
+/// Module IDs:
+///   0x0000 = None / Common
+///   0x0001 = Segmentator
+///   0x0002 = RegionRefiner
+///   0x0003 = Serializer
+///   0x0004 = Compiler (SimpleBackend, future LLVM Backend)
+///   0x0005 = ReferenceAnalyzer (reserved)
+///   0x0006 = Runtime VM
+///   0x0007 = Loader
+enum class DiagnosticCode : uint32_t {
+    None = 0x0000'0000,
 
-    // --- Segmentator: 1000-1499 ---
-    FileNotFound = 1001,
-    UnsupportedFormat = 1002,
-    UnsupportedArch = 1003,
-    TextSectionMissing = 1004,
-    DisassemblyFailed = 1005,
-    NoRegionsFound = 1006,
+    // --- 0x0001: Segmentator ---
+    FileNotFound           = 0x0001'0001,
+    UnsupportedFormat      = 0x0001'0002,
+    UnsupportedArch        = 0x0001'0003,
+    TextSectionMissing     = 0x0001'0004,
+    DisassemblyFailed      = 0x0001'0005,
+    NoRegionsFound         = 0x0001'0006,
 
-    // --- RegionRefiner: 1500-1999 ---
-    ContainedRegionDropped = 1501,
-    OverlappingRegionMerged = 1502,
-    InvalidMergedRegion = 1503,
+    // --- 0x0002: RegionRefiner ---
+    ContainedRegionDropped = 0x0002'0001,
+    OverlappingRegionMerged= 0x0002'0002,
+    InvalidMergedRegion    = 0x0002'0003,
 
-    // --- Serializer: 2000-2999 ---
-    OrphanSiteSkipped = 2001,
-    SerializationFailed = 2002,
-    LoadFailed = 2003,
-    MalformedManifestEntry = 2004,
-    PartialDumpCleanup = 2005,
-    NoUnitsToDump = 2006,
-    NullContext = 2007,
+    // --- 0x0003: Serializer ---
+    OrphanSiteSkipped      = 0x0003'0001,
+    SerializationFailed    = 0x0003'0002,
+    LoadFailed             = 0x0003'0003,
+    MalformedManifestEntry = 0x0003'0004,
+    PartialDumpCleanup     = 0x0003'0005,
+    NoUnitsToDump          = 0x0003'0006,
+    NullContext            = 0x0003'0007,
 
-    // --- Compiler: 3000-3999 ---
-    InvalidInput = 3001,
-    CompilerUnsupportedArch = 3002,
-    UnsupportedInstruction = 3003,
-    CompilerInternalError = 3004,
-    NotImplemented = 3005,
-    BackendCreationFailed = 3006,
-    NullBackend = 3007,
+    // --- 0x0004: Compiler ---
+    InvalidInput           = 0x0004'0001,
+    CompilerUnsupportedArch= 0x0004'0002,
+    UnsupportedInstruction = 0x0004'0003,
+    CompilerInternalError  = 0x0004'0004,
+    NotImplemented         = 0x0004'0005,
+    BackendCreationFailed  = 0x0004'0006,
+    NullBackend            = 0x0004'0007,
+
+    // --- 0x0005: ReferenceAnalyzer (reserved) ---
+
+    // --- 0x0006: Runtime VM (reserved — defined by runtime team) ---
+
+    // --- 0x0007: Loader ---
+    PatchInputInvalid          = 0x0007'0001,
+    PatchOutputFailed          = 0x0007'0002,
+    PatchRegionTooSmall        = 0x0007'0003,
+    PatchFormatUnsupported     = 0x0007'0004,
+    PatchArchUnsupported       = 0x0007'0005,
+    PatchBlobSerializationFailed = 0x0007'0006,
+    PatchBinaryReadFailed      = 0x0007'0007,
+    PatchBinaryWriteFailed     = 0x0007'0008,
+    PatchStubGenerationFailed  = 0x0007'0009,
+    PatchSegmentCreationFailed = 0x0007'000A,
 };
+
+/// Extract the module ID (upper 16 bits) from a DiagnosticCode.
+inline uint16_t module_of(DiagnosticCode code) noexcept {
+    return static_cast<uint16_t>(static_cast<uint32_t>(code) >> 16);
+}
+
+/// Extract the error code (lower 16 bits) from a DiagnosticCode.
+inline uint16_t code_of(DiagnosticCode code) noexcept {
+    return static_cast<uint16_t>(static_cast<uint32_t>(code) & 0xFFFF);
+}
+
+/// Human-readable module name from a module ID.
+const char* module_name(uint16_t module_id) noexcept;
 
 /// Human-readable name for a DiagnosticCode.
 const char* to_string(DiagnosticCode code) noexcept;
@@ -62,7 +100,7 @@ const char* to_string(DiagnosticLevel level) noexcept;
 struct Diagnostic {
     DiagnosticLevel level = DiagnosticLevel::Note;
     DiagnosticCode code = DiagnosticCode::None;
-    std::string source;       // "segmentator", "refiner", "serializer", "compiler"
+    std::string source;       // "segmentator", "refiner", "serializer", "compiler", "runtime", "loader"
     std::string message;
     std::string unit_name;    // optional: related unit
     uint64_t addr = 0;        // optional: related address
