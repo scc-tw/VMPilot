@@ -63,7 +63,26 @@ enum class DiagnosticCode : uint32_t {
 
     // --- 0x0005: ReferenceAnalyzer (reserved) ---
 
-    // --- 0x0006: Runtime VM (reserved — defined by runtime team) ---
+    // --- 0x0006: Runtime VM ---
+    BlobHeaderInvalid          = 0x0006'0001,
+    BlobMagicMismatch          = 0x0006'0002,
+    BlobVersionMismatch        = 0x0006'0003,
+    BlobTruncated              = 0x0006'0004,
+    BBMetadataDecryptFailed    = 0x0006'0005,
+    BBMacVerificationFailed    = 0x0006'0006,
+    InstructionDecryptFailed   = 0x0006'0007,
+    OramAddressUnaligned       = 0x0006'0008,
+    OramAddressOutOfBounds     = 0x0006'0009,
+    NativeCallBridgeFailed     = 0x0006'000A,
+    StackOverflow              = 0x0006'000B,
+    StackUnderflow             = 0x0006'000C,
+    InvalidBBTransition        = 0x0006'000D,
+    AntiDebugTriggered         = 0x0006'000E,
+    IntegrityCheckFailed       = 0x0006'000F,
+    HaltReached                = 0x0006'0010,
+    EpochResyncFailed          = 0x0006'0011,
+    ShadowStackOverflow        = 0x0006'0012,
+    InvalidOpcodeAlias         = 0x0006'0013,
 
     // --- 0x0007: Loader ---
     PatchInputInvalid          = 0x0007'0001,

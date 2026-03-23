@@ -63,6 +63,26 @@ const char* to_string(DiagnosticCode code) noexcept {
         case DiagnosticCode::NotImplemented:          return "CMP:not_implemented";
         case DiagnosticCode::BackendCreationFailed:   return "CMP:backend_creation_failed";
         case DiagnosticCode::NullBackend:             return "CMP:null_backend";
+        // 0x0006: Runtime VM
+        case DiagnosticCode::BlobHeaderInvalid:        return "RT:blob_header_invalid";
+        case DiagnosticCode::BlobMagicMismatch:        return "RT:blob_magic_mismatch";
+        case DiagnosticCode::BlobVersionMismatch:      return "RT:blob_version_mismatch";
+        case DiagnosticCode::BlobTruncated:            return "RT:blob_truncated";
+        case DiagnosticCode::BBMetadataDecryptFailed:  return "RT:bb_metadata_decrypt_failed";
+        case DiagnosticCode::BBMacVerificationFailed:  return "RT:bb_mac_verification_failed";
+        case DiagnosticCode::InstructionDecryptFailed: return "RT:instruction_decrypt_failed";
+        case DiagnosticCode::OramAddressUnaligned:     return "RT:oram_address_unaligned";
+        case DiagnosticCode::OramAddressOutOfBounds:   return "RT:oram_address_out_of_bounds";
+        case DiagnosticCode::NativeCallBridgeFailed:   return "RT:native_call_bridge_failed";
+        case DiagnosticCode::StackOverflow:            return "RT:stack_overflow";
+        case DiagnosticCode::StackUnderflow:           return "RT:stack_underflow";
+        case DiagnosticCode::InvalidBBTransition:      return "RT:invalid_bb_transition";
+        case DiagnosticCode::AntiDebugTriggered:       return "RT:anti_debug_triggered";
+        case DiagnosticCode::IntegrityCheckFailed:     return "RT:integrity_check_failed";
+        case DiagnosticCode::HaltReached:              return "RT:halt_reached";
+        case DiagnosticCode::EpochResyncFailed:        return "RT:epoch_resync_failed";
+        case DiagnosticCode::ShadowStackOverflow:      return "RT:shadow_stack_overflow";
+        case DiagnosticCode::InvalidOpcodeAlias:       return "RT:invalid_opcode_alias";
         // 0x0007: Loader
         case DiagnosticCode::PatchInputInvalid:          return "LDR:input_invalid";
         case DiagnosticCode::PatchOutputFailed:          return "LDR:output_failed";

@@ -4,6 +4,7 @@ find_package(Threads REQUIRED)
 
 set (INCLUDE_DIRS ${INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/vm
     ${CRYPTO_INCLUDE_DIR}
     ${CMAKE_SOURCE_DIR}/third_party/expected/include
 )
@@ -21,6 +22,7 @@ set (SRC_FILES ${SRC_FILES}
     ${CMAKE_CURRENT_SOURCE_DIR}/src/macho_parser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/thread_pool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/diagnostic_collector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/vm/vm_crypto.cpp
 )
 
 # Add the library dependencies dir BLAKE3
