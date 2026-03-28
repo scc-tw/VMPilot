@@ -86,14 +86,21 @@ struct VMContext {
     const uint8_t* bb_macs;
     uint8_t integrity_key[32];
 
-    // D2: register encoding tables (per-BB, liveness-aware)
-    // Pointers into blob's table area -- NOT owned by VMContext
-    const uint8_t (*reg_encode)[VM_BYTE_LANES][256];
-    const uint8_t (*reg_decode)[VM_BYTE_LANES][256];
+    // D2: register encoding tables (per-BB, liveness-aware).
+    // Derived at BB entry from epoch_seed via shared generate_bijection().
+    // Owned by VMContext — rebuilt on every BB transition.
+    uint8_t reg_encode[VM_REG_COUNT][VM_BYTE_LANES][256];
+    uint8_t reg_decode[VM_REG_COUNT][VM_BYTE_LANES][256];
 
-    // D2: memory domain conversion tables (per-BB)
-    const uint8_t (*store_tables)[VM_BYTE_LANES][256];
-    const uint8_t (*load_tables)[VM_BYTE_LANES][256];
+    // D2: memory domain conversion tables (per-BB, derived from
+    // reg_encode/decode + global mem_encode/decode).
+    uint8_t store_tables[VM_REG_COUNT][VM_BYTE_LANES][256];
+    uint8_t load_tables[VM_REG_COUNT][VM_BYTE_LANES][256];
+
+    // D2: global memory encoding (fixed for entire execution, derived
+    // once from stored_seed at init).
+    uint8_t mem_encode[VM_BYTE_LANES][256];
+    uint8_t mem_decode[VM_BYTE_LANES][256];
 
     // D4: opcode permutation (per-epoch)
     uint8_t opcode_perm[256];
