@@ -3,9 +3,6 @@
 #define __RUNTIME_ENCODING_HPP__
 
 #include <vm/vm_context.hpp>
-#include <diagnostic.hpp>
-
-#include <tl/expected.hpp>
 
 #include <cstdint>
 
@@ -16,11 +13,11 @@ namespace VMPilot::Runtime {
 /// Each of the 8 bytes in the value is independently substituted
 /// using the corresponding lane's 256-byte LUT.
 ///
-/// @param lut   pointer to VM_BYTE_LANES x 256 table
+/// @param lut   one register's worth of 8 lane tables [8][256]
 /// @param val   64-bit value to transform
 /// @return      transformed 64-bit value
 [[nodiscard]] uint64_t apply_byte_lane_lut(
-    const uint8_t (*lut)[Common::VM::VM_BYTE_LANES][256],
+    const uint8_t lut[][256],
     uint64_t val) noexcept;
 
 /// Encode a plaintext register value into the register domain (D2).
@@ -47,36 +44,37 @@ namespace VMPilot::Runtime {
 
 /// Apply store-domain encoding (register domain -> memory domain).
 ///
-/// @param ctx  VMContext with current store_tables
-/// @param val  register-domain 64-bit value
-/// @return     memory-domain 64-bit value
+/// @param ctx              VMContext with current store_tables
+/// @param reg              register index (0-15)
+/// @param encoded_reg_val  register-domain 64-bit value
+/// @return                 memory-domain 64-bit value
 [[nodiscard]] uint64_t encode_for_store(
     const Common::VM::VMContext& ctx,
-    uint64_t val) noexcept;
+    uint8_t reg,
+    uint64_t encoded_reg_val) noexcept;
 
 /// Apply load-domain decoding (memory domain -> register domain).
 ///
-/// @param ctx  VMContext with current load_tables
-/// @param val  memory-domain 64-bit value
-/// @return     register-domain 64-bit value
+/// @param ctx              VMContext with current load_tables
+/// @param reg              register index (0-15)
+/// @param encoded_mem_val  memory-domain 64-bit value
+/// @return                 register-domain 64-bit value
 [[nodiscard]] uint64_t decode_for_load(
     const Common::VM::VMContext& ctx,
-    uint64_t val) noexcept;
+    uint8_t reg,
+    uint64_t encoded_mem_val) noexcept;
 
-/// Perform BB transition: re-encode live registers for new BB tables.
+/// Apply RE tables to live registers at epoch change.
 ///
-/// @param ctx             VMContext (registers updated in place)
-/// @param old_decode      decode table from previous BB
-/// @param new_encode      encode table for new BB
-/// @param live_bitmap     16-bit bitmap of live registers
-/// @param transition      transition coefficients
-/// @return                success or DiagnosticCode
-[[nodiscard]] tl::expected<void, Common::DiagnosticCode>
-transition_registers(Common::VM::VMContext& ctx,
-                     const uint8_t (*old_decode)[Common::VM::VM_BYTE_LANES][256],
-                     const uint8_t (*new_encode)[Common::VM::VM_BYTE_LANES][256],
-                     uint16_t live_bitmap,
-                     const Common::VM::TransitionData& transition) noexcept;
+/// For each live register r (bit set in live_bitmap):
+///     ctx.encoded_regs[r] = apply_byte_lane_lut(re_tables[r], ctx.encoded_regs[r])
+///
+/// @param ctx          VMContext (registers updated in place)
+/// @param re_tables    re-encoding tables [16][8][256]
+/// @param live_bitmap  16-bit bitmap of live registers
+void apply_re_tables(Common::VM::VMContext& ctx,
+                     const uint8_t re_tables[16][8][256],
+                     uint16_t live_bitmap) noexcept;
 
 }  // namespace VMPilot::Runtime
 

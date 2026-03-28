@@ -54,6 +54,7 @@ target_include_directories(VMPilot_Runtime
 
 target_link_libraries(VMPilot_Runtime
     PUBLIC  nlohmann_json::nlohmann_json
+            opcode_table
     PRIVATE Threads::Threads
 )
 
@@ -68,6 +69,55 @@ if(ENABLE_TESTS)
         PRIVATE VMPilot_Runtime
                 GTest::gtest_main
     )
+
+    add_executable(test_blob_loader
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_blob_loader.cpp
+    )
+    target_include_directories(test_blob_loader
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(test_blob_loader
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+
+    add_executable(test_oram
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_oram.cpp
+    )
+    target_include_directories(test_oram
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(test_oram
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+
+    add_executable(test_encoding
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_encoding.cpp
+    )
+    target_include_directories(test_encoding
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(test_encoding
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+
+    add_executable(test_decoder
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_decoder.cpp
+    )
+    target_include_directories(test_decoder
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(test_decoder
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+
     include(GoogleTest)
     gtest_discover_tests(runtime_smoke_test)
+    gtest_discover_tests(test_blob_loader)
+    gtest_discover_tests(test_oram)
+    gtest_discover_tests(test_encoding)
+    gtest_discover_tests(test_decoder)
 endif()
