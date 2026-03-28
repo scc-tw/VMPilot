@@ -86,22 +86,23 @@ fetch_decrypt_decode(VMContext& ctx) noexcept {
 
     // ── 3. DECODE: opcode resolution ────────────────────────────────────
 
-    // GSS alias: low byte of opcode is the alias index
-    uint8_t alias = static_cast<uint8_t>(insn.opcode & 0xFF);
-
-    // Semantic index from alias LUT
-    uint8_t semantic_idx = ctx.alias_lut[alias];
-
-    // PRP Layer 2: apply inverse permutation
-    uint8_t final_opcode_raw = ctx.opcode_perm_inv[semantic_idx];
+    // Two-layer PRP (spec §4.2): Layer 2 PRP was applied AFTER alias selection
+    // at compile time, so runtime must undo PRP FIRST to recover the alias,
+    // then resolve the alias to the semantic opcode via the GSS table.
+    // Reversing this order would mix PRP-permuted indices into the alias LUT,
+    // breaking the Shannon perfect secrecy property (§11.6): each alias
+    // must appear with equal probability 1/256 to achieve I(Real_Op; Cipher_Op) = 0.
+    uint8_t encrypted_alias = static_cast<uint8_t>(insn.opcode & 0xFF);
+    uint8_t alias = ctx.opcode_perm_inv[encrypted_alias];  // PRP inverse FIRST
+    uint8_t semantic_op = ctx.alias_lut[alias];             // alias_lut SECOND
 
     // Validate opcode range
-    if (final_opcode_raw >= VM_OPCODE_COUNT)
+    if (semantic_op >= VM_OPCODE_COUNT)
         return tl::make_unexpected(DiagnosticCode::InvalidOpcodeAlias);
 
     // ── 4. Build DecodedInsn ────────────────────────────────────────────
     DecodedInsn decoded{};
-    decoded.opcode          = static_cast<VmOpcode>(final_opcode_raw);
+    decoded.opcode          = static_cast<VmOpcode>(semantic_op);
     decoded.operand_a_type  = insn.operand_a_type();
     decoded.operand_b_type  = insn.operand_b_type();
     decoded.condition       = insn.condition();
@@ -133,9 +134,10 @@ void advance_enc_state(VMContext& ctx,
 tl::expected<void, DiagnosticCode>
 verify_bb_mac(const VMContext& ctx) noexcept {
 
-    // Find the BB index for current_bb_id
-    int bb_idx = find_bb_index(ctx, ctx.current_bb_id);
-    if (bb_idx < 0)
+    // Use cached current_bb_index instead of O(n) linear search.
+    // The index is maintained by enter_basic_block() and load_blob().
+    uint32_t bb_idx = ctx.current_bb_index;
+    if (bb_idx >= ctx.bb_count)
         return tl::make_unexpected(DiagnosticCode::InvalidBBTransition);
 
     const BBMetadata& bb = ctx.bb_metadata[bb_idx];
@@ -252,6 +254,7 @@ enter_basic_block(VMContext& ctx, uint32_t target_bb_id) noexcept {
 
     // ── 5. Update current BB tracking ───────────────────────────────────
     ctx.current_bb_id = target.bb_id;
+    ctx.current_bb_index = static_cast<uint32_t>(bb_idx);
     ctx.current_epoch = target.epoch;
 
     return {};

@@ -68,6 +68,8 @@ struct VMContext {
     uint64_t vm_ip;
     uint64_t vm_sp;
     uint32_t current_bb_id;
+    uint32_t current_bb_index;  ///< index into bb_metadata[] (not bb_id);
+                                ///< avoids O(n) linear search on every MAC check
     uint32_t current_epoch;
     uint32_t insn_index_in_bb;  ///< for enc_state chain (j within BB)
 
@@ -123,6 +125,16 @@ struct VMContext {
     // BB metadata
     const BBMetadata* bb_metadata;
     uint32_t bb_count;
+
+    /// Comparison flags (CMP/TEST results, read by JCC).
+    /// Stored as plaintext — 1-bit predicates gain nothing from MCSP encoding.
+    /// The uniform pipeline (D3) ensures JCC executes identically regardless
+    /// of flag value (branchless CMOV), so the flag itself is not an
+    /// information leak beyond what the branch outcome reveals.
+    ///
+    /// Layout: bit 0 = ZF (zero), bit 1 = SF (sign),
+    ///         bit 2 = CF (carry), bit 3 = OF (overflow)
+    uint8_t vm_flags;
 
     // Flags set by handlers
     bool halted;

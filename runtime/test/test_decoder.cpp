@@ -12,7 +12,6 @@
 
 #include <cstring>
 #include <vector>
-#include <numeric>
 
 using namespace VMPilot::Common;
 using namespace VMPilot::Common::VM;
@@ -37,32 +36,20 @@ static void fill_epoch_seed(uint8_t seed[32], uint8_t base) {
         seed[i] = static_cast<uint8_t>(base + i);
 }
 
-/// Load a blob and set opcode_perm_inv and alias_lut to identity so that
-/// the decoder passes the raw opcode through without PRP transformation.
+/// Load a blob with proper PRP tables.
 ///
-/// The test blob builder writes raw semantic opcode values into VmInsn.
-/// The decoder applies: final = opcode_perm_inv[alias_lut[insn.opcode & 0xFF]].
-/// By setting both to identity, we get: final = insn.opcode & 0xFF = semantic.
+/// The test blob builder now correctly simulates the compiler's two-layer PRP:
+///   compile: semantic_op -> alias -> opcode_perm[alias] -> encrypted_alias
+///   runtime: encrypted_alias -> opcode_perm_inv -> alias -> alias_lut -> semantic_op
 ///
-/// This isolates encryption/decryption testing from PRP testing.
-static LoadedVM load_with_identity_prp(const uint8_t seed[32],
-                                       const std::vector<uint8_t>& blob) {
+/// The loader derives the real opcode_perm/opcode_perm_inv from epoch_seed,
+/// and the alias_lut is loaded from the blob. No identity overrides needed.
+static LoadedVM load_test_blob(const uint8_t seed[32],
+                               const std::vector<uint8_t>& blob) {
     VmSecurityConfig config;
     auto result = load_blob(blob.data(), blob.size(), seed, config);
     EXPECT_TRUE(result.has_value());
-    LoadedVM vm = std::move(result.value());
-
-    // Set alias_lut to identity: alias_lut[i] = i
-    // (only values < VM_OPCODE_COUNT will be valid semantic indices)
-    std::iota(vm.ctx.alias_lut, vm.ctx.alias_lut + 256, 0);
-
-    // Set opcode_perm_inv to identity: opcode_perm_inv[i] = i
-    std::iota(vm.ctx.opcode_perm_inv, vm.ctx.opcode_perm_inv + 256, 0);
-
-    // Also set opcode_perm to identity for consistency
-    std::iota(vm.ctx.opcode_perm, vm.ctx.opcode_perm + 256, 0);
-
-    return vm;
+    return std::move(result.value());
 }
 
 // ---------------------------------------------------------------------------
@@ -89,7 +76,7 @@ TEST(Decoder, SingleInstructionDecrypt) {
     bb.instructions.push_back(halt);
 
     auto blob = build_test_blob(seed, {bb});
-    auto vm = load_with_identity_prp(seed, blob);
+    auto vm = load_test_blob(seed, blob);
 
     // Fetch, decrypt, decode
     auto result = fetch_decrypt_decode(vm.ctx);
@@ -138,7 +125,7 @@ TEST(Decoder, ThreeInstructionChain) {
     bb.instructions = {nop, add, halt};
 
     auto blob = build_test_blob(seed, {bb});
-    auto vm = load_with_identity_prp(seed, blob);
+    auto vm = load_test_blob(seed, blob);
 
     // Decrypt instruction 0: NOP
     auto r0 = fetch_decrypt_decode(vm.ctx);
@@ -194,7 +181,7 @@ TEST(Decoder, BBMacPass) {
     bb.instructions = {nop, nop};
 
     auto blob = build_test_blob(seed, {bb});
-    auto vm = load_with_identity_prp(seed, blob);
+    auto vm = load_test_blob(seed, blob);
 
     // MAC should verify successfully
     auto result = verify_bb_mac(vm.ctx);
@@ -230,7 +217,7 @@ TEST(Decoder, BBMacFail) {
     uint32_t insn_off = blob_section_insn(hdr);
     blob[insn_off] ^= 0x42;  // flip some bits
 
-    auto vm = load_with_identity_prp(seed, blob);
+    auto vm = load_test_blob(seed, blob);
 
     // MAC should fail since instruction bytes were corrupted
     auto result = verify_bb_mac(vm.ctx);
@@ -242,7 +229,9 @@ TEST(Decoder, EnterBasicBlock) {
     uint8_t seed[32];
     fill_test_seed(seed);
 
-    // Two BBs, same epoch for simplicity
+    // Two BBs in the same epoch share the same epoch_seed (and therefore
+    // the same opcode permutation). The runtime only re-derives encoding
+    // tables on epoch change, so intra-epoch BBs must use consistent seeds.
     TestBB bb0{};
     bb0.bb_id = 100;
     bb0.epoch = 0;
@@ -260,10 +249,10 @@ TEST(Decoder, EnterBasicBlock) {
 
     TestBB bb1{};
     bb1.bb_id = 200;
-    bb1.epoch = 0;  // same epoch
+    bb1.epoch = 0;  // same epoch — must use same epoch_seed as bb0
     bb1.live_regs_bitmap = 0x000F;
     bb1.flags = 0;
-    fill_epoch_seed(bb1.epoch_seed, 0x20);
+    fill_epoch_seed(bb1.epoch_seed, 0x10);  // same seed as bb0
 
     TestInstruction halt{};
     halt.opcode = VmOpcode::HALT;
@@ -274,7 +263,7 @@ TEST(Decoder, EnterBasicBlock) {
     bb1.instructions = {halt};
 
     auto blob = build_test_blob(seed, {bb0, bb1});
-    auto vm = load_with_identity_prp(seed, blob);
+    auto vm = load_test_blob(seed, blob);
 
     // Initially in bb0
     EXPECT_EQ(vm.ctx.current_bb_id, 100u);
@@ -303,11 +292,8 @@ TEST(Decoder, EnterBasicBlock) {
     std::memcpy(&expected_enc_state, expected_seed_bytes, 8);
     EXPECT_EQ(vm.ctx.enc_state, expected_enc_state);
 
-    // Re-set identity PRP since enter_basic_block may have re-derived
-    // opcode_perm from the new epoch_seed (same epoch here, but
-    // enter_basic_block only re-derives on epoch change, so this is fine)
-    std::iota(vm.ctx.alias_lut, vm.ctx.alias_lut + 256, 0);
-    std::iota(vm.ctx.opcode_perm_inv, vm.ctx.opcode_perm_inv + 256, 0);
+    // The PRP tables are maintained by the loader and enter_basic_block —
+    // no need to reset to identity since the builder applies real PRP.
 
     // Should be able to decrypt bb1's instruction (HALT)
     auto r = fetch_decrypt_decode(vm.ctx);
@@ -331,7 +317,7 @@ TEST(Decoder, EnterBasicBlockInvalidId) {
     bb.instructions = {halt};
 
     auto blob = build_test_blob(seed, {bb});
-    auto vm = load_with_identity_prp(seed, blob);
+    auto vm = load_test_blob(seed, blob);
 
     // Try to enter a non-existent BB
     auto result = enter_basic_block(vm.ctx, 9999);
@@ -341,8 +327,8 @@ TEST(Decoder, EnterBasicBlockInvalidId) {
 
 TEST(Decoder, AliasLutResolution) {
     // Verify that the decoder correctly resolves different opcodes
-    // through the alias_lut + opcode_perm_inv chain.
-    // With identity PRP, the chain is a passthrough.
+    // through the two-layer PRP chain:
+    //   encrypted_alias -> opcode_perm_inv -> alias -> alias_lut -> semantic_op
     uint8_t seed[32];
     fill_test_seed(seed);
 
@@ -370,7 +356,7 @@ TEST(Decoder, AliasLutResolution) {
     }
 
     auto blob = build_test_blob(seed, {bb});
-    auto vm = load_with_identity_prp(seed, blob);
+    auto vm = load_test_blob(seed, blob);
 
     // Decrypt and verify each instruction's resolved opcode
     for (size_t i = 0; i < sizeof(test_opcodes) / sizeof(test_opcodes[0]); ++i) {
@@ -404,7 +390,7 @@ TEST(Decoder, OutOfBoundsIP) {
     bb.instructions = {halt};
 
     auto blob = build_test_blob(seed, {bb});
-    auto vm = load_with_identity_prp(seed, blob);
+    auto vm = load_test_blob(seed, blob);
 
     // Set vm_ip past the end
     vm.ctx.vm_ip = vm.ctx.insn_count;
@@ -443,11 +429,11 @@ TEST(Decoder, EpochChangeOnEnter) {
     bb1.instructions = {halt};
 
     auto blob = build_test_blob(seed, {bb0, bb1});
-    auto vm = load_with_identity_prp(seed, blob);
+    auto vm = load_test_blob(seed, blob);
 
     EXPECT_EQ(vm.ctx.current_epoch, 0u);
 
-    // Remember old opcode_perm_inv (identity since we set it)
+    // Remember old opcode_perm_inv (derived from bb0's epoch_seed by the loader)
     uint8_t old_perm_inv[256];
     std::memcpy(old_perm_inv, vm.ctx.opcode_perm_inv, 256);
 
@@ -470,10 +456,9 @@ TEST(Decoder, EpochChangeOnEnter) {
     EXPECT_TRUE(perm_changed)
         << "opcode_perm_inv should change after epoch transition";
 
-    // To decrypt bb1's instruction, set identity PRP again since the
-    // builder wrote raw semantic opcodes (no compiler-side permutation)
-    std::iota(vm.ctx.alias_lut, vm.ctx.alias_lut + 256, 0);
-    std::iota(vm.ctx.opcode_perm_inv, vm.ctx.opcode_perm_inv + 256, 0);
+    // The builder applies real PRP encoding and enter_basic_block re-derives
+    // the opcode permutation from the new epoch_seed. The decoder's corrected
+    // PRP order (perm_inv FIRST, alias_lut SECOND) handles this correctly.
 
     // Decrypt instruction in bb1 -- should get HALT
     auto r = fetch_decrypt_decode(vm.ctx);
@@ -501,4 +486,95 @@ TEST(Decoder, AdvanceEncStateMatchesBuilder) {
 
     EXPECT_EQ(ctx.enc_state, expected);
     EXPECT_EQ(ctx.insn_index_in_bb, 1u);
+}
+
+TEST(Decoder, ChaffInstructionProcessing) {
+    // Chaff (NOP) instructions must participate in the enc_state chain and
+    // BB MAC to prevent an attacker from deleting them without breaking the
+    // SipHash preimage-resistant chain (spec §4.3). If chaff were excluded
+    // from the chain, deletion would be undetectable, leaking program structure.
+    uint8_t seed[32];
+    fill_test_seed(seed);
+
+    TestBB bb{};
+    bb.bb_id = 77;
+    bb.epoch = 0;
+    bb.live_regs_bitmap = 0x000F;  // R0-R3 live
+    bb.flags = 0;
+    fill_epoch_seed(bb.epoch_seed, 0xEE);
+
+    // Interleave real instructions with NOP chaff:
+    // LOAD_CONST, NOP(chaff), ADD, NOP(chaff), HALT
+    TestInstruction load_const{};
+    load_const.opcode = VmOpcode::LOAD_CONST;
+    load_const.flags  = static_cast<uint8_t>((VM_OPERAND_REG << 6) | (VM_OPERAND_POOL << 4));
+    load_const.reg_a  = 0;
+    load_const.reg_b  = 0;
+    load_const.aux    = 0;  // pool index 0
+
+    TestInstruction chaff0{};
+    chaff0.opcode = VmOpcode::NOP;
+    chaff0.flags  = 0;
+    chaff0.reg_a  = 0;
+    chaff0.reg_b  = 0;
+    chaff0.aux    = 0xCAFE0001;  // chaff aux is random noise from compiler
+
+    TestInstruction add{};
+    add.opcode = VmOpcode::ADD;
+    add.flags  = static_cast<uint8_t>((VM_OPERAND_REG << 6) | (VM_OPERAND_REG << 4));
+    add.reg_a  = 1;
+    add.reg_b  = 2;
+    add.aux    = 0;
+
+    TestInstruction chaff1{};
+    chaff1.opcode = VmOpcode::NOP;
+    chaff1.flags  = 0;
+    chaff1.reg_a  = 0;
+    chaff1.reg_b  = 0;
+    chaff1.aux    = 0xCAFE0002;
+
+    TestInstruction halt{};
+    halt.opcode = VmOpcode::HALT;
+    halt.flags  = 0;
+    halt.reg_a  = 0;
+    halt.reg_b  = 0;
+    halt.aux    = 0;
+
+    bb.instructions = {load_const, chaff0, add, chaff1, halt};
+
+    auto blob = build_test_blob(seed, {bb});
+    auto vm = load_test_blob(seed, blob);
+
+    VmOpcode expected_ops[] = {
+        VmOpcode::LOAD_CONST, VmOpcode::NOP, VmOpcode::ADD,
+        VmOpcode::NOP, VmOpcode::HALT
+    };
+
+    // Decrypt all 5 instructions (including chaff) and verify the
+    // enc_state chain is continuous across all of them.
+    uint64_t prev_enc_state = vm.ctx.enc_state;
+
+    for (int i = 0; i < 5; ++i) {
+        auto r = fetch_decrypt_decode(vm.ctx);
+        ASSERT_TRUE(r.has_value())
+            << "Instruction " << i << " decrypt failed: "
+            << static_cast<uint32_t>(r.error());
+        EXPECT_EQ(r->opcode, expected_ops[i])
+            << "Instruction " << i << " opcode mismatch";
+
+        // Verify enc_state advances for every instruction (chaff included).
+        // This ensures chaff cannot be removed without breaking the chain.
+        advance_enc_state(vm.ctx, r->plaintext_opcode, r->aux);
+        EXPECT_NE(vm.ctx.enc_state, prev_enc_state)
+            << "enc_state did not advance for instruction " << i;
+        prev_enc_state = vm.ctx.enc_state;
+        vm.ctx.vm_ip++;
+    }
+
+    // Verify BB MAC covers all 5 instructions (including chaff).
+    // If chaff were excluded from the MAC, an attacker could delete
+    // them and forge a valid MAC for the shorter sequence.
+    auto mac_result = verify_bb_mac(vm.ctx);
+    ASSERT_TRUE(mac_result.has_value())
+        << "BB MAC verification failed — chaff may not be covered by MAC";
 }

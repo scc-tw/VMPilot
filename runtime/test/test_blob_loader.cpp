@@ -300,8 +300,12 @@ TEST(BlobLoader, EncStateSeedMatch) {
 }
 
 TEST(BlobLoader, ConstantPoolDecryption) {
-    // Build a blob with known constant pool values, verify they survive
-    // the encrypt-then-decrypt round-trip.
+    // Build a blob with known constant pool values.
+    // Constants are pre-encoded by the builder (spec §1.1): the compiler
+    // encodes each constant using the target BB's register encoding tables.
+    // After the loader decrypts the SipHash layer, the result is the
+    // pre-encoded value — NOT the original plaintext. We verify the
+    // round-trip by decoding with BB[0]'s register 0 decode tables.
     uint8_t seed[32];
     fill_test_seed(seed);
 
@@ -331,11 +335,25 @@ TEST(BlobLoader, ConstantPoolDecryption) {
     const LoadedVM& vm = result.value();
     ASSERT_EQ(vm.decrypted_pool.size(), pool_plain.size() * 8);
 
+    // Derive BB[0]'s decode tables to verify pre-encoded constants
+    uint8_t encode_tables[16][8][256];
+    uint8_t decode_tables[16][8][256];
+    derive_register_tables(bb.epoch_seed, bb.live_regs_bitmap,
+                           encode_tables, decode_tables);
+
     const auto* recovered = reinterpret_cast<const uint64_t*>(
         vm.decrypted_pool.data());
     for (size_t i = 0; i < pool_plain.size(); ++i) {
-        EXPECT_EQ(recovered[i], pool_plain[i])
-            << "pool entry " << i << " mismatch";
+        // Decode the pre-encoded pool value using register 0's decode tables
+        uint64_t encoded = recovered[i];
+        uint64_t decoded = 0;
+        for (int k = 0; k < 8; ++k) {
+            uint8_t lane = static_cast<uint8_t>(encoded >> (k * 8));
+            decoded |= static_cast<uint64_t>(decode_tables[0][k][lane])
+                       << (k * 8);
+        }
+        EXPECT_EQ(decoded, pool_plain[i])
+            << "pool entry " << i << ": decode(pre_encoded) != original plaintext";
     }
 }
 
