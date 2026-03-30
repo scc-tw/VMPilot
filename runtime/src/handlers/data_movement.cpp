@@ -37,10 +37,15 @@ handle_move(VMContext& ctx, const DecodedInsn& insn) noexcept {
 
 tl::expected<void, DiagnosticCode>
 handle_load(VMContext& ctx, const DecodedInsn& insn) noexcept {
+    // Apply load_base_delta for PIE/ASLR support.
+    // Guest addresses in bytecode are relative to the static binary base.
+    // At runtime under ASLR, the actual address = static_addr + load_base_delta.
+    uintptr_t guest_addr = static_cast<uintptr_t>(
+        static_cast<int64_t>(insn.aux) + ctx.load_base_delta);
+
     uint64_t mem_val = 0;
     std::memcpy(&mem_val,
-                reinterpret_cast<const uint8_t*>(
-                    static_cast<uintptr_t>(insn.aux)),
+                reinterpret_cast<const uint8_t*>(guest_addr),
                 8);
     ctx.encoded_regs[insn.reg_a] = decode_for_load(ctx, insn.reg_a, mem_val);
     return {};
@@ -52,10 +57,13 @@ handle_load(VMContext& ctx, const DecodedInsn& insn) noexcept {
 
 tl::expected<void, DiagnosticCode>
 handle_store(VMContext& ctx, const DecodedInsn& insn) noexcept {
+    // Apply load_base_delta for PIE/ASLR support (see handle_load).
+    uintptr_t guest_addr = static_cast<uintptr_t>(
+        static_cast<int64_t>(insn.aux) + ctx.load_base_delta);
+
     uint64_t mem_val = encode_for_store(ctx, insn.reg_a,
                                         ctx.encoded_regs[insn.reg_a]);
-    std::memcpy(reinterpret_cast<uint8_t*>(
-                    static_cast<uintptr_t>(insn.aux)),
+    std::memcpy(reinterpret_cast<uint8_t*>(guest_addr),
                 &mem_val, 8);
     return {};
 }

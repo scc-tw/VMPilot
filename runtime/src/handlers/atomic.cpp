@@ -2,13 +2,13 @@
 /// @brief Cat 6: Atomic operation handlers (5 opcodes).
 ///
 /// Security properties:
-///   v1: Class C security level (decode, non-atomic RMW, re-encode).
-///   These are simplified non-atomic implementations for v1 testing.
-///   Real atomic operations on arbitrary guest addresses are deferred
-///   to v2 when hardware-atomic memory operations are properly
-///   sandboxed via the guest memory model.
+///   LOCK_ADD, XCHG, CMPXCHG: std::atomic operations (seq_cst) on guest
+///     memory with MCSP register encoding on input/output values.
+///   ATOMIC_LOAD: std::atomic load (seq_cst) with register encoding.
+///   FENCE: std::atomic_thread_fence (seq_cst).
 ///
-///   FENCE is a full memory fence (seq_cst).
+/// All guest memory addresses are adjusted by ctx.load_base_delta for
+/// PIE/ASLR support.
 
 #include <handlers.hpp>
 #include <decoder.hpp>
@@ -22,29 +22,33 @@ namespace VMPilot::Runtime::handlers {
 using Common::DiagnosticCode;
 using Common::VM::VMContext;
 
+/// Compute the relocated guest address from insn.aux + load_base_delta.
+static inline uintptr_t guest_addr(const VMContext& ctx,
+                                   const DecodedInsn& insn) noexcept {
+    return static_cast<uintptr_t>(
+        static_cast<int64_t>(insn.aux) + ctx.load_base_delta);
+}
+
 // ---------------------------------------------------------------------------
-// LOCK_ADD: Atomically add register to memory, return old value
+// LOCK_ADD: Atomic fetch-add on guest memory, return old value
 //   reg_a  = addend (input) / old value (output)
 //   aux    = guest memory address
-//
-// v1 simplification: non-atomic read-modify-write.
 // ---------------------------------------------------------------------------
 
 tl::expected<void, DiagnosticCode>
 handle_lock_add(VMContext& ctx, const DecodedInsn& insn) noexcept {
     uint64_t addend = decode_register(ctx, insn.reg_a,
                                        ctx.encoded_regs[insn.reg_a]);
-    auto* ptr = reinterpret_cast<uint64_t*>(static_cast<uintptr_t>(insn.aux));
-    uint64_t old_val = 0;
-    std::memcpy(&old_val, ptr, 8);
-    uint64_t new_val = old_val + addend;
-    std::memcpy(ptr, &new_val, 8);
+    auto* atomic_ptr = reinterpret_cast<std::atomic<uint64_t>*>(
+        guest_addr(ctx, insn));
+    uint64_t old_val = atomic_ptr->fetch_add(addend,
+                                              std::memory_order_seq_cst);
     ctx.encoded_regs[insn.reg_a] = encode_register(ctx, insn.reg_a, old_val);
     return {};
 }
 
 // ---------------------------------------------------------------------------
-// XCHG: Atomically exchange register with memory
+// XCHG: Atomic exchange register with memory
 //   reg_a  = new value (input) / old value (output)
 //   aux    = guest memory address
 // ---------------------------------------------------------------------------
@@ -53,18 +57,18 @@ tl::expected<void, DiagnosticCode>
 handle_xchg(VMContext& ctx, const DecodedInsn& insn) noexcept {
     uint64_t new_val = decode_register(ctx, insn.reg_a,
                                         ctx.encoded_regs[insn.reg_a]);
-    auto* ptr = reinterpret_cast<uint64_t*>(static_cast<uintptr_t>(insn.aux));
-    uint64_t old_val = 0;
-    std::memcpy(&old_val, ptr, 8);
-    std::memcpy(ptr, &new_val, 8);
+    auto* atomic_ptr = reinterpret_cast<std::atomic<uint64_t>*>(
+        guest_addr(ctx, insn));
+    uint64_t old_val = atomic_ptr->exchange(new_val,
+                                             std::memory_order_seq_cst);
     ctx.encoded_regs[insn.reg_a] = encode_register(ctx, insn.reg_a, old_val);
     return {};
 }
 
 // ---------------------------------------------------------------------------
-// CMPXCHG: Compare-and-exchange
-//   reg_a  = expected value (input) / old value (output)
-//   reg_b  = new value (input)
+// CMPXCHG: Atomic compare-and-exchange
+//   reg_a  = expected value (input) / actual old value (output)
+//   reg_b  = desired value (input)
 //   aux    = guest memory address
 //   ZF set if exchange occurred
 // ---------------------------------------------------------------------------
@@ -75,17 +79,17 @@ handle_cmpxchg(VMContext& ctx, const DecodedInsn& insn) noexcept {
                                          ctx.encoded_regs[insn.reg_a]);
     uint64_t desired = decode_register(ctx, insn.reg_b,
                                         ctx.encoded_regs[insn.reg_b]);
-    auto* ptr = reinterpret_cast<uint64_t*>(static_cast<uintptr_t>(insn.aux));
-    uint64_t current = 0;
-    std::memcpy(&current, ptr, 8);
-
-    if (current == expected) {
-        std::memcpy(ptr, &desired, 8);
-        ctx.vm_flags |= 0x01;  // ZF = 1 (exchange succeeded)
-    } else {
-        ctx.vm_flags &= static_cast<uint8_t>(~0x01u);  // ZF = 0
-    }
-    ctx.encoded_regs[insn.reg_a] = encode_register(ctx, insn.reg_a, current);
+    auto* atomic_ptr = reinterpret_cast<std::atomic<uint64_t>*>(
+        guest_addr(ctx, insn));
+    bool success = atomic_ptr->compare_exchange_strong(
+        expected, desired, std::memory_order_seq_cst);
+    // On failure, 'expected' is updated to the current value by
+    // compare_exchange_strong, which is exactly what we want to
+    // return in reg_a (the actual old value).
+    ctx.encoded_regs[insn.reg_a] = encode_register(ctx, insn.reg_a, expected);
+    ctx.vm_flags = success
+        ? static_cast<uint8_t>(ctx.vm_flags | 0x01u)    // ZF = 1
+        : static_cast<uint8_t>(ctx.vm_flags & ~0x01u);  // ZF = 0
     return {};
 }
 
@@ -100,18 +104,16 @@ handle_fence(VMContext& /*ctx*/, const DecodedInsn& /*insn*/) noexcept {
 }
 
 // ---------------------------------------------------------------------------
-// ATOMIC_LOAD: Load from memory with acquire semantics
+// ATOMIC_LOAD: Atomic load from guest memory (seq_cst)
 //   reg_a  = destination register
 //   aux    = guest memory address
 // ---------------------------------------------------------------------------
 
 tl::expected<void, DiagnosticCode>
 handle_atomic_load(VMContext& ctx, const DecodedInsn& insn) noexcept {
-    auto* ptr = reinterpret_cast<const uint64_t*>(
-        static_cast<uintptr_t>(insn.aux));
-    uint64_t val = 0;
-    std::memcpy(&val, ptr, 8);
-    std::atomic_thread_fence(std::memory_order_acquire);
+    auto* atomic_ptr = reinterpret_cast<const std::atomic<uint64_t>*>(
+        guest_addr(ctx, insn));
+    uint64_t val = atomic_ptr->load(std::memory_order_seq_cst);
     ctx.encoded_regs[insn.reg_a] = encode_register(ctx, insn.reg_a, val);
     return {};
 }

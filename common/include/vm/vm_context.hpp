@@ -142,6 +142,17 @@ struct VMContext {
     const uint8_t* blob_data_ptr;     ///< pointer to original blob for re-verification
     uint32_t blob_data_size;          ///< blob size for re-verification
 
+    /// PIE/ASLR support: difference between actual load address and static
+    /// base address.  The Loader's entry stub computes this at runtime as
+    ///   load_base_delta = actual_binary_base - static_binary_base
+    /// and passes it to vm_execute_with_args().  LOAD/STORE and atomic
+    /// handlers add this delta to guest memory addresses so that
+    /// RIP-relative and absolute references resolve correctly under ASLR.
+    ///
+    /// Signed because the delta can be negative if the binary loads at a
+    /// lower address than the static base.
+    int64_t load_base_delta;
+
     // Flags set by handlers
     bool halted;
     uint32_t branch_target_bb;  ///< set by JMP/JCC/CALL, read by dispatcher

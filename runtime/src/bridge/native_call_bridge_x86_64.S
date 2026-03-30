@@ -14,3 +14,9 @@
 //   - System V AMD64 ABI arg setup (rdi, rsi, rdx, rcx, r8, r9)
 //
 // See spec S6.1-6.4 for the full polymorphic bridge design.
+//
+// v2 TODO: Save/restore FP/SIMD registers across native calls.
+//   x86_64: xmm0-xmm15 (caller-saved in System V), but callee may
+//           use xmm for computation -- save if VM uses FP values.
+// v1: FP registers not preserved. Native calls with FP args/returns
+//     will produce incorrect results. This is a known v1 limitation.

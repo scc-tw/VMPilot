@@ -616,6 +616,79 @@ TEST(Handlers, Mod) {
 }
 
 // ---------------------------------------------------------------------------
+// Test 25a: load_base_delta initialized to zero
+// ---------------------------------------------------------------------------
+
+TEST(Handlers, LoadBaseDeltaDefault) {
+    std::vector<uint8_t> blob;
+    auto vm = load_test_vm(blob);
+    auto& ctx = vm.ctx;
+
+    // Verify load_blob initializes load_base_delta to 0
+    EXPECT_EQ(ctx.load_base_delta, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Test 25b: LOAD with load_base_delta adjusts address
+// ---------------------------------------------------------------------------
+
+TEST(Handlers, LoadWithBaseDelta) {
+    std::vector<uint8_t> blob;
+    auto vm = load_test_vm(blob);
+    auto& ctx = vm.ctx;
+
+    // Encode a known value into the memory domain and place it in a cell.
+    alignas(8) uint64_t memory_cell = encode_for_store(ctx, 0,
+        encode_register(ctx, 0, 0xCAFE'BABE'DEAD'BEEF));
+
+    // insn.aux is uint32_t.  We pick a small fake_aux and set
+    // load_base_delta so that (int64_t)fake_aux + delta == &memory_cell.
+    constexpr uint32_t fake_aux = 0x1000;
+    auto real_addr = reinterpret_cast<uintptr_t>(&memory_cell);
+    ctx.load_base_delta = static_cast<int64_t>(real_addr)
+                        - static_cast<int64_t>(fake_aux);
+
+    auto insn = make_insn(VmOpcode::LOAD, 0, 0, fake_aux);
+    auto result = handlers::handle_load(ctx, insn);
+    ASSERT_TRUE(result.has_value());
+
+    uint64_t decoded = decode_register(ctx, 0, ctx.encoded_regs[0]);
+    EXPECT_EQ(decoded, 0xCAFE'BABE'DEAD'BEEF);
+}
+
+// ---------------------------------------------------------------------------
+// Test 25c: STORE with load_base_delta adjusts address
+// ---------------------------------------------------------------------------
+
+TEST(Handlers, StoreWithBaseDelta) {
+    std::vector<uint8_t> blob;
+    auto vm = load_test_vm(blob);
+    auto& ctx = vm.ctx;
+
+    alignas(8) uint64_t memory_cell = 0;
+
+    constexpr uint32_t fake_aux = 0x2000;
+    auto real_addr = reinterpret_cast<uintptr_t>(&memory_cell);
+    ctx.load_base_delta = static_cast<int64_t>(real_addr)
+                        - static_cast<int64_t>(fake_aux);
+
+    uint64_t store_val = 0x1234'5678'9ABC'DEF0;
+    ctx.encoded_regs[0] = encode_register(ctx, 0, store_val);
+
+    auto insn = make_insn(VmOpcode::STORE, 0, 0, fake_aux);
+    auto result = handlers::handle_store(ctx, insn);
+    ASSERT_TRUE(result.has_value());
+
+    // Read back the memory cell and decode through the memory domain
+    // conversion to verify the stored value.
+    uint64_t raw_mem = 0;
+    std::memcpy(&raw_mem, &memory_cell, 8);
+    uint64_t decoded = decode_for_load(ctx, 0, raw_mem);
+    decoded = decode_register(ctx, 0, decoded);
+    EXPECT_EQ(decoded, store_val);
+}
+
+// ---------------------------------------------------------------------------
 // Test 25: FENCE (just verify it doesn't crash)
 // ---------------------------------------------------------------------------
 

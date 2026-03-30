@@ -15,3 +15,8 @@
 //   - DMB ISH barrier for ARM64 weak memory ordering (spec S13.3)
 //
 // See spec S6.1-6.4 for the full polymorphic bridge design.
+//
+// v2 TODO: Save/restore FP/SIMD registers across native calls.
+//   ARM64:  v0-v31 (NEON/FP), v8-v15 callee-saved lower 64 bits.
+// v1: FP registers not preserved. Native calls with FP args/returns
+//     will produce incorrect results. This is a known v1 limitation.
