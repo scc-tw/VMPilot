@@ -10,9 +10,10 @@ tl::expected<VmExecResult, DiagnosticCode>
 vm_execute(const uint8_t* blob_data,
            size_t blob_size,
            const uint8_t stored_seed[32],
+           int64_t load_base_delta,
            const VmSecurityConfig& config) noexcept {
     return vm_execute_with_args(blob_data, blob_size, stored_seed,
-                                nullptr, 0, config);
+                                nullptr, 0, load_base_delta, config);
 }
 
 tl::expected<VmExecResult, DiagnosticCode>
@@ -21,6 +22,7 @@ vm_execute_with_args(const uint8_t* blob_data,
                      const uint8_t stored_seed[32],
                      const uint64_t* initial_regs,
                      uint8_t num_regs,
+                     int64_t load_base_delta,
                      const VmSecurityConfig& config) noexcept {
 
     // 1. Load and validate blob (Phase 2)
@@ -30,6 +32,9 @@ vm_execute_with_args(const uint8_t* blob_data,
 
     auto& vm = *loaded;
     auto& ctx = vm.ctx;
+
+    // 1b. Set PIE/ASLR delta (D13§D3, RM§3.D3)
+    ctx.load_base_delta = load_base_delta;
 
     // 2. Encode initial register values into the register domain (D2).
     //    The encoding tables for the first BB have already been derived

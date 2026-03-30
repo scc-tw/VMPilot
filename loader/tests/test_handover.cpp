@@ -444,6 +444,134 @@ TEST_F(HandoverARM64, MultipleRegionsEachResumesCorrectly) {
 }
 
 // ============================================================
+// x86_32 Pipeline Integration
+// ============================================================
+
+class HandoverX32 : public ::testing::Test {
+protected:
+    void SetUp() override {
+        emitter = create_emitter(FileArch::X86, FileMode::MODE_32);
+        ASSERT_NE(emitter, nullptr);
+    }
+    std::unique_ptr<StubEmitter> emitter;
+    DiagnosticCollector diag;
+};
+
+TEST_F(HandoverX32, EmitterCreated) {
+    EXPECT_EQ(emitter->min_region_size(), 5u);
+    EXPECT_EQ(emitter->max_branch_distance(), INT32_MAX);
+    EXPECT_EQ(emitter->pc_fixup_bias(), 4) << "x86_32 EIP advance = 4";
+}
+
+TEST_F(HandoverX32, StubEndsWithJmpRel32) {
+    auto s = emitter->emit_entry_stub();
+    ASSERT_TRUE(s.has_value());
+    ASSERT_GE(s->code.size(), 5u);
+    EXPECT_EQ(s->code[s->code.size() - 5], 0xE9);
+}
+
+TEST_F(HandoverX32, DeltaFixupSizeIs4Bytes) {
+    auto s = emitter->emit_entry_stub();
+    ASSERT_TRUE(s.has_value());
+    EXPECT_EQ(s->delta_fixup_size, 4u)
+        << "x86_32 delta = mov eax, imm32 = 4 bytes";
+}
+
+TEST_F(HandoverX32, PayloadLayoutCorrect) {
+    auto blob = make_blob(128);
+    std::vector<RegionPatchInfo> regions = {{"fn_a", TEXT_BASE, 32}};
+
+    auto r = build_payload(regions, blob, TEST_SEED, SEGMENT_VA, *emitter, diag);
+    ASSERT_TRUE(r.has_value());
+
+    EXPECT_EQ(r->blob_size, 128u);
+    EXPECT_EQ(r->seed_offset, 128u);
+    EXPECT_EQ(r->call_slot_offset, 128u + SEED_SIZE + CALL_SLOT_SIZE - CALL_SLOT_SIZE);
+    // call_slot = blob_size + SEED_SIZE
+    EXPECT_EQ(r->call_slot_offset, 128u + SEED_SIZE);
+    ASSERT_EQ(r->layouts.size(), 1u);
+    EXPECT_EQ(r->layouts[0].stub_offset, 128u + SEED_SIZE + CALL_SLOT_SIZE);
+}
+
+TEST_F(HandoverX32, ResumeJumpTargetsRegionEnd) {
+    constexpr uint64_t REGION_SIZE = 32;
+    auto blob = make_blob(64);
+    std::vector<RegionPatchInfo> regions = {{"fn_a", TEXT_BASE, REGION_SIZE}};
+
+    auto r = build_payload(regions, blob, TEST_SEED, SEGMENT_VA, *emitter, diag);
+    ASSERT_TRUE(r.has_value());
+
+    const auto& layout = r->layouts[0];
+    const uint8_t* stub = r->data.data() + layout.stub_offset;
+
+    // Last 5 bytes: E9 rel32
+    int32_t rel32 = read_i32_le(&stub[layout.stub_size - 4]);
+    uint64_t disp32_addr = SEGMENT_VA + layout.stub_offset + layout.stub_size - 4;
+    uint64_t target = static_cast<uint64_t>(
+        static_cast<int64_t>(disp32_addr + 4) + rel32);
+
+    EXPECT_EQ(target, TEXT_BASE + REGION_SIZE)
+        << "resume JMP should target region end";
+}
+
+TEST_F(HandoverX32, RegionPatchTargetsStub) {
+    auto blob = make_blob(64);
+    std::vector<RegionPatchInfo> regions = {{"fn_a", TEXT_BASE, 32}};
+
+    auto r = build_payload(regions, blob, TEST_SEED, SEGMENT_VA, *emitter, diag);
+    ASSERT_TRUE(r.has_value());
+
+    uint64_t stub_va = SEGMENT_VA + r->layouts[0].stub_offset;
+
+    auto patch = emitter->emit_region_patch(32, TEXT_BASE, stub_va);
+    ASSERT_TRUE(patch.has_value());
+    ASSERT_EQ(patch->size(), 32u);
+
+    EXPECT_EQ((*patch)[0], 0xE9);
+
+    int32_t rel32 = read_i32_le(patch->data() + 1);
+    uint64_t target = static_cast<uint64_t>(
+        static_cast<int64_t>(TEXT_BASE + 5) + rel32);
+    EXPECT_EQ(target, stub_va);
+
+    for (size_t i = 5; i < 32; ++i)
+        EXPECT_EQ((*patch)[i], 0x90) << "byte " << i;
+}
+
+TEST(HandoverRoundtrip, X32PatchToStubAndBack) {
+    auto emitter = create_emitter(FileArch::X86, FileMode::MODE_32);
+    ASSERT_NE(emitter, nullptr);
+    DiagnosticCollector diag;
+
+    auto blob = make_blob(128);
+    constexpr uint64_t REGION_ADDR = TEXT_BASE + 0x80;
+    constexpr uint64_t REGION_SIZE = 16;
+    std::vector<RegionPatchInfo> regions = {{"fn_x", REGION_ADDR, REGION_SIZE}};
+
+    auto payload = build_payload(regions, blob, TEST_SEED, SEGMENT_VA, *emitter, diag);
+    ASSERT_TRUE(payload.has_value());
+
+    uint64_t stub_va = SEGMENT_VA + payload->layouts[0].stub_offset;
+
+    // Forward: region -> stub
+    auto patch = emitter->emit_region_patch(REGION_SIZE, REGION_ADDR, stub_va);
+    ASSERT_TRUE(patch.has_value());
+    int32_t fwd_rel32 = read_i32_le(patch->data() + 1);
+    uint64_t fwd_target = static_cast<uint64_t>(
+        static_cast<int64_t>(REGION_ADDR + 5) + fwd_rel32);
+    EXPECT_EQ(fwd_target, stub_va) << "forward JMP misses stub";
+
+    // Backward: stub resume -> region end
+    const auto& layout = payload->layouts[0];
+    const uint8_t* stub = payload->data.data() + layout.stub_offset;
+    int32_t bwd_rel32 = read_i32_le(&stub[layout.stub_size - 4]);
+    uint64_t disp_addr = SEGMENT_VA + layout.stub_offset + layout.stub_size - 4;
+    uint64_t bwd_target = static_cast<uint64_t>(
+        static_cast<int64_t>(disp_addr + 4) + bwd_rel32);
+    EXPECT_EQ(bwd_target, REGION_ADDR + REGION_SIZE) << "resume JMP misses region end";
+}
+
+// ============================================================
 // Cross-Architecture Parity
 // ============================================================
 
@@ -521,12 +649,11 @@ TEST(HandoverArchSupport, ARM64Supported) {
     EXPECT_EQ(e->max_branch_distance(), 128LL * 1024 * 1024);
 }
 
-TEST(HandoverArchSupport, X86_32NotYetImplemented) {
-    // ArchTraits<X86, MODE_32> exists, but no StubEmitter — patch() will
-    // fail with PatchArchUnsupported.  When x86_32 support is added,
-    // this test should be updated to EXPECT_NE.
+TEST(HandoverArchSupport, X86_32Supported) {
     auto e = create_emitter(FileArch::X86, FileMode::MODE_32);
-    EXPECT_EQ(e, nullptr);
+    ASSERT_NE(e, nullptr);
+    EXPECT_EQ(e->min_region_size(), 5u);
+    EXPECT_EQ(e->pc_fixup_bias(), 4);
 }
 
 TEST(HandoverArchSupport, UnsupportedArchReturnsNull) {

@@ -12,6 +12,7 @@
 ///         D13§D3 (ASLR delta computation).
 
 #include <diagnostic.hpp>
+#include <file_type_parser.hpp>
 
 #include <tl/expected.hpp>
 

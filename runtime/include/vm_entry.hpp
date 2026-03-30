@@ -51,15 +51,17 @@ struct VmExecResult {
 /// caller (e.g., embedded by the loader, derived from a license key).
 /// It is NEVER stored in the blob (spec S13.5).
 ///
-/// @param blob_data    pointer to the raw blob bytes
-/// @param blob_size    size of the blob in bytes
-/// @param stored_seed  32-byte root secret (external input)
-/// @param config       security configuration (or use defaults)
-/// @return             execution result, or DiagnosticCode on error
+/// @param blob_data        pointer to the raw blob bytes
+/// @param blob_size        size of the blob in bytes
+/// @param stored_seed      32-byte root secret (external input)
+/// @param load_base_delta  PIE/ASLR delta: actual_base - static_base (D13§D3)
+/// @param config           security configuration (or use defaults)
+/// @return                 execution result, or DiagnosticCode on error
 [[nodiscard]] tl::expected<VmExecResult, Common::DiagnosticCode>
 vm_execute(const uint8_t* blob_data,
            size_t blob_size,
            const uint8_t stored_seed[32],
+           int64_t load_base_delta = 0,
            const Common::VM::VmSecurityConfig& config = {}) noexcept;
 
 /// Execute a protected region with pre-initialized register values.
@@ -77,15 +79,17 @@ vm_execute(const uint8_t* blob_data,
 /// @param stored_seed    32-byte root secret
 /// @param initial_regs   array of up to 16 plaintext register values to set
 ///                       before execution (will be encoded into register domain)
-/// @param num_regs       number of initial registers to set (0-16)
-/// @param config         security configuration
-/// @return               execution result, or DiagnosticCode on error
+/// @param num_regs         number of initial registers to set (0-16)
+/// @param load_base_delta  PIE/ASLR delta (D13§D3, RM§3.D3)
+/// @param config           security configuration
+/// @return                 execution result, or DiagnosticCode on error
 [[nodiscard]] tl::expected<VmExecResult, Common::DiagnosticCode>
 vm_execute_with_args(const uint8_t* blob_data,
                      size_t blob_size,
                      const uint8_t stored_seed[32],
                      const uint64_t* initial_regs,
                      uint8_t num_regs,
+                     int64_t load_base_delta = 0,
                      const Common::VM::VmSecurityConfig& config = {}) noexcept;
 
 }  // namespace VMPilot::Runtime

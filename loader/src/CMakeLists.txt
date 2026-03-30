@@ -18,6 +18,7 @@ set(SRC_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/StubEmitter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/X86_64StubEmitter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ARM64StubEmitter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/X86_32StubEmitter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/PayloadBuilder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ELFEditor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/MachOEditor.cpp
