@@ -176,6 +176,50 @@ if(ENABLE_TESTS)
                 GTest::gtest_main
     )
 
+    add_executable(test_mba_property
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_mba_property.cpp
+    )
+    target_include_directories(test_mba_property
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(test_mba_property
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+
+    add_executable(test_cross_bb
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_cross_bb.cpp
+    )
+    target_include_directories(test_cross_bb
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(test_cross_bb
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+
+    add_executable(test_full_prp
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_full_prp.cpp
+    )
+    target_include_directories(test_full_prp
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(test_full_prp
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+
+    add_executable(test_cfg_patterns
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_cfg_patterns.cpp
+    )
+    target_include_directories(test_cfg_patterns
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(test_cfg_patterns
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+
     include(GoogleTest)
     gtest_discover_tests(runtime_smoke_test)
     gtest_discover_tests(test_blob_loader)
@@ -187,4 +231,8 @@ if(ENABLE_TESTS)
     gtest_discover_tests(test_native_bridge)
     gtest_discover_tests(test_vm_entry)
     gtest_discover_tests(test_anti_tamper)
+    gtest_discover_tests(test_mba_property)
+    gtest_discover_tests(test_cross_bb)
+    gtest_discover_tests(test_full_prp)
+    gtest_discover_tests(test_cfg_patterns)
 endif()
