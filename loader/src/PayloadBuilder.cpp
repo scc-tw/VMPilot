@@ -43,7 +43,14 @@ build_payload(const std::vector<RegionPatchInfo>& regions,
     std::vector<RegionLayout> layouts;
     layouts.reserve(regions.size());
     for (size_t i = 0; i < stubs.size(); ++i) {
-        layouts.push_back({regions[i].name, payload_size, stubs[i].code.size()});
+        RegionLayout rl;
+        rl.name = regions[i].name;
+        rl.stub_offset = payload_size;
+        rl.stub_size = stubs[i].code.size();
+        // Resume fixup: payload_offset = stub_offset + resume_fixup within stub
+        rl.resume_fixup_payload_offset = payload_size + stubs[i].resume_fixup_offset;
+        rl.resume_insn_size = stubs[i].resume_insn_size;
+        layouts.push_back(std::move(rl));
         payload_size += stubs[i].code.size();
     }
 

@@ -92,12 +92,21 @@ TEST(StubGenerator, EntryStubX64Structure) {
     auto r = Loader::StubGenerator::generate_entry_stub(
         Common::FileArch::X86, Common::FileMode::MODE_64);
     ASSERT_TRUE(r);
-    EXPECT_EQ(r->code[0], 0x55);     // push rbp
-    EXPECT_EQ(r->code.back(), 0xC3); // ret
+    // Starts with SUB RSP (REX prefix 0x48)
+    EXPECT_EQ(r->code[0], 0x48);
+    // Ends with JMP rel32 placeholder (E9 + 4 bytes)
+    EXPECT_EQ(r->code[r->code.size() - 5], 0xE9);
+    // All fixup offsets are within bounds
     EXPECT_LT(r->blob_fixup_offset, r->code.size());
     EXPECT_LT(r->seed_fixup_offset, r->code.size());
     EXPECT_LT(r->size_fixup_offset, r->code.size());
     EXPECT_LT(r->call_fixup_offset, r->code.size());
+    EXPECT_LT(r->resume_fixup_offset, r->code.size());
+    // blob and seed insn_size: 4 for x86 (disp32 after instruction bytes)
+    EXPECT_EQ(r->blob_insn_size, 4u);
+    EXPECT_EQ(r->seed_insn_size, 4u);
+    // resume insn_size: 4 for x86 JMP rel32
+    EXPECT_EQ(r->resume_insn_size, 4u);
 }
 
 TEST(StubGenerator, EntryStubARM64Structure) {
@@ -105,13 +114,20 @@ TEST(StubGenerator, EntryStubARM64Structure) {
         Common::FileArch::ARM64, Common::FileMode::MODE_LITTLE_ENDIAN);
     ASSERT_TRUE(r);
     EXPECT_EQ(r->code.size() % 4, 0u);
+    // Ends with B (resume jump, placeholder), not RET
     uint32_t last;
     std::memcpy(&last, r->code.data() + r->code.size() - 4, 4);
-    EXPECT_EQ(last, 0xD65F03C0u);  // ret
+    EXPECT_EQ(last >> 26, 0x05u);  // B instruction
+    // All fixup offsets within bounds
     EXPECT_LT(r->blob_fixup_offset, r->code.size());
     EXPECT_LT(r->seed_fixup_offset, r->code.size());
     EXPECT_LT(r->size_fixup_offset, r->code.size());
     EXPECT_LT(r->call_fixup_offset, r->code.size());
+    EXPECT_LT(r->resume_fixup_offset, r->code.size());
+    // ARM64 ADR: insn_size = 0 (PC-relative, not PC+4)
+    EXPECT_EQ(r->blob_insn_size, 0u);
+    EXPECT_EQ(r->seed_insn_size, 0u);
+    EXPECT_EQ(r->resume_insn_size, 0u);
 }
 
 TEST(StubGenerator, EntryStubX32Unsupported) {
@@ -292,6 +308,12 @@ struct MockEditor {
             return tl::unexpected(DC::PatchSegmentCreationFailed);
         }
         return Loader::NewSegmentInfo{cfg.segment.va, payload.size()};
+    }
+
+    tl::expected<void, DC>
+    overwrite_segment(uint64_t, const uint8_t*, size_t,
+                      Common::DiagnosticCollector&) noexcept {
+        return {};
     }
 
     tl::expected<void, DC>

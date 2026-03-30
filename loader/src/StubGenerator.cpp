@@ -5,7 +5,7 @@
 namespace VMPilot::Loader {
 
 // ============================================================================
-// Helpers
+// Encoding helpers
 // ============================================================================
 
 static void emit_u32_le(std::vector<uint8_t>& v, uint32_t val) {
@@ -19,58 +19,72 @@ static void emit_placeholder32(std::vector<uint8_t>& v) {
     v.insert(v.end(), {0, 0, 0, 0});
 }
 
-/// Encode ARM64 B imm26.
-static uint32_t arm64_b(int64_t byte_offset) {
-    return 0x14000000u | (static_cast<uint32_t>(byte_offset >> 2) & 0x03FFFFFF);
+static void emit_u64_le(std::vector<uint8_t>& v, uint64_t val) {
+    for (int i = 0; i < 8; ++i)
+        v.push_back(static_cast<uint8_t>(val >> (i * 8)));
 }
 
-/// Encode ARM64 BL imm26.
-static uint32_t arm64_bl(int64_t byte_offset) {
-    return 0x94000000u | (static_cast<uint32_t>(byte_offset >> 2) & 0x03FFFFFF);
+static uint32_t arm64_b(int64_t byte_off) {
+    return 0x14000000u | (static_cast<uint32_t>(byte_off >> 2) & 0x03FFFFFF);
 }
-
-/// Encode ARM64 ADR Xd, #imm21.
-static uint32_t arm64_adr(uint8_t rd, int64_t byte_offset) {
-    const auto u = static_cast<uint32_t>(static_cast<int32_t>(byte_offset));
-    const uint32_t immlo = (u & 0x3) << 29;
-    const uint32_t immhi = ((u >> 2) & 0x7FFFF) << 5;
-    return 0x10000000 | immhi | immlo | rd;
+static uint32_t arm64_bl(int64_t byte_off) {
+    return 0x94000000u | (static_cast<uint32_t>(byte_off >> 2) & 0x03FFFFFF);
 }
-
-/// Encode ARM64 MOVZ Wd, #imm16.
-static uint32_t arm64_movz_w(uint8_t rd, uint16_t imm16) {
-    return 0x52800000 | (static_cast<uint32_t>(imm16) << 5) | rd;
+static uint32_t arm64_adr(uint8_t rd, int64_t byte_off) {
+    const auto u = static_cast<uint32_t>(static_cast<int32_t>(byte_off));
+    return 0x10000000 | (((u >> 2) & 0x7FFFF) << 5) | ((u & 0x3) << 29) | rd;
 }
-
-/// Encode ARM64 MOVZ Xd, #imm16.
 static uint32_t arm64_movz_x(uint8_t rd, uint16_t imm16) {
     return 0xD2800000 | (static_cast<uint32_t>(imm16) << 5) | rd;
+}
+static uint32_t arm64_movz_w(uint8_t rd, uint16_t imm16) {
+    return 0x52800000 | (static_cast<uint32_t>(imm16) << 5) | rd;
 }
 
 constexpr uint32_t ARM64_NOP = 0xD503201F;
 constexpr uint32_t ARM64_RET = 0xD65F03C0;
 
 // ============================================================================
-// Patch displacement helpers (shared between blob and seed fixups)
+// Shared fixup helper
 // ============================================================================
 
 static tl::expected<void, Common::DiagnosticCode>
-fixup_disp(std::vector<uint8_t>& code, size_t offset, size_t insn_size,
+fixup_disp(std::vector<uint8_t>& code, size_t offset,
            int64_t displacement, Common::FileArch arch) noexcept {
     using DC = Common::DiagnosticCode;
     if (arch == Common::FileArch::ARM64) {
         constexpr int64_t ADR_RANGE = 1 << 20;
         if (displacement < -ADR_RANGE || displacement >= ADR_RANGE)
             return tl::unexpected(DC::PatchStubGenerationFailed);
-        const uint32_t insn = arm64_adr(
-            code[offset] & 0x1F,  // preserve Rd from placeholder
-            displacement);
+        const uint8_t rd = code[offset] & 0x1F;
+        const uint32_t insn = arm64_adr(rd, displacement);
         code[offset+0] = static_cast<uint8_t>(insn);
         code[offset+1] = static_cast<uint8_t>(insn >> 8);
         code[offset+2] = static_cast<uint8_t>(insn >> 16);
         code[offset+3] = static_cast<uint8_t>(insn >> 24);
     } else {
-        (void)insn_size;
+        if (displacement < INT32_MIN || displacement > INT32_MAX)
+            return tl::unexpected(DC::PatchStubGenerationFailed);
+        const auto d32 = static_cast<int32_t>(displacement);
+        std::memcpy(code.data() + offset, &d32, 4);
+    }
+    return {};
+}
+
+static tl::expected<void, Common::DiagnosticCode>
+fixup_branch(std::vector<uint8_t>& code, size_t offset,
+             int64_t displacement, Common::FileArch arch) noexcept {
+    using DC = Common::DiagnosticCode;
+    if (arch == Common::FileArch::ARM64) {
+        constexpr int64_t B_RANGE = 128LL * 1024 * 1024;
+        if (displacement < -B_RANGE || displacement >= B_RANGE)
+            return tl::unexpected(DC::PatchStubGenerationFailed);
+        const uint32_t insn = arm64_b(displacement);
+        code[offset+0] = static_cast<uint8_t>(insn);
+        code[offset+1] = static_cast<uint8_t>(insn >> 8);
+        code[offset+2] = static_cast<uint8_t>(insn >> 16);
+        code[offset+3] = static_cast<uint8_t>(insn >> 24);
+    } else {
         if (displacement < INT32_MIN || displacement > INT32_MAX)
             return tl::unexpected(DC::PatchStubGenerationFailed);
         const auto d32 = static_cast<int32_t>(displacement);
@@ -82,7 +96,9 @@ fixup_disp(std::vector<uint8_t>& code, size_t offset, size_t insn_size,
 // ============================================================================
 // x86-64 entry stub
 //
-// ABI: vm_execute(rdi=blob_ptr, rsi=blob_size, rdx=seed_ptr, rcx=nullptr)
+// Mid-function handover.  Calls:
+//   vm_execute_with_args(rdi=blob, rsi=size, rdx=seed,
+//                        rcx=saved_regs, r8=16, r9=nullptr)
 // ============================================================================
 
 static tl::expected<Stub, Common::DiagnosticCode>
@@ -90,59 +106,116 @@ make_x86_64_entry_stub(uint32_t /*region_idx*/) {
     Stub s;
     auto& c = s.code;
 
-    // --- prologue: save callee-saved regs ---
-    c.push_back(0x55);                                      // push rbp
-    c.push_back(0x48); c.push_back(0x89); c.push_back(0xE5); // mov rbp, rsp
-    c.push_back(0x53);                                      // push rbx
-    c.push_back(0x41); c.push_back(0x54);                   // push r12
-    c.push_back(0x41); c.push_back(0x55);                   // push r13
-    c.push_back(0x41); c.push_back(0x56);                   // push r14
-    c.push_back(0x41); c.push_back(0x57);                   // push r15
-    c.push_back(0x48); c.push_back(0x83); c.push_back(0xEC);
-    c.push_back(0x08);                                      // sub rsp, 8 (align 16)
+    // --- save ALL 16 GPRs (rax-r15) + rflags ---
+    // sub rsp, 128+8  (16 regs × 8 bytes + 8 for rflags, aligned to 16)
+    c.push_back(0x48); c.push_back(0x81); c.push_back(0xEC);
+    emit_u32_le(c, 136);  // sub rsp, 136
 
-    // --- arg0: rdi = blob_ptr (LEA rdi, [rip + disp32]) ---
+    // pushfq alternative: save rflags
+    // Actually, do individual movs to the stack frame.
+    // Layout: [rsp+0]=rax, [rsp+8]=rcx, [rsp+16]=rdx, ...
+    // mov [rsp+0], rax
+    auto mov_to_stack = [&](uint8_t reg_idx, uint32_t offset) {
+        // REX.W MOV [rsp+disp8/32], reg
+        uint8_t rex = 0x48;
+        uint8_t modrm_reg = reg_idx & 0x7;
+        if (reg_idx >= 8) rex |= 0x04;  // REX.R
+        c.push_back(rex);
+        c.push_back(0x89);  // MOV r/m64, r64
+        if (offset < 128) {
+            c.push_back(0x44 | (modrm_reg << 3));  // [rsp+disp8], mod=01
+            c.push_back(0x24);  // SIB: base=rsp
+            c.push_back(static_cast<uint8_t>(offset));
+        } else {
+            c.push_back(0x84 | (modrm_reg << 3));  // [rsp+disp32], mod=10
+            c.push_back(0x24);
+            emit_u32_le(c, offset);
+        }
+    };
+    // rax=0, rcx=1, rdx=2, rbx=3, rsp=4(skip), rbp=5, rsi=6, rdi=7,
+    // r8=8..r15=15
+    // Save order: rax,rcx,rdx,rbx,rbp,rsi,rdi,r8-r15 (skip rsp — we need it)
+    static constexpr uint8_t save_regs[] = {0,1,2,3,5,6,7,8,9,10,11,12,13,14,15};
+    for (size_t i = 0; i < sizeof(save_regs); ++i)
+        mov_to_stack(save_regs[i], static_cast<uint32_t>(i * 8));
+
+    // --- arg0: rdi = blob_ptr ---
     c.push_back(0x48); c.push_back(0x8D); c.push_back(0x3D);
     s.blob_fixup_offset = c.size();
     s.blob_insn_size = 4;
     emit_placeholder32(c);
 
-    // --- arg1: rsi = blob_size (MOV esi, imm32) ---
+    // --- arg1: rsi = blob_size ---
     c.push_back(0xBE);
     s.size_fixup_offset = c.size();
     emit_placeholder32(c);
 
-    // --- arg2: rdx = seed_ptr (LEA rdx, [rip + disp32]) ---
+    // --- arg2: rdx = seed_ptr ---
     c.push_back(0x48); c.push_back(0x8D); c.push_back(0x15);
     s.seed_fixup_offset = c.size();
     s.seed_insn_size = 4;
     emit_placeholder32(c);
 
-    // --- arg3: rcx = nullptr (default config) ---
-    c.push_back(0x48); c.push_back(0x31); c.push_back(0xC9); // xor rcx, rcx
+    // --- arg3: rcx = pointer to saved regs on stack ---
+    // lea rcx, [rsp]
+    c.push_back(0x48); c.push_back(0x8D); c.push_back(0x0C);
+    c.push_back(0x24);  // SIB: [rsp]
 
-    // --- call vm_execute (rel32 placeholder) ---
+    // --- arg4: r8 = 16 (num_regs) ---
+    c.push_back(0x41); c.push_back(0xB8);
+    emit_u32_le(c, 16);
+
+    // --- arg5: r9 = nullptr (config) ---
+    c.push_back(0x4D); c.push_back(0x31); c.push_back(0xC9); // xor r9, r9
+
+    // --- call vm_execute_with_args ---
     c.push_back(0xE8);
     s.call_fixup_offset = c.size();
     emit_placeholder32(c);
 
-    // --- epilogue ---
-    c.push_back(0x48); c.push_back(0x83); c.push_back(0xC4);
-    c.push_back(0x08);                                      // add rsp, 8
-    c.push_back(0x41); c.push_back(0x5F);                   // pop r15
-    c.push_back(0x41); c.push_back(0x5E);                   // pop r14
-    c.push_back(0x41); c.push_back(0x5D);                   // pop r13
-    c.push_back(0x41); c.push_back(0x5C);                   // pop r12
-    c.push_back(0x5B);                                      // pop rbx
-    c.push_back(0x5D);                                      // pop rbp
-    c.push_back(0xC3);                                      // ret
+    // --- write VM return value (rax) back to saved rax slot ---
+    // mov [rsp+0], rax
+    c.push_back(0x48); c.push_back(0x89); c.push_back(0x04); c.push_back(0x24);
+
+    // --- restore ALL GPRs ---
+    auto mov_from_stack = [&](uint8_t reg_idx, uint32_t offset) {
+        uint8_t rex = 0x48;
+        uint8_t modrm_reg = reg_idx & 0x7;
+        if (reg_idx >= 8) rex |= 0x04;
+        c.push_back(rex);
+        c.push_back(0x8B);  // MOV r64, r/m64
+        if (offset < 128) {
+            c.push_back(0x44 | (modrm_reg << 3));
+            c.push_back(0x24);
+            c.push_back(static_cast<uint8_t>(offset));
+        } else {
+            c.push_back(0x84 | (modrm_reg << 3));
+            c.push_back(0x24);
+            emit_u32_le(c, offset);
+        }
+    };
+    for (size_t i = 0; i < sizeof(save_regs); ++i)
+        mov_from_stack(save_regs[i], static_cast<uint32_t>(i * 8));
+
+    // add rsp, 136
+    c.push_back(0x48); c.push_back(0x81); c.push_back(0xC4);
+    emit_u32_le(c, 136);
+
+    // --- resume: jmp rel32 to region.addr + region.size ---
+    c.push_back(0xE9);
+    s.resume_fixup_offset = c.size();
+    s.resume_insn_size = 4;  // RIP = addr after JMP = addr + 5; disp is rel to that
+    emit_placeholder32(c);
+
     return s;
 }
 
 // ============================================================================
 // ARM64 entry stub
 //
-// ABI: vm_execute(x0=blob_ptr, x1=blob_size, x2=seed_ptr, x3=nullptr)
+// Mid-function handover.  Calls:
+//   vm_execute_with_args(x0=blob, x1=size, x2=seed,
+//                        x3=saved_regs, w4=16, x5=nullptr)
 // ============================================================================
 
 static tl::expected<Stub, Common::DiagnosticCode>
@@ -150,39 +223,72 @@ make_arm64_entry_stub(uint32_t /*region_idx*/) {
     Stub s;
     auto& c = s.code;
 
-    // --- prologue ---
-    emit_u32_le(c, 0xA9BF7BFD);   // stp x29, x30, [sp, #-16]!
-    emit_u32_le(c, 0xA9BF53F3);   // stp x19, x20, [sp, #-16]!
-    emit_u32_le(c, 0xA9BF5BF5);   // stp x21, x22, [sp, #-16]!
-    emit_u32_le(c, 0xA9BF63F7);   // stp x23, x24, [sp, #-16]!
+    // --- save ALL GPRs (x0-x30) + LR ---
+    // sub sp, sp, #256     (32 regs × 8 bytes)
+    emit_u32_le(c, 0xD10403FF);  // sub sp, sp, #256
+
+    // stp pairs: x0-x29 (15 pairs)
+    for (int i = 0; i < 30; i += 2) {
+        // stp xi, xi+1, [sp, #i*8]
+        uint32_t rt  = static_cast<uint32_t>(i);
+        uint32_t rt2 = static_cast<uint32_t>(i + 1);
+        int32_t  imm = i * 8;
+        uint32_t imm7 = (static_cast<uint32_t>(imm / 8) & 0x7F) << 15;
+        emit_u32_le(c, 0xA9000000 | imm7 | (rt2 << 10) | (0x1F << 5) | rt);
+        // encoding: STP Xt1, Xt2, [SP, #imm7*8] — unsigned offset form
+    }
+    // str x30, [sp, #240]
+    emit_u32_le(c, 0xF9007BFE);  // str x30, [sp, #240] (offset=240/8=30)
 
     // --- arg0: x0 = blob_ptr (ADR x0, #disp) ---
     s.blob_fixup_offset = c.size();
-    s.blob_insn_size = 4;
-    emit_u32_le(c, arm64_adr(0, 0));  // placeholder
+    s.blob_insn_size = 0;  // ARM64 ADR is PC-relative (not PC+4)
+    emit_u32_le(c, arm64_adr(0, 0));
 
-    // --- arg1: x1 = blob_size (MOVZ x1, #imm16 — patched later) ---
+    // --- arg1: x1 = blob_size ---
     s.size_fixup_offset = c.size();
-    emit_u32_le(c, arm64_movz_x(1, 0));  // placeholder
+    emit_u32_le(c, arm64_movz_x(1, 0));
 
     // --- arg2: x2 = seed_ptr (ADR x2, #disp) ---
     s.seed_fixup_offset = c.size();
-    s.seed_insn_size = 4;
-    emit_u32_le(c, arm64_adr(2, 0));  // placeholder
+    s.seed_insn_size = 0;
+    emit_u32_le(c, arm64_adr(2, 0));
 
-    // --- arg3: x3 = nullptr ---
-    emit_u32_le(c, arm64_movz_x(3, 0));
+    // --- arg3: x3 = saved_regs (SP) ---
+    emit_u32_le(c, 0x910003E3);  // mov x3, sp
 
-    // --- call vm_execute (BL, placeholder) ---
+    // --- arg4: w4 = 16 ---
+    emit_u32_le(c, arm64_movz_w(4, 16));
+
+    // --- arg5: x5 = nullptr ---
+    emit_u32_le(c, arm64_movz_x(5, 0));
+
+    // --- call vm_execute_with_args ---
     s.call_fixup_offset = c.size();
     emit_u32_le(c, arm64_bl(0));
 
-    // --- epilogue ---
-    emit_u32_le(c, 0xA8C163F7);   // ldp x23, x24, [sp], #16
-    emit_u32_le(c, 0xA8C15BF5);   // ldp x21, x22, [sp], #16
-    emit_u32_le(c, 0xA8C153F3);   // ldp x19, x20, [sp], #16
-    emit_u32_le(c, 0xA8C17BFD);   // ldp x29, x30, [sp], #16
-    emit_u32_le(c, ARM64_RET);
+    // --- write VM return value (x0) back to saved x0 slot ---
+    // str x0, [sp, #0]
+    emit_u32_le(c, 0xF90003E0);
+
+    // --- restore ALL GPRs ---
+    for (int i = 0; i < 30; i += 2) {
+        uint32_t rt  = static_cast<uint32_t>(i);
+        uint32_t rt2 = static_cast<uint32_t>(i + 1);
+        int32_t  imm = i * 8;
+        uint32_t imm7 = (static_cast<uint32_t>(imm / 8) & 0x7F) << 15;
+        emit_u32_le(c, 0xA9400000 | imm7 | (rt2 << 10) | (0x1F << 5) | rt);
+        // LDP Xt1, Xt2, [SP, #imm7*8]
+    }
+    emit_u32_le(c, 0xF9407BFE);  // ldr x30, [sp, #240]
+
+    // add sp, sp, #256
+    emit_u32_le(c, 0x910403FF);
+
+    // --- resume: b resume_addr ---
+    s.resume_fixup_offset = c.size();
+    s.resume_insn_size = 0;  // ARM64 B is PC-relative
+    emit_u32_le(c, arm64_b(0));  // placeholder
 
     return s;
 }
@@ -236,7 +342,6 @@ StubGenerator::generate_entry_stub(
             const auto m = static_cast<uint32_t>(mode);
             if (m & static_cast<uint32_t>(Common::FileMode::MODE_64))
                 return make_x86_64_entry_stub(region_idx);
-            // 32-bit not supported for new ABI (vm_execute is 64-bit only)
             return tl::unexpected(Common::DiagnosticCode::PatchArchUnsupported);
         }
         case Common::FileArch::ARM64:
@@ -247,51 +352,54 @@ StubGenerator::generate_entry_stub(
 }
 
 tl::expected<void, Common::DiagnosticCode>
-StubGenerator::fixup_blob_displacement(Stub& stub, int64_t disp,
+StubGenerator::fixup_blob_displacement(Stub& s, int64_t disp,
                                        Common::FileArch arch) noexcept {
-    return fixup_disp(stub.code, stub.blob_fixup_offset, stub.blob_insn_size,
-                      disp, arch);
+    return fixup_disp(s.code, s.blob_fixup_offset, disp, arch);
 }
 
 tl::expected<void, Common::DiagnosticCode>
-StubGenerator::fixup_seed_displacement(Stub& stub, int64_t disp,
+StubGenerator::fixup_seed_displacement(Stub& s, int64_t disp,
                                        Common::FileArch arch) noexcept {
-    return fixup_disp(stub.code, stub.seed_fixup_offset, stub.seed_insn_size,
-                      disp, arch);
+    return fixup_disp(s.code, s.seed_fixup_offset, disp, arch);
 }
 
-void StubGenerator::fixup_blob_size(Stub& stub, uint64_t blob_size) noexcept {
-    // x86-64: MOV esi, imm32 at size_fixup_offset
-    // ARM64:  MOVZ x1, #imm16 at size_fixup_offset
-    const auto off = stub.size_fixup_offset;
-    if (off + 4 <= stub.code.size()) {
-        // Detect arch from instruction: ARM64 instructions are 4-byte aligned
-        // and the MOVZ has specific encoding. Simpler: check if it's 4-byte
-        // boundary (ARM64) or not (x86).
-        // For x86: just write 32-bit little-endian
-        // For ARM64: re-encode MOVZ x1, #imm16
-        const uint32_t existing = static_cast<uint32_t>(stub.code[off]) |
-                                  (static_cast<uint32_t>(stub.code[off+1]) << 8) |
-                                  (static_cast<uint32_t>(stub.code[off+2]) << 16) |
-                                  (static_cast<uint32_t>(stub.code[off+3]) << 24);
-        if ((existing & 0x7F800000) == 0x52800000 ||
-            (existing & 0x7F800000) == 0xD2800000) {
-            // ARM64 MOVZ — re-encode with new imm16
-            const uint8_t rd = existing & 0x1F;
-            const bool is_64 = (existing >> 31) & 1;
-            const uint32_t insn = is_64
-                ? arm64_movz_x(rd, static_cast<uint16_t>(blob_size))
-                : arm64_movz_w(rd, static_cast<uint16_t>(blob_size));
-            stub.code[off+0] = static_cast<uint8_t>(insn);
-            stub.code[off+1] = static_cast<uint8_t>(insn >> 8);
-            stub.code[off+2] = static_cast<uint8_t>(insn >> 16);
-            stub.code[off+3] = static_cast<uint8_t>(insn >> 24);
-        } else {
-            // x86: write imm32
-            const auto sz32 = static_cast<uint32_t>(blob_size);
-            std::memcpy(stub.code.data() + off, &sz32, 4);
-        }
+tl::expected<void, Common::DiagnosticCode>
+StubGenerator::fixup_resume_displacement(Stub& s, int64_t disp,
+                                         Common::FileArch arch) noexcept {
+    return fixup_branch(s.code, s.resume_fixup_offset, disp, arch);
+}
+
+void StubGenerator::fixup_blob_size(Stub& s, uint64_t blob_size) noexcept {
+    const auto off = s.size_fixup_offset;
+    if (off + 4 > s.code.size()) return;
+    const uint32_t existing = static_cast<uint32_t>(s.code[off]) |
+                              (static_cast<uint32_t>(s.code[off+1]) << 8) |
+                              (static_cast<uint32_t>(s.code[off+2]) << 16) |
+                              (static_cast<uint32_t>(s.code[off+3]) << 24);
+    // Detect ARM64 MOVZ vs x86 imm32
+    if ((existing & 0x7F800000) == 0x52800000 ||
+        (existing & 0x7F800000) == 0xD2800000) {
+        const uint8_t rd = existing & 0x1F;
+        const bool is_64 = (existing >> 31) & 1;
+        const uint32_t insn = is_64
+            ? arm64_movz_x(rd, static_cast<uint16_t>(blob_size))
+            : arm64_movz_w(rd, static_cast<uint16_t>(blob_size));
+        s.code[off+0] = static_cast<uint8_t>(insn);
+        s.code[off+1] = static_cast<uint8_t>(insn >> 8);
+        s.code[off+2] = static_cast<uint8_t>(insn >> 16);
+        s.code[off+3] = static_cast<uint8_t>(insn >> 24);
+    } else {
+        const auto sz = static_cast<uint32_t>(blob_size);
+        std::memcpy(s.code.data() + off, &sz, 4);
     }
+}
+
+void StubGenerator::fixup_delta_static_va(Stub& s, uint64_t static_va) noexcept {
+    // Phase 2 — placeholder. Will write the static VA of the stub itself
+    // so the entry stub can compute load_base_delta at runtime.
+    const auto off = s.delta_static_va_fixup_offset;
+    if (off == 0 || off + 8 > s.code.size()) return;
+    std::memcpy(s.code.data() + off, &static_va, 8);
 }
 
 size_t StubGenerator::min_region_size(

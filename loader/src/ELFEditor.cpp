@@ -95,6 +95,30 @@ ELFEditor::overwrite_text(uint64_t va, const uint8_t* data, size_t len,
 }
 
 // ---------------------------------------------------------------------------
+// overwrite_segment
+// ---------------------------------------------------------------------------
+
+tl::expected<void, DC>
+ELFEditor::overwrite_segment(uint64_t va, const uint8_t* data, size_t len,
+                             Common::DiagnosticCollector& diag) noexcept {
+    // Search all sections for one containing this VA
+    for (auto& sec : impl_->reader.sections) {
+        const uint64_t sec_addr = sec->get_address();
+        const uint64_t sec_size = sec->get_size();
+        if (sec_addr == 0 || sec_size == 0) continue;
+        if (va >= sec_addr && va + len <= sec_addr + sec_size) {
+            const size_t offset = static_cast<size_t>(va - sec_addr);
+            std::vector<uint8_t> buf(sec->get_data(),
+                                      sec->get_data() + sec->get_size());
+            std::memcpy(buf.data() + offset, data, len);
+            sec->set_data(reinterpret_cast<const char*>(buf.data()), buf.size());
+            return {};
+        }
+    }
+    return fail(diag, DC::PatchSegmentCreationFailed, "VA not in any section");
+}
+
+// ---------------------------------------------------------------------------
 // add_segment
 // ---------------------------------------------------------------------------
 

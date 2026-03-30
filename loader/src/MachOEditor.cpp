@@ -159,6 +159,36 @@ MachOEditor::overwrite_text(uint64_t va, const uint8_t* data, size_t len,
     return {};
 }
 
+tl::expected<void, DC>
+MachOEditor::overwrite_segment(uint64_t va, const uint8_t* data, size_t len,
+                               Common::DiagnosticCollector& diag) noexcept {
+    // Find the segment containing this VA by scanning all known segments
+    // and computing the file offset from the segment's VA and fileoff.
+    namespace MO_ = MachO;
+    MO_::mach_header_64 hdr = read_at<MO_::mach_header_64>(0);
+    size_t off = sizeof(MO_::mach_header_64);
+    for (uint32_t i = 0; i < hdr.ncmds; ++i) {
+        MO_::load_command lc{};
+        std::memcpy(&lc, buf_.data() + off, sizeof(lc));
+        if (lc.cmd == MO_::LC_SEGMENT_64) {
+            MO_::segment_command_64 seg{};
+            std::memcpy(&seg, buf_.data() + off, sizeof(seg));
+            if (va >= seg.vmaddr && va + len <= seg.vmaddr + seg.filesize) {
+                const size_t foff = seg.fileoff +
+                    static_cast<size_t>(va - seg.vmaddr);
+                if (foff + len > buf_.size())
+                    return fail(diag, DC::PatchSegmentCreationFailed,
+                                "file offset out of bounds");
+                std::memcpy(buf_.data() + foff, data, len);
+                return {};
+            }
+        }
+        off += lc.cmdsize;
+    }
+    return fail(diag, DC::PatchSegmentCreationFailed,
+                "VA not in any loaded segment");
+}
+
 tl::expected<NewSegmentInfo, DC>
 MachOEditor::add_segment(std::string_view name,
                          const std::vector<uint8_t>& payload,

@@ -20,6 +20,12 @@ struct RegionLayout {
     std::string name;
     size_t stub_offset = 0;
     size_t stub_size = 0;
+    /// Offset within payload where the resume jump displacement must be
+    /// patched by FormatPatcher (needs segment VA + region resume address).
+    size_t resume_fixup_payload_offset = 0;
+    /// Instruction size for resume displacement calculation.
+    /// x86: 4 (rel32, target = RIP + disp). ARM64: 0 (B is PC-relative).
+    size_t resume_insn_size = 0;
 };
 
 /// Fully assembled payload ready for injection.

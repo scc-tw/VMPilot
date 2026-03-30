@@ -43,6 +43,11 @@ public:
                 uint64_t alignment,
                 Common::DiagnosticCollector& diag) noexcept;
 
+    /// Overwrite bytes at any VA in any loaded segment (including __VMPILOT).
+    [[nodiscard]] tl::expected<void, Common::DiagnosticCode>
+    overwrite_segment(uint64_t va, const uint8_t* data, size_t len,
+                      Common::DiagnosticCollector& diag) noexcept;
+
     /// Write the modified binary to disk.
     [[nodiscard]] tl::expected<void, Common::DiagnosticCode>
     save(const std::string& path,
