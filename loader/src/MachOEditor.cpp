@@ -246,6 +246,54 @@ MachOEditor::add_segment(std::string_view name,
 }
 
 tl::expected<void, DC>
+MachOEditor::add_dylib(std::string_view install_name,
+                       Common::DiagnosticCollector& diag) noexcept {
+    // LC_LOAD_DYLIB: dylib_command header (24 bytes) + null-terminated string,
+    // total size aligned to 8 bytes.
+    const size_t name_len = install_name.size() + 1;  // include null terminator
+    const size_t raw_size = sizeof(MO::dylib_command) + name_len;
+    const size_t cmdsize = align_up(raw_size, 8);
+
+    if (header_padding() < cmdsize)
+        return fail(diag, DC::PatchSegmentCreationFailed,
+                    "not enough header padding for LC_LOAD_DYLIB ("
+                    + std::to_string(header_padding()) + " < "
+                    + std::to_string(cmdsize) + ")");
+
+    // Build the dylib_command
+    MO::dylib_command cmd{};
+    cmd.cmd             = MO::LC_LOAD_DYLIB;
+    cmd.cmdsize         = static_cast<uint32_t>(cmdsize);
+    cmd.name_offset     = sizeof(MO::dylib_command);  // string starts right after header
+    cmd.timestamp       = 0;
+    cmd.current_version = 0x00010000;   // 1.0.0
+    cmd.compat_version  = 0x00010000;   // 1.0.0
+
+    // Write the command header into header padding
+    write_at(lcmds_end_, cmd);
+
+    // Write the install name string (null-terminated) after the header
+    const size_t str_off = lcmds_end_ + sizeof(MO::dylib_command);
+    // Zero the entire region first (for alignment padding)
+    std::memset(buf_.data() + lcmds_end_ + sizeof(MO::dylib_command), 0,
+                cmdsize - sizeof(MO::dylib_command));
+    std::memcpy(buf_.data() + str_off, install_name.data(), install_name.size());
+    // null terminator is already set by memset
+
+    // Update header
+    header_.ncmds     += 1;
+    header_.sizeofcmds += static_cast<uint32_t>(cmdsize);
+    write_at(0, header_);
+
+    lcmds_end_ += cmdsize;
+
+    diag.note("loader", DC::None,
+              "added LC_LOAD_DYLIB: " + std::string(install_name));
+
+    return {};
+}
+
+tl::expected<void, DC>
 MachOEditor::save(const std::string& path,
                   Common::DiagnosticCollector& diag) noexcept {
     std::ofstream ofs(path, std::ios::binary | std::ios::trunc);

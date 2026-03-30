@@ -158,6 +158,23 @@ ELFEditor::add_segment(std::string_view name,
 }
 
 // ---------------------------------------------------------------------------
+// add_needed
+// ---------------------------------------------------------------------------
+
+tl::expected<void, DC>
+ELFEditor::add_needed(std::string_view soname,
+                      Common::DiagnosticCollector& diag) noexcept {
+    // ELF DT_NEEDED injection requires modifying the .dynamic section,
+    // which is complex with ELFIO (the section has fixed size set by the
+    // linker). Deferred to a future release.
+    diag.note("loader", DC::None,
+              "ELF DT_NEEDED injection deferred for '"
+              + std::string(soname)
+              + "'; runtime library must be preloaded via LD_PRELOAD");
+    return {};
+}
+
+// ---------------------------------------------------------------------------
 // save
 // ---------------------------------------------------------------------------
 

@@ -16,6 +16,7 @@ constexpr uint32_t MH_CIGAM_64    = 0xCFFAEDFE;  // byte-swapped
 
 // --- Load command types ---
 constexpr uint32_t LC_SEGMENT_64  = 0x19;
+constexpr uint32_t LC_LOAD_DYLIB  = 0xC;
 
 // --- VM protection flags ---
 constexpr int32_t VM_PROT_READ    = 0x01;
@@ -24,6 +25,18 @@ constexpr int32_t VM_PROT_EXECUTE = 0x04;
 
 // --- Section types (flags & SECTION_TYPE mask) ---
 constexpr uint32_t S_REGULAR      = 0x0;
+
+// --- dylib_command (LC_LOAD_DYLIB) ---
+struct dylib_command {
+    uint32_t cmd;               // LC_LOAD_DYLIB = 0xC
+    uint32_t cmdsize;           // sizeof(dylib_command) + string length, aligned to 8
+    uint32_t name_offset;       // offset from cmd start to string
+    uint32_t timestamp;         // 0
+    uint32_t current_version;   // encoded version (e.g., 0x00010000 = 1.0.0)
+    uint32_t compat_version;    // encoded version (e.g., 0x00010000 = 1.0.0)
+    // Followed by null-terminated install name string
+};
+static_assert(sizeof(dylib_command) == 24, "dylib_command must be 24 bytes");
 
 // --- Header (64-bit) ---
 struct mach_header_64 {

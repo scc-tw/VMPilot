@@ -48,6 +48,12 @@ public:
     overwrite_segment(uint64_t va, const uint8_t* data, size_t len,
                       Common::DiagnosticCollector& diag) noexcept;
 
+    /// Insert an LC_LOAD_DYLIB load command into header padding.
+    /// The install_name is stored as a null-terminated string in the command.
+    [[nodiscard]] tl::expected<void, Common::DiagnosticCode>
+    add_dylib(std::string_view install_name,
+              Common::DiagnosticCollector& diag) noexcept;
+
     /// Write the modified binary to disk.
     [[nodiscard]] tl::expected<void, Common::DiagnosticCode>
     save(const std::string& path,

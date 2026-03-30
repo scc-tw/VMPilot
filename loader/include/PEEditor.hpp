@@ -37,6 +37,11 @@ public:
     overwrite_segment(uint64_t va, const uint8_t* data, size_t len,
                       Common::DiagnosticCollector& diag) noexcept;
 
+    /// Add a dynamic library dependency — not yet implemented for PE.
+    [[nodiscard]] tl::expected<void, Common::DiagnosticCode>
+    add_dylib(std::string_view install_name,
+              Common::DiagnosticCollector& diag) noexcept;
+
     [[nodiscard]] tl::expected<void, Common::DiagnosticCode>
     save(const std::string& path,
          Common::DiagnosticCollector& diag) noexcept;

@@ -8,6 +8,7 @@
 
 #include <cstring>
 #include <string>
+#include <type_traits>
 
 namespace VMPilot::Loader {
 
@@ -55,6 +56,10 @@ public:
         auto seg = editor->add_segment(".text.vm", payload->data, PAGE_ALIGN, diag);
         if (!seg) return tl::unexpected(seg.error());
         const uint64_t seg_va = seg->va;
+
+        // --- 4b. Inject runtime library dependency (Phase 4: Runtime linking) ---
+        auto dep = inject_runtime_dep(*editor, diag);
+        if (!dep) return tl::unexpected(dep.error());
 
         // --- 5. Patch resume displacements into the injected segment ---
         // Now we know seg_va, so we can compute each stub's resume target.
@@ -217,6 +222,39 @@ public:
 
 private:
     std::string name_;
+
+    // --- SFINAE helpers for runtime linking injection ---
+
+    /// Detects if Editor has add_dylib(string_view, DiagnosticCollector&).
+    template <typename E, typename = void>
+    struct has_add_dylib : std::false_type {};
+    template <typename E>
+    struct has_add_dylib<E, std::void_t<decltype(
+        std::declval<E>().add_dylib(std::declval<std::string_view>(),
+                                     std::declval<Common::DiagnosticCollector&>()))>>
+        : std::true_type {};
+
+    /// Detects if Editor has add_needed(string_view, DiagnosticCollector&).
+    template <typename E, typename = void>
+    struct has_add_needed : std::false_type {};
+    template <typename E>
+    struct has_add_needed<E, std::void_t<decltype(
+        std::declval<E>().add_needed(std::declval<std::string_view>(),
+                                      std::declval<Common::DiagnosticCollector&>()))>>
+        : std::true_type {};
+
+    /// Inject runtime library dependency into the editor.
+    [[nodiscard]] static tl::expected<void, Common::DiagnosticCode>
+    inject_runtime_dep(Editor& editor, Common::DiagnosticCollector& diag) noexcept {
+        if constexpr (has_add_dylib<Editor>::value) {
+            return editor.add_dylib("@rpath/libvmpilot_runtime.dylib", diag);
+        } else if constexpr (has_add_needed<Editor>::value) {
+            return editor.add_needed("libvmpilot_runtime.so", diag);
+        } else {
+            (void)editor; (void)diag;
+            return {};
+        }
+    }
 };
 
 }  // namespace VMPilot::Loader

@@ -36,6 +36,11 @@ PEEditor::overwrite_segment(uint64_t, const uint8_t*, size_t,
 }
 
 tl::expected<void, DC>
+PEEditor::add_dylib(std::string_view, Common::DiagnosticCollector& diag) noexcept {
+    return not_impl(diag);
+}
+
+tl::expected<void, DC>
 PEEditor::save(const std::string&, Common::DiagnosticCollector& diag) noexcept {
     return not_impl(diag);
 }
