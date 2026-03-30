@@ -1,4 +1,5 @@
 #include <decoder.hpp>
+#include <handlers.hpp>
 #include <vm/vm_crypto.hpp>
 #include <vm/vm_encoding.hpp>
 #include <vm/vm_blob.hpp>
@@ -252,7 +253,11 @@ enter_basic_block(VMContext& ctx, uint32_t target_bb_id) noexcept {
                                   ctx.opcode_perm, ctx.opcode_perm_inv);
     }
 
-    // ── 5. Update current BB tracking ───────────────────────────────────
+    // ── 5. Clear composition table cache ────────────────────────────────
+    // Encoding tables change per-epoch; cached composition tables are invalid.
+    clear_composition_cache();
+
+    // ── 6. Update current BB tracking ───────────────────────────────────
     ctx.current_bb_id = target.bb_id;
     ctx.current_bb_index = static_cast<uint32_t>(bb_idx);
     ctx.current_epoch = target.epoch;

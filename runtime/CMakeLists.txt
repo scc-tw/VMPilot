@@ -19,6 +19,7 @@ set(RUNTIME_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/dispatcher.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/encoding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/oram.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/composition_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/handlers.cpp
     # Handler categories
     ${CMAKE_CURRENT_SOURCE_DIR}/src/handlers/data_movement.cpp
@@ -114,10 +115,22 @@ if(ENABLE_TESTS)
                 GTest::gtest_main
     )
 
+    add_executable(test_handlers
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_handlers.cpp
+    )
+    target_include_directories(test_handlers
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(test_handlers
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+
     include(GoogleTest)
     gtest_discover_tests(runtime_smoke_test)
     gtest_discover_tests(test_blob_loader)
     gtest_discover_tests(test_oram)
     gtest_discover_tests(test_encoding)
     gtest_discover_tests(test_decoder)
+    gtest_discover_tests(test_handlers)
 endif()
