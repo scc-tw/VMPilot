@@ -33,6 +33,8 @@ set(RUNTIME_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/handlers/vm_internal.cpp
     # Native call bridge (Phase 8)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/bridge/native_call_bridge.cpp
+    # Security (Phase 9)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/security/anti_tamper.cpp
     # VM entry/exit (Phase 10)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/vm_entry.cpp
 )
@@ -163,6 +165,17 @@ if(ENABLE_TESTS)
                 GTest::gtest_main
     )
 
+    add_executable(test_anti_tamper
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_anti_tamper.cpp
+    )
+    target_include_directories(test_anti_tamper
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(test_anti_tamper
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+
     include(GoogleTest)
     gtest_discover_tests(runtime_smoke_test)
     gtest_discover_tests(test_blob_loader)
@@ -173,4 +186,5 @@ if(ENABLE_TESTS)
     gtest_discover_tests(test_dispatcher)
     gtest_discover_tests(test_native_bridge)
     gtest_discover_tests(test_vm_entry)
+    gtest_discover_tests(test_anti_tamper)
 endif()

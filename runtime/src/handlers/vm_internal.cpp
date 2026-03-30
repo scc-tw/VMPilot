@@ -14,6 +14,7 @@
 
 #include <handlers.hpp>
 #include <decoder.hpp>
+#include <anti_tamper.hpp>
 #include <vm/vm_encoding.hpp>
 
 #include <cstring>
@@ -45,9 +46,17 @@ handle_nop(VMContext& ctx, const DecodedInsn& insn) noexcept {
 
 tl::expected<void, DiagnosticCode>
 handle_check_integrity(VMContext& ctx, const DecodedInsn& /*insn*/) noexcept {
-    // Delegate to the decoder's verify_bb_mac which re-decrypts the entire
-    // BB and computes BLAKE3_keyed(integrity_key, all_plaintext_insns)[0:8].
-    return verify_bb_mac(ctx);
+    // 1. Per-BB MAC check: re-decrypts the entire BB and computes
+    //    BLAKE3_keyed(integrity_key, all_plaintext_insns)[0:8].
+    auto mac_result = verify_bb_mac(ctx);
+    if (!mac_result)
+        return mac_result;
+
+    // 2. Whole-blob integrity check (Phase 9.2): recomputes
+    //    BLAKE3_keyed(integrity_key, entire_blob) and compares against
+    //    the hash stored at load time. Catches any post-load modification
+    //    to any section of the blob.
+    return verify_blob_integrity(ctx.blob_data_ptr, ctx.blob_data_size, ctx);
 }
 
 // ---------------------------------------------------------------------------

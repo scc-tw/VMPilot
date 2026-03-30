@@ -136,6 +136,12 @@ struct VMContext {
     ///         bit 2 = CF (carry), bit 3 = OF (overflow)
     uint8_t vm_flags;
 
+    // Anti-tamper: blob integrity hash computed at load time (Phase 9.2).
+    // verify_blob_integrity() recomputes the hash and compares against this.
+    uint8_t blob_integrity_hash[32];  ///< BLAKE3_keyed(integrity_key, blob)
+    const uint8_t* blob_data_ptr;     ///< pointer to original blob for re-verification
+    uint32_t blob_data_size;          ///< blob size for re-verification
+
     // Flags set by handlers
     bool halted;
     uint32_t branch_target_bb;  ///< set by JMP/JCC/CALL, read by dispatcher

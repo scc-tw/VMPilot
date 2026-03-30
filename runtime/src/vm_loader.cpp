@@ -175,6 +175,17 @@ load_blob(const uint8_t* blob_data, size_t blob_size,
     // blob-embedded one, so just store what was passed in.
     (void)config;  // blob section_config is authoritative for future use
 
+    // ── 6b. Anti-tamper: compute blob integrity hash (Phase 9.2) ────────
+    //
+    // Hash the ENTIRE blob (all sections) with the integrity key.
+    // This is stored once at load time; verify_blob_integrity() will
+    // recompute and compare to detect any post-load modification.
+
+    blake3_keyed_hash(ctx.integrity_key, blob_data, blob_size,
+                      ctx.blob_integrity_hash, 32);
+    ctx.blob_data_ptr  = blob_data;
+    ctx.blob_data_size = static_cast<uint32_t>(blob_size);
+
     // ── 7. Initialize runtime state ──────────────────────────────────────
 
     std::memset(ctx.encoded_regs, 0, sizeof(ctx.encoded_regs));

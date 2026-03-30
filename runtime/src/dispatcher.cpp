@@ -10,6 +10,7 @@
 #include <decoder.hpp>
 #include <handlers.hpp>
 #include <encoding.hpp>
+#include <anti_tamper.hpp>
 #include <vm/vm_insn.hpp>
 #include <vm/vm_context.hpp>
 
@@ -148,14 +149,19 @@ step(VMContext& ctx, const VmSecurityConfig& config) noexcept {
     }
 
     // =====================================================================
-    // Step 12: GUARD -- anti-instrumentation check (amortized)
+    // Step 12: GUARD -- anti-tamper check (amortized, Phase 9.2)
     //
-    // Only runs every anti_debug_interval instructions to reduce overhead.
-    // Phase 9 will implement the actual check (ptrace/P_TRACED/etc).
+    // Reuses anti_debug_interval for the check frequency. The full-blob
+    // BLAKE3 re-hash is expensive, so it only runs every N instructions.
+    // This catches runtime blob modification (e.g. breakpoint patching,
+    // memory corruption) between explicit CHECK_INTEGRITY instructions.
     // =====================================================================
     if (!config.debug_mode && config.anti_debug_interval > 0) {
         if (ctx.vm_ip % config.anti_debug_interval == 0) {
-            // Phase 9 stub: anti-debug check would go here
+            auto tamper_check = verify_blob_integrity(
+                ctx.blob_data_ptr, ctx.blob_data_size, ctx);
+            if (!tamper_check)
+                return tl::make_unexpected(tamper_check.error());
         }
     }
 
