@@ -181,6 +181,139 @@ TEST(EditorPermissions, ELFCallSlotZeroAtSegmentStart) {
 // Use MachOStructs for header definitions (same as MachOEditor uses)
 #include <MachOStructs.hpp>
 
+// ============================================================================
+// ELF DT_NEEDED Injection Tests
+// ============================================================================
+
+TEST(EditorPermissions, ELFDtNeededInjection) {
+    // Build a minimal ELF with a .dynamic section containing DT_NULL padding
+    ELFIO::elfio writer;
+    writer.create(ELFIO::ELFCLASS64, ELFIO::ELFDATA2LSB);
+    writer.set_os_abi(ELFIO::ELFOSABI_LINUX);
+    writer.set_type(ELFIO::ET_EXEC);
+    writer.set_machine(ELFIO::EM_X86_64);
+    writer.set_entry(0x401000);
+
+    // .text section
+    auto* text_sec = writer.sections.add(".text");
+    text_sec->set_type(ELFIO::SHT_PROGBITS);
+    text_sec->set_flags(ELFIO::SHF_ALLOC | ELFIO::SHF_EXECINSTR);
+    text_sec->set_addr_align(16);
+    text_sec->set_address(0x401000);
+    std::vector<uint8_t> nops(256, 0x90);
+    text_sec->set_data(reinterpret_cast<const char*>(nops.data()), nops.size());
+
+    // PT_LOAD for .text
+    auto* text_seg = writer.segments.add();
+    text_seg->set_type(ELFIO::PT_LOAD);
+    text_seg->set_flags(ELFIO::PF_R | ELFIO::PF_X);
+    text_seg->set_align(0x1000);
+    text_seg->set_virtual_address(0x401000);
+    text_seg->set_physical_address(0x401000);
+    text_seg->add_section_index(text_sec->get_index(), text_sec->get_addr_align());
+
+    // .dynstr section (string table for .dynamic)
+    auto* dynstr_sec = writer.sections.add(".dynstr");
+    dynstr_sec->set_type(ELFIO::SHT_STRTAB);
+    dynstr_sec->set_flags(ELFIO::SHF_ALLOC);
+    dynstr_sec->set_addr_align(1);
+    dynstr_sec->set_address(0x402000);
+    // Initial content: just the null byte
+    const char null_byte = '\0';
+    dynstr_sec->set_data(&null_byte, 1);
+
+    // .dynamic section with 4 slots: 1 real entry + 3 DT_NULL (padding)
+    auto* dyn_sec = writer.sections.add(".dynamic");
+    dyn_sec->set_type(ELFIO::SHT_DYNAMIC);
+    dyn_sec->set_flags(ELFIO::SHF_ALLOC | ELFIO::SHF_WRITE);
+    dyn_sec->set_addr_align(8);
+    dyn_sec->set_address(0x402100);
+    dyn_sec->set_entry_size(sizeof(ELFIO::Elf64_Dyn));
+    dyn_sec->set_link(dynstr_sec->get_index());
+    // 4 entries, all DT_NULL (we'll have room to steal one)
+    std::vector<ELFIO::Elf64_Dyn> dyn_entries(4, ELFIO::Elf64_Dyn{});
+    dyn_sec->set_data(reinterpret_cast<const char*>(dyn_entries.data()),
+                      dyn_entries.size() * sizeof(ELFIO::Elf64_Dyn));
+
+    // PT_LOAD for data sections (.dynstr + .dynamic)
+    auto* data_seg = writer.segments.add();
+    data_seg->set_type(ELFIO::PT_LOAD);
+    data_seg->set_flags(ELFIO::PF_R | ELFIO::PF_W);
+    data_seg->set_align(0x1000);
+    data_seg->set_virtual_address(0x402000);
+    data_seg->set_physical_address(0x402000);
+    data_seg->add_section_index(dynstr_sec->get_index(), dynstr_sec->get_addr_align());
+    data_seg->add_section_index(dyn_sec->get_index(), dyn_sec->get_addr_align());
+
+    // PT_DYNAMIC segment
+    auto* dyn_seg = writer.segments.add();
+    dyn_seg->set_type(ELFIO::PT_DYNAMIC);
+    dyn_seg->set_flags(ELFIO::PF_R | ELFIO::PF_W);
+    dyn_seg->set_align(8);
+    dyn_seg->add_section_index(dyn_sec->get_index(), dyn_sec->get_addr_align());
+
+    char tmpname[] = "/tmp/vmpilot_test_dtneeded_XXXXXX";
+    int fd = mkstemp(tmpname);
+    ASSERT_GE(fd, 0);
+    close(fd);
+    writer.save(tmpname);
+
+    // Open with ELFEditor and inject DT_NEEDED
+    Common::DiagnosticCollector diag;
+    auto editor = Loader::ELFEditor::open(tmpname, diag);
+    ASSERT_TRUE(editor.has_value()) << "Failed to open test ELF";
+
+    auto result = editor->add_runtime_dep("libvmpilot_runtime.so", diag);
+    ASSERT_TRUE(result.has_value()) << "add_runtime_dep failed";
+
+    std::string out_path = std::string(tmpname) + ".patched";
+    auto save_res = editor->save(out_path, diag);
+    ASSERT_TRUE(save_res.has_value()) << "save failed";
+
+    // Verify: reload and check DT_NEEDED was injected
+    ELFIO::elfio reader;
+    ASSERT_TRUE(reader.load(out_path));
+
+    bool found_needed = false;
+    for (const auto& sec : reader.sections) {
+        if (sec->get_type() != ELFIO::SHT_DYNAMIC) continue;
+
+        ELFIO::dynamic_section_accessor dyn(reader, sec.get());
+        for (ELFIO::Elf_Xword i = 0; i < dyn.get_entries_num(); ++i) {
+            ELFIO::Elf_Xword tag, value;
+            std::string str;
+            dyn.get_entry(i, tag, value, str);
+            if (tag == ELFIO::DT_NEEDED && str == "libvmpilot_runtime.so") {
+                found_needed = true;
+                break;
+            }
+        }
+    }
+    EXPECT_TRUE(found_needed) << "DT_NEEDED for libvmpilot_runtime.so not found";
+
+    std::remove(tmpname);
+    std::remove(out_path.c_str());
+}
+
+TEST(EditorPermissions, ELFDtNeededNoDynamicSection) {
+    // Build a minimal ELF WITHOUT .dynamic — should gracefully fall back
+    std::string elf_path = build_minimal_elf();
+    Common::DiagnosticCollector diag;
+
+    auto editor = Loader::ELFEditor::open(elf_path, diag);
+    ASSERT_TRUE(editor.has_value());
+
+    auto result = editor->add_runtime_dep("libvmpilot_runtime.so", diag);
+    // Should succeed (returns ok) but emit a note about LD_PRELOAD
+    EXPECT_TRUE(result.has_value());
+
+    std::remove(elf_path.c_str());
+}
+
+// ============================================================================
+// Mach-O Segment Permission Tests
+// ============================================================================
+
 TEST(EditorPermissions, MachOVerifyInitprotIsRW) {
     // We can't run MachOEditor::open on Linux (it needs a real Mach-O).
     // Instead, verify the constants used in MachOEditor are correct.

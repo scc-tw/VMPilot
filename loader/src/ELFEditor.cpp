@@ -7,12 +7,15 @@
 
 using ELFIO::PT_LOAD;
 using ELFIO::SHT_PROGBITS;
+using ELFIO::SHT_DYNAMIC;
 using ELFIO::SHF_ALLOC;
 using ELFIO::SHF_EXECINSTR;
+using ELFIO::SHF_WRITE;
 using ELFIO::PF_R;
 using ELFIO::PF_W;
 using ELFIO::PF_X;
-using ELFIO::SHF_WRITE;
+using ELFIO::DT_NULL;
+using ELFIO::DT_NEEDED;
 
 namespace VMPilot::Loader {
 
@@ -157,14 +160,110 @@ ELFEditor::add_segment(std::string_view name,
 // add_runtime_dep
 // ---------------------------------------------------------------------------
 
+/// Inject DT_NEEDED for `soname` by stealing a DT_NULL padding slot.
+///
+/// Most linkers emit 1-3 DT_NULL entries at the end of .dynamic as
+/// padding.  We replace the first DT_NULL with {DT_NEEDED, offset}
+/// — the next slot is zero (implicitly DT_NULL), preserving the
+/// terminator.  This avoids growing .dynamic (which would shift all
+/// subsequent sections and break program headers).
+///
+/// If .dynamic has no padding slots, falls back to an LD_PRELOAD note.
 tl::expected<void, DC>
 ELFEditor::add_runtime_dep(std::string_view soname,
                            Common::DiagnosticCollector& diag) noexcept {
-    // ELF DT_NEEDED injection requires modifying .dynamic section
-    // (fixed size set by linker). Deferred.
-    diag.note("loader", DC::None,
-              "ELF DT_NEEDED deferred for '" + std::string(soname)
-              + "'; use LD_PRELOAD");
+    auto& reader = impl_->reader;
+
+    // 1. Find .dynamic section
+    ELFIO::section* dyn_sec = nullptr;
+    for (auto& sec : reader.sections) {
+        if (sec->get_type() == SHT_DYNAMIC) {
+            dyn_sec = sec.get();
+            break;
+        }
+    }
+    if (!dyn_sec) {
+        diag.note("loader", DC::None,
+                  "No .dynamic section (static binary?); use LD_PRELOAD for '"
+                  + std::string(soname) + "'");
+        return {};
+    }
+
+    // 2. Scan raw entries to count DT_NULL padding slots.
+    //    We need ≥2 consecutive DT_NULL at the end: steal one, keep one.
+    const size_t entry_size = dyn_sec->get_entry_size();
+    if (entry_size == 0) {
+        diag.note("loader", DC::None,
+                  ".dynamic has entry_size 0; use LD_PRELOAD for '"
+                  + std::string(soname) + "'");
+        return {};
+    }
+    const size_t total_slots = dyn_sec->get_size() / entry_size;
+    const auto* raw = reinterpret_cast<const uint8_t*>(dyn_sec->get_data());
+    if (!raw || total_slots < 2)
+        return {};
+
+    // Find the first DT_NULL.  Walk raw bytes for 32/64-bit portability.
+    const bool is64 = (reader.get_class() == ELFIO::ELFCLASS64);
+    size_t null_idx = total_slots;  // sentinel: "not found"
+
+    for (size_t i = 0; i < total_slots; ++i) {
+        const uint8_t* ent = raw + i * entry_size;
+        int64_t tag = 0;
+        if (is64) {
+            ELFIO::Elf64_Dyn d;
+            std::memcpy(&d, ent, sizeof(d));
+            tag = static_cast<int64_t>(d.d_tag);
+        } else {
+            ELFIO::Elf32_Dyn d;
+            std::memcpy(&d, ent, sizeof(d));
+            tag = static_cast<int64_t>(d.d_tag);
+        }
+        if (tag == static_cast<int64_t>(DT_NULL)) {
+            null_idx = i;
+            break;
+        }
+    }
+
+    if (null_idx >= total_slots || null_idx + 1 >= total_slots) {
+        // No DT_NULL found, or DT_NULL is the very last slot with no room
+        // for a replacement terminator.
+        diag.note("loader", DC::None,
+                  "No spare DT_NULL in .dynamic; use LD_PRELOAD for '"
+                  + std::string(soname) + "'");
+        return {};
+    }
+
+    // 3. Add soname string to .dynstr (via ELFIO string accessor).
+    auto str_link = dyn_sec->get_link();
+    if (str_link == 0 || str_link >= reader.sections.size()) {
+        diag.note("loader", DC::None,
+                  ".dynamic has no linked .dynstr; use LD_PRELOAD for '"
+                  + std::string(soname) + "'");
+        return {};
+    }
+    ELFIO::string_section_accessor strsec(reader.sections[str_link]);
+    auto str_offset = strsec.add_string(std::string(soname));
+
+    // 4. Overwrite the DT_NULL slot with {DT_NEEDED, str_offset}.
+    //    The slot at null_idx+1 is already zero (DT_NULL) — it becomes
+    //    the new terminator.
+    std::vector<uint8_t> buf(raw, raw + dyn_sec->get_size());
+    uint8_t* target = buf.data() + null_idx * entry_size;
+
+    if (is64) {
+        ELFIO::Elf64_Dyn d{};
+        d.d_tag      = static_cast<ELFIO::Elf_Sxword>(DT_NEEDED);
+        d.d_un.d_val = static_cast<ELFIO::Elf_Xword>(str_offset);
+        std::memcpy(target, &d, sizeof(d));
+    } else {
+        ELFIO::Elf32_Dyn d{};
+        d.d_tag      = static_cast<ELFIO::Elf_Sword>(DT_NEEDED);
+        d.d_un.d_val = static_cast<ELFIO::Elf_Word>(str_offset);
+        std::memcpy(target, &d, sizeof(d));
+    }
+
+    dyn_sec->set_data(reinterpret_cast<const char*>(buf.data()), buf.size());
     return {};
 }
 
