@@ -70,39 +70,37 @@ public:
     emit_region_patch(uint64_t region_size,
                       uint64_t from_addr, uint64_t to_addr) noexcept = 0;
 
-    /// Fix up a pointer displacement (LEA disp32 / ADR imm21).
+    /// Fix up a pointer-loading displacement (LEA disp32 / ADR imm21).
+    ///
+    /// The emitter computes the correct encoded displacement internally:
+    ///   x86_64/x86_32: disp32 = target_va - (fixup_va + 4)
+    ///   ARM64:          imm21  = target_va - fixup_va
+    ///
+    /// PayloadBuilder provides virtual addresses only — no arch knowledge.
     [[nodiscard]] virtual tl::expected<void, Common::DiagnosticCode>
-    fixup_ptr_disp(std::vector<uint8_t>& code,
-                   size_t offset, int64_t disp) noexcept = 0;
+    fixup_ptr(std::vector<uint8_t>& code, std::size_t offset,
+              uint64_t fixup_va, uint64_t target_va) noexcept = 0;
 
     /// Fix up a branch displacement (JMP rel32 / B imm26).
+    /// Same ownership model as fixup_ptr — emitter owns the encoding.
     [[nodiscard]] virtual tl::expected<void, Common::DiagnosticCode>
-    fixup_branch_disp(std::vector<uint8_t>& code,
-                      size_t offset, int64_t disp) noexcept = 0;
+    fixup_branch(std::vector<uint8_t>& code, std::size_t offset,
+                 uint64_t fixup_va, uint64_t target_va) noexcept = 0;
 
-    /// Fix up a size/count immediate (MOV imm32 / MOVZ imm16).
+    /// Fix up a size/count immediate.  Not PC-relative — no VA needed.
     virtual void fixup_immediate(std::vector<uint8_t>& code,
-                                 size_t offset, uint64_t value) noexcept = 0;
+                                 std::size_t offset,
+                                 uint64_t value) noexcept = 0;
 
     /// Fix up the static VA for ASLR delta computation (D13§D3).
+    /// Absolute value, not PC-relative.
     virtual void fixup_static_va(std::vector<uint8_t>& code,
-                                 size_t offset, size_t size,
+                                 std::size_t offset, std::size_t size,
                                  uint64_t va) noexcept = 0;
 
     /// Constants from ArchTraits, exposed for PayloadBuilder.
-    [[nodiscard]] virtual size_t min_region_size() const noexcept = 0;
+    [[nodiscard]] virtual std::size_t min_region_size() const noexcept = 0;
     [[nodiscard]] virtual int64_t max_branch_distance() const noexcept = 0;
-
-    /// Bias between the fixup field address and the IP/PC the CPU uses
-    /// when resolving the displacement.
-    ///
-    /// x86_64 / x86_32: RIP/EIP = fixup_addr + 4 (IP advances past the
-    ///         disp32 field), so bias = 4.
-    /// ARM64:  PC = instruction_addr = fixup_addr, so bias = 0.
-    ///
-    /// PayloadBuilder subtracts this from every RIP/PC-relative displacement
-    /// so that fixup methods can write the value as-is.
-    [[nodiscard]] virtual int64_t pc_fixup_bias() const noexcept = 0;
 };
 
 /// Factory. Creates the appropriate emitter for the given {arch, mode}.

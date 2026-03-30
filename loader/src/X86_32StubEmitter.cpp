@@ -137,33 +137,37 @@ public:
     }
 
     tl::expected<void, DC>
-    fixup_ptr_disp(std::vector<uint8_t>& code, size_t offset, int64_t disp) noexcept override {
+    fixup_ptr(std::vector<uint8_t>& code, std::size_t offset,
+              uint64_t fixup_va, uint64_t target_va) noexcept override {
         if (offset + 4 > code.size())
             return tl::unexpected(DC::PatchStubGenerationFailed);
+        // x86_32 EIP-relative: EIP = fixup_addr + 4 after reading disp32
+        auto disp = static_cast<int64_t>(target_va - (fixup_va + 4));
         auto d = static_cast<int32_t>(disp);
         std::memcpy(code.data() + offset, &d, 4);
         return {};
     }
 
     tl::expected<void, DC>
-    fixup_branch_disp(std::vector<uint8_t>& code, size_t offset, int64_t disp) noexcept override {
-        return fixup_ptr_disp(code, offset, disp);
+    fixup_branch(std::vector<uint8_t>& code, std::size_t offset,
+                 uint64_t fixup_va, uint64_t target_va) noexcept override {
+        return fixup_ptr(code, offset, fixup_va, target_va);
     }
 
-    void fixup_immediate(std::vector<uint8_t>& code, size_t offset, uint64_t val) noexcept override {
+    void fixup_immediate(std::vector<uint8_t>& code, std::size_t offset,
+                         uint64_t val) noexcept override {
         auto v = static_cast<uint32_t>(val);
         std::memcpy(code.data() + offset, &v, 4);
     }
 
-    void fixup_static_va(std::vector<uint8_t>& code, size_t offset,
-                         size_t /*size*/, uint64_t va) noexcept override {
+    void fixup_static_va(std::vector<uint8_t>& code, std::size_t offset,
+                         std::size_t /*size*/, uint64_t va) noexcept override {
         auto v = static_cast<uint32_t>(va);
         std::memcpy(code.data() + offset, &v, 4);
     }
 
-    size_t min_region_size() const noexcept override { return Traits::min_region_size; }
+    std::size_t min_region_size() const noexcept override { return Traits::min_region_size; }
     int64_t max_branch_distance() const noexcept override { return Traits::max_branch_dist; }
-    int64_t pc_fixup_bias() const noexcept override { return 4; }
 };
 
 std::unique_ptr<StubEmitter> make_x86_32_emitter() {

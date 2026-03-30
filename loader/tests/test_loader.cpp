@@ -193,11 +193,13 @@ TEST(StubEmitter, RegionPatchTooSmall) {
 // StubEmitter — fixup methods
 // ============================================================================
 
-TEST(StubEmitter, X64FixupPtrDisp) {
+TEST(StubEmitter, X64FixupPtr) {
     auto e = Loader::create_emitter(Common::FileArch::X86, Common::FileMode::MODE_64);
     auto r = e->emit_entry_stub();
     ASSERT_TRUE(r);
-    auto fx = e->fixup_ptr_disp(r->code, r->blob_fixup_offset, -1000);
+    // fixup_ptr takes (fixup_va, target_va); emitter computes disp internally.
+    // x86_64: disp = target_va - (fixup_va + 4) = 1004 - (2000 + 4) = -1000
+    auto fx = e->fixup_ptr(r->code, r->blob_fixup_offset, 2000, 1004);
     EXPECT_TRUE(fx);
     int32_t patched;
     std::memcpy(&patched, r->code.data() + r->blob_fixup_offset, 4);
@@ -267,19 +269,20 @@ TEST(PayloadBuilder, SingleRegionLayout) {
     std::vector<Loader::RegionPatchInfo> regions = {{"f", 0x1000, 32}};
     auto r = Loader::build_payload(regions, blob, FAKE_SEED, 0x10000, *e);
     ASSERT_TRUE(r);
+    // New layout: [call_slot(8)] [blob(128)] [seed(32)] [stubs...]
     EXPECT_EQ(r->blob_size, 128u);
-    EXPECT_EQ(r->seed_offset, 128u);
-    EXPECT_EQ(r->call_slot_offset, 128u + 32u);
+    EXPECT_EQ(r->call_slot_offset, 0u);
+    EXPECT_EQ(r->seed_offset, 8u + 128u);
     EXPECT_EQ(r->layouts.size(), 1u);
-    EXPECT_EQ(r->layouts[0].stub_offset, 128u + 32u + 8u); // blob+seed+slot
-    // Verify blob preserved
-    EXPECT_EQ(std::memcmp(r->data.data(), blob.data(), 128), 0);
-    // Verify seed preserved
-    EXPECT_EQ(std::memcmp(r->data.data() + 128, FAKE_SEED.data(), 32), 0);
-    // Verify call slot is zero
+    EXPECT_EQ(r->layouts[0].stub_offset, 8u + 128u + 32u); // slot+blob+seed
+    // Verify call slot at offset 0 is zero
     uint64_t slot;
-    std::memcpy(&slot, r->data.data() + 128 + 32, 8);
+    std::memcpy(&slot, r->data.data(), 8);
     EXPECT_EQ(slot, 0u);
+    // Verify blob preserved at offset 8
+    EXPECT_EQ(std::memcmp(r->data.data() + 8, blob.data(), 128), 0);
+    // Verify seed preserved
+    EXPECT_EQ(std::memcmp(r->data.data() + 8 + 128, FAKE_SEED.data(), 32), 0);
 }
 
 TEST(PayloadBuilder, MultipleRegionsLayout) {

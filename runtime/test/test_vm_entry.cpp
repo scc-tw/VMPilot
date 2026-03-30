@@ -1,7 +1,7 @@
 /// @file test_vm_entry.cpp
 /// @brief End-to-end tests for the Phase 10 public VM entry API.
 ///
-/// Tests exercise vm_execute() and vm_execute_with_args() as the top-level
+/// Tests exercise vm_execute(VmExecRequest) as the top-level
 /// entry point, verifying the full load-execute-decode lifecycle.
 
 #include "test_blob_builder.hpp"
@@ -72,7 +72,12 @@ TEST(VmEntry, SimpleHalt) {
     auto blob = build_test_blob(seed, {bb});
     auto config = default_config();
 
-    auto result = vm_execute(blob.data(), blob.size(), seed, 0, config);
+    VmExecRequest req;
+    req.blob_data = blob.data();
+    req.blob_size = blob.size();
+    req.stored_seed = seed;
+    req.config = config;
+    auto result = vm_execute(req);
     ASSERT_TRUE(result.has_value())
         << "vm_execute failed: 0x" << std::hex
         << static_cast<uint32_t>(result.error());
@@ -111,7 +116,12 @@ TEST(VmEntry, ReturnConstant) {
     auto blob = build_test_blob_ex(seed, {bb}, pool);
     auto config = default_config();
 
-    auto result = vm_execute(blob.data(), blob.size(), seed, 0, config);
+    VmExecRequest req;
+    req.blob_data = blob.data();
+    req.blob_size = blob.size();
+    req.stored_seed = seed;
+    req.config = config;
+    auto result = vm_execute(req);
     ASSERT_TRUE(result.has_value())
         << "vm_execute failed: 0x" << std::hex
         << static_cast<uint32_t>(result.error());
@@ -152,10 +162,16 @@ TEST(VmEntry, AddTwoArgs) {
 
     // Pass initial args: r0 = 10, r1 = 20
     uint64_t args[] = {10, 20};
-    auto result = vm_execute_with_args(blob.data(), blob.size(), seed,
-                                       args, 2, 0, config);
+    VmExecRequest req;
+    req.blob_data = blob.data();
+    req.blob_size = blob.size();
+    req.stored_seed = seed;
+    req.initial_regs = args;
+    req.num_regs = 2;
+    req.config = config;
+    auto result = vm_execute(req);
     ASSERT_TRUE(result.has_value())
-        << "vm_execute_with_args failed: 0x" << std::hex
+        << "vm_execute failed: 0x" << std::hex
         << static_cast<uint32_t>(result.error());
     EXPECT_EQ(result->status, VmResult::Halted);
     EXPECT_EQ(result->return_value, 30u)
@@ -209,10 +225,16 @@ TEST(VmEntry, WithArguments) {
 
     // 4 args: r0=100, r1=200, r2=300, r3=400 -> sum = 1000
     uint64_t args[] = {100, 200, 300, 400};
-    auto result = vm_execute_with_args(blob.data(), blob.size(), seed,
-                                       args, 4, 0, config);
+    VmExecRequest req;
+    req.blob_data = blob.data();
+    req.blob_size = blob.size();
+    req.stored_seed = seed;
+    req.initial_regs = args;
+    req.num_regs = 4;
+    req.config = config;
+    auto result = vm_execute(req);
     ASSERT_TRUE(result.has_value())
-        << "vm_execute_with_args failed: 0x" << std::hex
+        << "vm_execute failed: 0x" << std::hex
         << static_cast<uint32_t>(result.error());
     EXPECT_EQ(result->status, VmResult::Halted);
     EXPECT_EQ(result->return_value, 1000u)
@@ -252,10 +274,16 @@ TEST(VmEntry, MultiplyArgs) {
 
     // r0 = 7, r1 = 6 -> 7 * 6 = 42
     uint64_t args[] = {7, 6};
-    auto result = vm_execute_with_args(blob.data(), blob.size(), seed,
-                                       args, 2, 0, config);
+    VmExecRequest req;
+    req.blob_data = blob.data();
+    req.blob_size = blob.size();
+    req.stored_seed = seed;
+    req.initial_regs = args;
+    req.num_regs = 2;
+    req.config = config;
+    auto result = vm_execute(req);
     ASSERT_TRUE(result.has_value())
-        << "vm_execute_with_args failed: 0x" << std::hex
+        << "vm_execute failed: 0x" << std::hex
         << static_cast<uint32_t>(result.error());
     EXPECT_EQ(result->status, VmResult::Halted);
     EXPECT_EQ(result->return_value, 42u)
@@ -294,10 +322,16 @@ TEST(VmEntry, XorArgs) {
 
     // r0 = 0xFF, r1 = 0x0F -> 0xFF ^ 0x0F = 0xF0
     uint64_t args[] = {0xFF, 0x0F};
-    auto result = vm_execute_with_args(blob.data(), blob.size(), seed,
-                                       args, 2, 0, config);
+    VmExecRequest req;
+    req.blob_data = blob.data();
+    req.blob_size = blob.size();
+    req.stored_seed = seed;
+    req.initial_regs = args;
+    req.num_regs = 2;
+    req.config = config;
+    auto result = vm_execute(req);
     ASSERT_TRUE(result.has_value())
-        << "vm_execute_with_args failed: 0x" << std::hex
+        << "vm_execute failed: 0x" << std::hex
         << static_cast<uint32_t>(result.error());
     EXPECT_EQ(result->status, VmResult::Halted);
     EXPECT_EQ(result->return_value, 0xF0u)
@@ -318,7 +352,12 @@ TEST(VmEntry, InvalidBlob) {
     std::memset(garbage, 0xDE, sizeof(garbage));
 
     auto config = default_config();
-    auto result = vm_execute(garbage, sizeof(garbage), seed, 0, config);
+    VmExecRequest req;
+    req.blob_data = garbage;
+    req.blob_size = sizeof(garbage);
+    req.stored_seed = seed;
+    req.config = config;
+    auto result = vm_execute(req);
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error(), DiagnosticCode::BlobMagicMismatch);
 }
@@ -358,7 +397,12 @@ TEST(VmEntry, DefaultConfig) {
     // anti-debug checks. For this test, we pass debug_mode = true to
     // avoid false positives from anti-debug in test environments.
     auto config = default_config();
-    auto result = vm_execute(blob.data(), blob.size(), seed, 0, config);
+    VmExecRequest req;
+    req.blob_data = blob.data();
+    req.blob_size = blob.size();
+    req.stored_seed = seed;
+    req.config = config;
+    auto result = vm_execute(req);
     ASSERT_TRUE(result.has_value())
         << "vm_execute with default config failed: 0x" << std::hex
         << static_cast<uint32_t>(result.error());

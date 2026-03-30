@@ -101,8 +101,8 @@ TEST_F(HandoverX64, BlobPreservedAtOffset0) {
     auto r = build_payload(regions, blob, TEST_SEED, SEGMENT_VA, *emitter, diag);
     ASSERT_TRUE(r.has_value());
 
-    ASSERT_GE(r->data.size(), blob.size());
-    EXPECT_EQ(std::memcmp(r->data.data(), blob.data(), blob.size()), 0);
+    ASSERT_GE(r->data.size(), CALL_SLOT_SIZE + blob.size());
+    EXPECT_EQ(std::memcmp(r->data.data() + CALL_SLOT_SIZE, blob.data(), blob.size()), 0);
     EXPECT_EQ(r->blob_size, 256u);
 }
 
@@ -113,7 +113,7 @@ TEST_F(HandoverX64, SeedFollowsBlob) {
     auto r = build_payload(regions, blob, TEST_SEED, SEGMENT_VA, *emitter, diag);
     ASSERT_TRUE(r.has_value());
 
-    EXPECT_EQ(r->seed_offset, 128u);
+    EXPECT_EQ(r->seed_offset, CALL_SLOT_SIZE + 128u);
     EXPECT_EQ(std::memcmp(r->data.data() + r->seed_offset,
                            TEST_SEED.data(), SEED_SIZE), 0);
 }
@@ -125,7 +125,7 @@ TEST_F(HandoverX64, CallSlotZeroInitialized) {
     auto r = build_payload(regions, blob, TEST_SEED, SEGMENT_VA, *emitter, diag);
     ASSERT_TRUE(r.has_value());
 
-    EXPECT_EQ(r->call_slot_offset, 128u + SEED_SIZE);
+    EXPECT_EQ(r->call_slot_offset, 0u);
     uint64_t slot = read64_le(r->data.data() + r->call_slot_offset);
     EXPECT_EQ(slot, 0u) << "call_slot must be zero (runtime fills it)";
 }
@@ -138,7 +138,7 @@ TEST_F(HandoverX64, StubFollowsCallSlot) {
     ASSERT_TRUE(r.has_value());
     ASSERT_EQ(r->layouts.size(), 1u);
 
-    EXPECT_EQ(r->layouts[0].stub_offset, 64u + SEED_SIZE + CALL_SLOT_SIZE);
+    EXPECT_EQ(r->layouts[0].stub_offset, CALL_SLOT_SIZE + 64u + SEED_SIZE);
     EXPECT_GT(r->layouts[0].stub_size, 0u);
 }
 
@@ -304,11 +304,11 @@ TEST_F(HandoverARM64, PayloadLayoutCorrect) {
     ASSERT_TRUE(r.has_value());
 
     EXPECT_EQ(r->blob_size, 256u);
-    EXPECT_EQ(r->seed_offset, 256u);
-    EXPECT_EQ(r->call_slot_offset, 256u + SEED_SIZE);
+    EXPECT_EQ(r->seed_offset, CALL_SLOT_SIZE + 256u);
+    EXPECT_EQ(r->call_slot_offset, 0u);
 
     ASSERT_EQ(r->layouts.size(), 1u);
-    EXPECT_EQ(r->layouts[0].stub_offset, 256u + SEED_SIZE + CALL_SLOT_SIZE);
+    EXPECT_EQ(r->layouts[0].stub_offset, CALL_SLOT_SIZE + 256u + SEED_SIZE);
     EXPECT_EQ(r->layouts[0].stub_size % 4, 0u)
         << "ARM64 stub must be instruction-aligned";
 }
@@ -460,7 +460,7 @@ protected:
 TEST_F(HandoverX32, EmitterCreated) {
     EXPECT_EQ(emitter->min_region_size(), 5u);
     EXPECT_EQ(emitter->max_branch_distance(), INT32_MAX);
-    EXPECT_EQ(emitter->pc_fixup_bias(), 4) << "x86_32 EIP advance = 4";
+    // pc_fixup_bias removed — emitters now own displacement encoding internally
 }
 
 TEST_F(HandoverX32, StubEndsWithJmpRel32) {
@@ -485,12 +485,10 @@ TEST_F(HandoverX32, PayloadLayoutCorrect) {
     ASSERT_TRUE(r.has_value());
 
     EXPECT_EQ(r->blob_size, 128u);
-    EXPECT_EQ(r->seed_offset, 128u);
-    EXPECT_EQ(r->call_slot_offset, 128u + SEED_SIZE + CALL_SLOT_SIZE - CALL_SLOT_SIZE);
-    // call_slot = blob_size + SEED_SIZE
-    EXPECT_EQ(r->call_slot_offset, 128u + SEED_SIZE);
+    EXPECT_EQ(r->seed_offset, CALL_SLOT_SIZE + 128u);
+    EXPECT_EQ(r->call_slot_offset, 0u);
     ASSERT_EQ(r->layouts.size(), 1u);
-    EXPECT_EQ(r->layouts[0].stub_offset, 128u + SEED_SIZE + CALL_SLOT_SIZE);
+    EXPECT_EQ(r->layouts[0].stub_offset, CALL_SLOT_SIZE + 128u + SEED_SIZE);
 }
 
 TEST_F(HandoverX32, ResumeJumpTargetsRegionEnd) {
@@ -593,7 +591,7 @@ TEST(HandoverParity, HeaderLayoutIsArchIndependent) {
     ASSERT_TRUE(r1.has_value());
     ASSERT_TRUE(r2.has_value());
 
-    // Header region (blob + seed + call_slot) is identical
+    // Header region (call_slot + blob + seed) is identical
     EXPECT_EQ(r1->blob_size, r2->blob_size);
     EXPECT_EQ(r1->seed_offset, r2->seed_offset);
     EXPECT_EQ(r1->call_slot_offset, r2->call_slot_offset);
@@ -624,8 +622,8 @@ TEST(HandoverParity, BothArchesPreserveBlobAndSeed) {
     ASSERT_TRUE(r1.has_value());
     ASSERT_TRUE(r2.has_value());
 
-    // Header bytes (blob + seed + call_slot) must be identical
-    size_t header_size = r1->call_slot_offset + CALL_SLOT_SIZE;
+    // Header bytes (call_slot + blob + seed) must be identical
+    size_t header_size = CALL_SLOT_SIZE + r1->blob_size + SEED_SIZE;
     ASSERT_EQ(r1->data.size() >= header_size, true);
     ASSERT_EQ(r2->data.size() >= header_size, true);
     EXPECT_EQ(std::memcmp(r1->data.data(), r2->data.data(), header_size), 0);
@@ -653,7 +651,7 @@ TEST(HandoverArchSupport, X86_32Supported) {
     auto e = create_emitter(FileArch::X86, FileMode::MODE_32);
     ASSERT_NE(e, nullptr);
     EXPECT_EQ(e->min_region_size(), 5u);
-    EXPECT_EQ(e->pc_fixup_bias(), 4);
+    // pc_fixup_bias removed — displacement encoding is internal to emitter
 }
 
 TEST(HandoverArchSupport, UnsupportedArchReturnsNull) {

@@ -202,23 +202,22 @@ public:
                       uint64_t from_addr, uint64_t to_addr) noexcept override;
 
     [[nodiscard]] tl::expected<void, DC>
-    fixup_ptr_disp(std::vector<uint8_t>& code,
-                   size_t offset, int64_t disp) noexcept override;
+    fixup_ptr(std::vector<uint8_t>& code, std::size_t offset,
+              uint64_t fixup_va, uint64_t target_va) noexcept override;
 
     [[nodiscard]] tl::expected<void, DC>
-    fixup_branch_disp(std::vector<uint8_t>& code,
-                      size_t offset, int64_t disp) noexcept override;
+    fixup_branch(std::vector<uint8_t>& code, std::size_t offset,
+                 uint64_t fixup_va, uint64_t target_va) noexcept override;
 
     void fixup_immediate(std::vector<uint8_t>& code,
-                         size_t offset, uint64_t value) noexcept override;
+                         std::size_t offset, uint64_t value) noexcept override;
 
     void fixup_static_va(std::vector<uint8_t>& code,
-                         size_t offset, size_t size,
+                         std::size_t offset, std::size_t size,
                          uint64_t va) noexcept override;
 
-    [[nodiscard]] size_t  min_region_size()    const noexcept override;
-    [[nodiscard]] int64_t max_branch_distance() const noexcept override;
-    [[nodiscard]] int64_t pc_fixup_bias()       const noexcept override;
+    [[nodiscard]] std::size_t min_region_size()    const noexcept override;
+    [[nodiscard]] int64_t     max_branch_distance() const noexcept override;
 };
 
 // -----------------------------------------------------------------------
@@ -361,10 +360,13 @@ ARM64StubEmitter::emit_region_patch(uint64_t region_size,
 // -----------------------------------------------------------------------
 
 tl::expected<void, DC>
-ARM64StubEmitter::fixup_ptr_disp(std::vector<uint8_t>& code,
-                                  size_t offset, int64_t disp) noexcept {
+ARM64StubEmitter::fixup_ptr(std::vector<uint8_t>& code, std::size_t offset,
+                             uint64_t fixup_va, uint64_t target_va) noexcept {
     if (offset + 4 > code.size())
         return tl::unexpected(DC::PatchStubGenerationFailed);
+
+    // ARM64 PC = instruction address (no +4 bias).
+    auto disp = static_cast<int64_t>(target_va - fixup_va);
 
     // Re-encode ADR Xd, #imm21.
     // Preserve existing Rd field; replace immhi:immlo with new displacement.
@@ -375,10 +377,12 @@ ARM64StubEmitter::fixup_ptr_disp(std::vector<uint8_t>& code,
 }
 
 tl::expected<void, DC>
-ARM64StubEmitter::fixup_branch_disp(std::vector<uint8_t>& code,
-                                     size_t offset, int64_t disp) noexcept {
+ARM64StubEmitter::fixup_branch(std::vector<uint8_t>& code, std::size_t offset,
+                                uint64_t fixup_va, uint64_t target_va) noexcept {
     if (offset + 4 > code.size())
         return tl::unexpected(DC::PatchStubGenerationFailed);
+
+    auto disp = static_cast<int64_t>(target_va - fixup_va);
 
     // Re-encode B imm26.
     write32(code, offset, arm64_b(disp));
@@ -386,7 +390,7 @@ ARM64StubEmitter::fixup_branch_disp(std::vector<uint8_t>& code,
 }
 
 void ARM64StubEmitter::fixup_immediate(std::vector<uint8_t>& code,
-                                        size_t offset,
+                                        std::size_t offset,
                                         uint64_t value) noexcept {
     // Re-encode MOVZ with the given 16-bit value.
     // Detect the register from the existing instruction.
@@ -403,7 +407,7 @@ void ARM64StubEmitter::fixup_immediate(std::vector<uint8_t>& code,
 }
 
 void ARM64StubEmitter::fixup_static_va(std::vector<uint8_t>& code,
-                                        size_t offset, size_t /*size*/,
+                                        std::size_t offset, std::size_t /*size*/,
                                         uint64_t va) noexcept {
     // Re-encode MOVZ + 3x MOVK (16 bytes, 4 instructions).
     // Preserve Rd from existing first instruction.
@@ -416,9 +420,8 @@ void ARM64StubEmitter::fixup_static_va(std::vector<uint8_t>& code,
     write32(code, offset + 12, arm64_movk_x(rd, static_cast<uint16_t>(va >> 48), 3));
 }
 
-size_t  ARM64StubEmitter::min_region_size()     const noexcept { return Traits::min_region_size; }
-int64_t ARM64StubEmitter::max_branch_distance() const noexcept { return Traits::max_branch_dist; }
-int64_t ARM64StubEmitter::pc_fixup_bias()       const noexcept { return 0; }
+std::size_t ARM64StubEmitter::min_region_size()    const noexcept { return Traits::min_region_size; }
+int64_t     ARM64StubEmitter::max_branch_distance() const noexcept { return Traits::max_branch_dist; }
 
 // Factory — called from StubEmitter.cpp via create_emitter().
 std::unique_ptr<StubEmitter> make_arm64_emitter() {

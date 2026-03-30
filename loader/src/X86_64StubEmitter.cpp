@@ -145,23 +145,22 @@ public:
                       uint64_t from_addr, uint64_t to_addr) noexcept override;
 
     [[nodiscard]] tl::expected<void, DC>
-    fixup_ptr_disp(std::vector<uint8_t>& code,
-                   size_t offset, int64_t disp) noexcept override;
+    fixup_ptr(std::vector<uint8_t>& code, std::size_t offset,
+              uint64_t fixup_va, uint64_t target_va) noexcept override;
 
     [[nodiscard]] tl::expected<void, DC>
-    fixup_branch_disp(std::vector<uint8_t>& code,
-                      size_t offset, int64_t disp) noexcept override;
+    fixup_branch(std::vector<uint8_t>& code, std::size_t offset,
+                 uint64_t fixup_va, uint64_t target_va) noexcept override;
 
     void fixup_immediate(std::vector<uint8_t>& code,
-                         size_t offset, uint64_t value) noexcept override;
+                         std::size_t offset, uint64_t value) noexcept override;
 
     void fixup_static_va(std::vector<uint8_t>& code,
-                         size_t offset, size_t size,
+                         std::size_t offset, std::size_t size,
                          uint64_t va) noexcept override;
 
-    [[nodiscard]] size_t  min_region_size()    const noexcept override;
-    [[nodiscard]] int64_t max_branch_distance() const noexcept override;
-    [[nodiscard]] int64_t pc_fixup_bias()       const noexcept override;
+    [[nodiscard]] std::size_t min_region_size()    const noexcept override;
+    [[nodiscard]] int64_t     max_branch_distance() const noexcept override;
 };
 
 // -----------------------------------------------------------------------
@@ -287,43 +286,44 @@ X86_64StubEmitter::emit_region_patch(uint64_t region_size,
 // -----------------------------------------------------------------------
 
 tl::expected<void, DC>
-X86_64StubEmitter::fixup_ptr_disp(std::vector<uint8_t>& code,
-                                   size_t offset, int64_t disp) noexcept {
+X86_64StubEmitter::fixup_ptr(std::vector<uint8_t>& code, std::size_t offset,
+                              uint64_t fixup_va, uint64_t target_va) noexcept {
     if (offset + 4 > code.size())
         return tl::unexpected(DC::PatchStubGenerationFailed);
 
-    auto d32 = static_cast<int32_t>(disp);
+    auto disp = static_cast<int64_t>(target_va - (fixup_va + 4));
+    auto d32  = static_cast<int32_t>(disp);
     std::memcpy(&code[offset], &d32, 4);
     return {};
 }
 
 tl::expected<void, DC>
-X86_64StubEmitter::fixup_branch_disp(std::vector<uint8_t>& code,
-                                      size_t offset, int64_t disp) noexcept {
+X86_64StubEmitter::fixup_branch(std::vector<uint8_t>& code, std::size_t offset,
+                                 uint64_t fixup_va, uint64_t target_va) noexcept {
     if (offset + 4 > code.size())
         return tl::unexpected(DC::PatchStubGenerationFailed);
 
-    auto d32 = static_cast<int32_t>(disp);
+    auto disp = static_cast<int64_t>(target_va - (fixup_va + 4));
+    auto d32  = static_cast<int32_t>(disp);
     std::memcpy(&code[offset], &d32, 4);
     return {};
 }
 
 void X86_64StubEmitter::fixup_immediate(std::vector<uint8_t>& code,
-                                         size_t offset,
+                                         std::size_t offset,
                                          uint64_t value) noexcept {
     auto v32 = static_cast<uint32_t>(value);
     std::memcpy(&code[offset], &v32, 4);
 }
 
 void X86_64StubEmitter::fixup_static_va(std::vector<uint8_t>& code,
-                                         size_t offset, size_t /*size*/,
+                                         std::size_t offset, std::size_t /*size*/,
                                          uint64_t va) noexcept {
     std::memcpy(&code[offset], &va, 8);
 }
 
-size_t  X86_64StubEmitter::min_region_size()     const noexcept { return Traits::min_region_size; }
-int64_t X86_64StubEmitter::max_branch_distance() const noexcept { return Traits::max_branch_dist; }
-int64_t X86_64StubEmitter::pc_fixup_bias()       const noexcept { return 4; }
+std::size_t X86_64StubEmitter::min_region_size()    const noexcept { return Traits::min_region_size; }
+int64_t     X86_64StubEmitter::max_branch_distance() const noexcept { return Traits::max_branch_dist; }
 
 // Factory — called from StubEmitter.cpp via create_emitter().
 std::unique_ptr<StubEmitter> make_x86_64_emitter() {

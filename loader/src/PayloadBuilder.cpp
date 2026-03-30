@@ -37,11 +37,16 @@ build_payload(const std::vector<RegionPatchInfo>& regions,
         stubs.push_back(std::move(*s));
     }
 
-    // --- Layout: [ blob | seed (32) | call_slot (8) | stubs... ] ---
-    const size_t blob_size = blob_data.size();
-    const size_t seed_offset = blob_size;
-    const size_t call_slot_offset = seed_offset + SEED_SIZE;
-    size_t payload_size = call_slot_offset + CALL_SLOT_SIZE;
+    // --- Layout: [ call_slot (8) | blob (N) | seed (32) | stubs... ] ---
+    //
+    // call_slot at offset 0: the runtime init constructor writes
+    // &vm_stub_entry to the first 8 bytes of the section — no need to
+    // know blob_size or any payload internal.
+    const size_t call_slot_offset = 0;
+    const size_t blob_offset      = CALL_SLOT_SIZE;
+    const size_t blob_size        = blob_data.size();
+    const size_t seed_offset      = blob_offset + blob_size;
+    size_t payload_size           = seed_offset + SEED_SIZE;
 
     std::vector<RegionLayout> layouts;
     layouts.reserve(regions.size());
@@ -52,66 +57,68 @@ build_payload(const std::vector<RegionPatchInfo>& regions,
 
     // --- Fix up all displacements (one pass, segment_va known) ---
     //
-    // x86_64/x86_32: RIP/EIP = fixup_addr + 4 after reading disp32, so
-    //   disp = target - (fixup_addr + 4) = target - fixup_addr - bias.
-    // ARM64: PC = instruction_addr = fixup_addr, so bias = 0.
-    const int64_t bias = emitter.pc_fixup_bias();
+    // PayloadBuilder provides (fixup_va, target_va) pairs only.
+    // Each emitter internally computes the correct encoded displacement
+    // for its architecture (x86: target - fixup - 4; ARM64: target - fixup).
+    // No bias, no arch knowledge here.
+
+    const uint64_t blob_va = segment_va + blob_offset;
+    const uint64_t seed_va = segment_va + seed_offset;
+    const uint64_t slot_va = segment_va + call_slot_offset;
 
     for (size_t i = 0; i < stubs.size(); ++i) {
         auto& s = stubs[i];
-        const auto stub_va = static_cast<int64_t>(segment_va + layouts[i].stub_offset);
+        const uint64_t stub_va = segment_va + layouts[i].stub_offset;
 
-        // blob_ptr displacement
-        const int64_t blob_disp = static_cast<int64_t>(segment_va)
-            - (stub_va + static_cast<int64_t>(s.blob_fixup_offset) + bias);
-        if (auto fx = emitter.fixup_ptr_disp(s.code, s.blob_fixup_offset, blob_disp); !fx) {
+        // blob_ptr
+        if (auto fx = emitter.fixup_ptr(s.code, s.blob_fixup_offset,
+                stub_va + s.blob_fixup_offset, blob_va); !fx) {
             diag.error("loader", DC::PatchStubGenerationFailed,
-                       "blob displacement out of range for '" + regions[i].name + "'");
+                       "blob ptr fixup failed for '" + regions[i].name + "'");
             return tl::unexpected(fx.error());
         }
 
-        // seed_ptr displacement
-        const int64_t seed_disp = static_cast<int64_t>(segment_va + seed_offset)
-            - (stub_va + static_cast<int64_t>(s.seed_fixup_offset) + bias);
-        if (auto fx = emitter.fixup_ptr_disp(s.code, s.seed_fixup_offset, seed_disp); !fx) {
+        // seed_ptr
+        if (auto fx = emitter.fixup_ptr(s.code, s.seed_fixup_offset,
+                stub_va + s.seed_fixup_offset, seed_va); !fx) {
             diag.error("loader", DC::PatchStubGenerationFailed,
-                       "seed displacement out of range for '" + regions[i].name + "'");
+                       "seed ptr fixup failed for '" + regions[i].name + "'");
             return tl::unexpected(fx.error());
         }
 
-        // call_slot displacement
-        const int64_t slot_disp = static_cast<int64_t>(segment_va + call_slot_offset)
-            - (stub_va + static_cast<int64_t>(s.call_slot_fixup_offset) + bias);
-        if (auto fx = emitter.fixup_ptr_disp(s.code, s.call_slot_fixup_offset, slot_disp); !fx) {
+        // call_slot ptr
+        if (auto fx = emitter.fixup_ptr(s.code, s.call_slot_fixup_offset,
+                stub_va + s.call_slot_fixup_offset, slot_va); !fx) {
             diag.error("loader", DC::PatchStubGenerationFailed,
-                       "call slot displacement out of range for '" + regions[i].name + "'");
+                       "call slot fixup failed for '" + regions[i].name + "'");
             return tl::unexpected(fx.error());
         }
 
-        // blob_size immediate (not PC-relative — no bias)
+        // blob_size immediate (not PC-relative)
         emitter.fixup_immediate(s.code, s.size_fixup_offset, blob_size);
 
-        // resume: jump to region.addr + region.size
-        const int64_t resume_disp = static_cast<int64_t>(regions[i].addr + regions[i].size)
-            - (stub_va + static_cast<int64_t>(s.resume_fixup_offset) + bias);
-        if (auto fx = emitter.fixup_branch_disp(s.code, s.resume_fixup_offset, resume_disp); !fx) {
+        // resume: branch to region.addr + region.size
+        if (auto fx = emitter.fixup_branch(s.code, s.resume_fixup_offset,
+                stub_va + s.resume_fixup_offset,
+                regions[i].addr + regions[i].size); !fx) {
             diag.error("loader", DC::PatchStubGenerationFailed,
-                       "resume displacement out of range for '" + regions[i].name + "'");
+                       "resume fixup failed for '" + regions[i].name + "'");
             return tl::unexpected(fx.error());
         }
 
-        // ASLR delta static VA (absolute — no bias)
+        // ASLR delta static VA (absolute, not PC-relative)
         if (s.delta_fixup_size > 0) {
-            emitter.fixup_static_va(s.code, s.delta_fixup_offset, s.delta_fixup_size,
-                                    segment_va + layouts[i].stub_offset + s.delta_ref_offset);
+            emitter.fixup_static_va(s.code, s.delta_fixup_offset,
+                                    s.delta_fixup_size,
+                                    stub_va + s.delta_ref_offset);
         }
     }
 
     // --- Assemble ---
     std::vector<uint8_t> payload(payload_size, 0);
-    std::memcpy(payload.data(), blob_data.data(), blob_size);
+    // call_slot at offset 0 — zero-initialized (runtime constructor fills it)
+    std::memcpy(payload.data() + blob_offset, blob_data.data(), blob_size);
     std::memcpy(payload.data() + seed_offset, stored_seed.data(), SEED_SIZE);
-    // call_slot = 0 initially (runtime fills it)
     for (size_t i = 0; i < stubs.size(); ++i) {
         std::memcpy(payload.data() + layouts[i].stub_offset,
                     stubs[i].code.data(), stubs[i].code.size());
