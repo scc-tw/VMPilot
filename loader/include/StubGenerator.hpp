@@ -49,6 +49,15 @@ struct Stub {
 
     // --- load_base_delta: static VA of stub (for ASLR delta computation) ---
     size_t delta_static_va_fixup_offset = 0;
+    /// Offset within the stub of the "delta reference point" instruction
+    /// (ADR on ARM64, LEA on x86-64). The patched static VA corresponds to
+    /// the runtime value this instruction computes (which may differ from
+    /// the instruction's own address — e.g. x86 LEA [rip+0] yields IP of
+    /// the *next* instruction).
+    size_t delta_ref_offset = 0;
+    /// Size of the fixup region: 8 for x86-64 (imm64), 16 for ARM64
+    /// (4 × 4-byte MOVZ/MOVK instructions).
+    size_t delta_fixup_size = 0;
 };
 
 class StubGenerator {

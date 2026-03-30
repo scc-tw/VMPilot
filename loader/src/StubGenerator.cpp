@@ -40,7 +40,22 @@ static uint32_t arm64_movz_x(uint8_t rd, uint16_t imm16) {
 static uint32_t arm64_movz_w(uint8_t rd, uint16_t imm16) {
     return 0x52800000 | (static_cast<uint32_t>(imm16) << 5) | rd;
 }
+static uint32_t arm64_movk_x(uint8_t rd, uint16_t imm16, uint8_t hw) {
+    // MOVK Xd, #imm16, LSL #(hw*16)
+    return 0xF2800000 | (static_cast<uint32_t>(hw) << 21) |
+           (static_cast<uint32_t>(imm16) << 5) | rd;
+}
 
+static uint32_t arm64_sub_reg(uint8_t rd, uint8_t rn, uint8_t rm) {
+    // SUB Xd, Xn, Xm (64-bit register subtract, no shift)
+    return 0xCB000000 | (static_cast<uint32_t>(rm) << 16) |
+           (static_cast<uint32_t>(rn) << 5) | rd;
+}
+static uint32_t arm64_str_x_sp_uoff(uint8_t rt, uint16_t byte_offset) {
+    // STR Xt, [SP, #uoff] — unsigned offset, scaled by 8
+    uint32_t imm12 = static_cast<uint32_t>(byte_offset / 8) & 0xFFF;
+    return 0xF9000000 | (imm12 << 10) | (0x1F << 5) | rt;
+}
 constexpr uint32_t ARM64_NOP = 0xD503201F;
 constexpr uint32_t ARM64_RET = 0xD65F03C0;
 
@@ -138,6 +153,26 @@ make_x86_64_entry_stub(uint32_t /*region_idx*/) {
     static constexpr uint8_t save_regs[] = {0,1,2,3,5,6,7,8,9,10,11,12,13,14,15};
     for (size_t i = 0; i < sizeof(save_regs); ++i)
         mov_to_stack(save_regs[i], static_cast<uint32_t>(i * 8));
+
+    // --- compute load_base_delta ---
+    // lea rax, [rip + 0]  ; rax = actual VA of the *next* instruction
+    c.push_back(0x48); c.push_back(0x8D); c.push_back(0x05);
+    emit_placeholder32(c);  // rip-relative disp = 0
+    // delta_ref_offset = byte after LEA = what rax receives
+    s.delta_ref_offset = c.size();  // = delta_lea_offset + 7
+
+    // movabs r10, imm64   ; r10 = static VA (patched by fixup_delta_static_va)
+    c.push_back(0x49); c.push_back(0xBA);
+    s.delta_static_va_fixup_offset = c.size();
+    emit_u64_le(c, 0);  // placeholder: 8 bytes of static VA
+    s.delta_fixup_size = 8;
+
+    // sub rax, r10        ; rax = actual - static = load_base_delta
+    c.push_back(0x4C); c.push_back(0x29); c.push_back(0xD0); // sub rax, r10
+
+    // mov [rsp + 120], rax  ; store delta at known offset (after 15 saved GPRs)
+    c.push_back(0x48); c.push_back(0x89); c.push_back(0x44);
+    c.push_back(0x24); c.push_back(0x78);  // [rsp+0x78] = [rsp+120]
 
     // --- arg0: rdi = blob_ptr ---
     c.push_back(0x48); c.push_back(0x8D); c.push_back(0x3D);
@@ -239,6 +274,28 @@ make_arm64_entry_stub(uint32_t /*region_idx*/) {
     }
     // str x30, [sp, #240]
     emit_u32_le(c, 0xF9007BFE);  // str x30, [sp, #240] (offset=240/8=30)
+
+    // --- compute load_base_delta ---
+    // adr x9, .  (x9 = actual VA of this ADR instruction)
+    s.delta_ref_offset = c.size();  // ADR's own address = the reference point
+    emit_u32_le(c, arm64_adr(9, 0));  // adr x9, #0
+
+    // movz x10, #static_va[15:0]        (patched by fixup_delta_static_va)
+    s.delta_static_va_fixup_offset = c.size();
+    emit_u32_le(c, arm64_movz_x(10, 0));
+    // movk x10, #static_va[31:16], lsl #16
+    emit_u32_le(c, arm64_movk_x(10, 0, 1));
+    // movk x10, #static_va[47:32], lsl #32
+    emit_u32_le(c, arm64_movk_x(10, 0, 2));
+    // movk x10, #static_va[63:48], lsl #48
+    emit_u32_le(c, arm64_movk_x(10, 0, 3));
+    s.delta_fixup_size = 16;  // 4 instructions × 4 bytes
+
+    // sub x9, x9, x10    (x9 = load_base_delta)
+    emit_u32_le(c, arm64_sub_reg(9, 9, 10));
+
+    // str x9, [sp, #248]  (store delta at known offset for runtime)
+    emit_u32_le(c, arm64_str_x_sp_uoff(9, 248));
 
     // --- arg0: x0 = blob_ptr (ADR x0, #disp) ---
     s.blob_fixup_offset = c.size();
@@ -395,10 +452,40 @@ void StubGenerator::fixup_blob_size(Stub& s, uint64_t blob_size) noexcept {
 }
 
 void StubGenerator::fixup_delta_static_va(Stub& s, uint64_t static_va) noexcept {
-    // Phase 2 — placeholder. Will write the static VA of the stub itself
-    // so the entry stub can compute load_base_delta at runtime.
     const auto off = s.delta_static_va_fixup_offset;
-    if (off == 0 || off + 8 > s.code.size()) return;
+    if (off == 0) return;
+
+    // Detect architecture by inspecting the first instruction at fixup offset.
+    // ARM64 MOVZ X10: opcode mask 0xFF800000 == 0xD2800000 (sf=1, opc=10, hw=00)
+    // x86-64: raw imm64 (8 bytes after movabs prefix)
+    if (off + 4 <= s.code.size()) {
+        const uint32_t first = static_cast<uint32_t>(s.code[off]) |
+                               (static_cast<uint32_t>(s.code[off+1]) << 8) |
+                               (static_cast<uint32_t>(s.code[off+2]) << 16) |
+                               (static_cast<uint32_t>(s.code[off+3]) << 24);
+
+        if ((first & 0xFF800000) == 0xD2800000) {
+            // ARM64: patch 4 instructions (MOVZ + 3 MOVK) at consecutive offsets
+            if (off + 16 > s.code.size()) return;
+            const uint8_t rd = first & 0x1F;
+
+            auto write_insn = [&](size_t insn_off, uint32_t insn) {
+                s.code[insn_off+0] = static_cast<uint8_t>(insn);
+                s.code[insn_off+1] = static_cast<uint8_t>(insn >> 8);
+                s.code[insn_off+2] = static_cast<uint8_t>(insn >> 16);
+                s.code[insn_off+3] = static_cast<uint8_t>(insn >> 24);
+            };
+
+            write_insn(off,      arm64_movz_x(rd, static_cast<uint16_t>(static_va)));
+            write_insn(off + 4,  arm64_movk_x(rd, static_cast<uint16_t>(static_va >> 16), 1));
+            write_insn(off + 8,  arm64_movk_x(rd, static_cast<uint16_t>(static_va >> 32), 2));
+            write_insn(off + 12, arm64_movk_x(rd, static_cast<uint16_t>(static_va >> 48), 3));
+            return;
+        }
+    }
+
+    // x86-64: raw 8-byte immediate (movabs r10, imm64)
+    if (off + 8 > s.code.size()) return;
     std::memcpy(s.code.data() + off, &static_va, 8);
 }
 

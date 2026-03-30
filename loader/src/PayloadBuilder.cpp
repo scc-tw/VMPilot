@@ -50,6 +50,10 @@ build_payload(const std::vector<RegionPatchInfo>& regions,
         // Resume fixup: payload_offset = stub_offset + resume_fixup within stub
         rl.resume_fixup_payload_offset = payload_size + stubs[i].resume_fixup_offset;
         rl.resume_insn_size = stubs[i].resume_insn_size;
+        // Delta fixup (Phase 2: PIE/ASLR)
+        rl.delta_fixup_payload_offset = payload_size + stubs[i].delta_static_va_fixup_offset;
+        rl.delta_ref_stub_offset = stubs[i].delta_ref_offset;
+        rl.delta_fixup_size = stubs[i].delta_fixup_size;
         layouts.push_back(std::move(rl));
         payload_size += stubs[i].code.size();
     }

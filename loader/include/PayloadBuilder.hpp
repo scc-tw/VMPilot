@@ -26,6 +26,20 @@ struct RegionLayout {
     /// Instruction size for resume displacement calculation.
     /// x86: 4 (rel32, target = RIP + disp). ARM64: 0 (B is PC-relative).
     size_t resume_insn_size = 0;
+
+    // --- load_base_delta support (Phase 2: PIE/ASLR) ---
+
+    /// Offset within payload of the delta static VA fixup.
+    /// FormatPatcher writes the stub's static VA here so the entry stub
+    /// can compute load_base_delta = actual_va - static_va at runtime.
+    size_t delta_fixup_payload_offset = 0;
+    /// Offset of the ADR/LEA instruction (the "delta reference point")
+    /// relative to the start of this stub. The static VA that gets patched
+    /// is: seg_va + stub_offset + delta_ref_stub_offset.
+    size_t delta_ref_stub_offset = 0;
+    /// Size of the delta fixup region in bytes (8 for x86 imm64, 16 for
+    /// ARM64 4-instruction MOVZ/MOVK sequence).
+    size_t delta_fixup_size = 0;
 };
 
 /// Fully assembled payload ready for injection.

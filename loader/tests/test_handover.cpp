@@ -284,7 +284,7 @@ TEST_F(HandoverTest, EntryStubSeedPointerResolvesToSeed) {
     const uint64_t expected_seed_va = vmpilot_.va + blob_.size();
 
     bool found_adr_x2 = false;
-    for (size_t i = 0; i < 64; i += 4) {
+    for (size_t i = 0; i < 256; i += 4) {
         if (stub_foff + i + 4 > patched_.size()) break;
         uint32_t insn;
         std::memcpy(&insn, patched_.data() + stub_foff + i, 4);
@@ -320,7 +320,7 @@ TEST_F(HandoverTest, EntryStubBlobSizeCorrect) {
         static_cast<size_t>(stub_va - vmpilot_.va);
 
     bool found_movz_x1 = false;
-    for (size_t i = 0; i < 64; i += 4) {
+    for (size_t i = 0; i < 256; i += 4) {
         if (stub_foff + i + 4 > patched_.size()) break;
         uint32_t insn;
         std::memcpy(&insn, patched_.data() + stub_foff + i, 4);

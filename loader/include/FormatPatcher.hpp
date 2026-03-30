@@ -110,6 +110,65 @@ public:
             if (!ow) return tl::unexpected(ow.error());
         }
 
+        // --- 5b. Patch load_base_delta static VAs (Phase 2: PIE/ASLR) ---
+        for (size_t i = 0; i < request.regions.size(); ++i) {
+            const auto& layout = payload->layouts[i];
+            if (layout.delta_fixup_size == 0) continue;
+
+            // static VA of the delta reference point =
+            //   seg_va + stub_offset + delta_ref_stub_offset
+            const uint64_t static_va =
+                seg_va + layout.stub_offset + layout.delta_ref_stub_offset;
+
+            // Build a temporary Stub to use fixup_delta_static_va.
+            // We operate directly on payload->data at the fixup offset.
+            // Copy the fixup region, patch it, and write it back.
+            const auto off = layout.delta_fixup_payload_offset;
+            const auto sz = layout.delta_fixup_size;
+            if (off + sz > payload->data.size()) continue;
+
+            // Create a minimal Stub wrapper over the fixup bytes
+            Stub tmp;
+            tmp.code.assign(payload->data.begin() + static_cast<ptrdiff_t>(off),
+                            payload->data.begin() + static_cast<ptrdiff_t>(off + sz));
+            tmp.delta_static_va_fixup_offset = 0;  // offset within tmp.code
+            // Temporarily set to a non-zero sentinel so fixup doesn't bail
+            // (the real implementation checks off == 0 as "not set")
+            // Actually we need off != 0 — but our offset IS 0 in the tmp.
+            // So instead, patch directly in payload->data.
+
+            // Direct patch: for ARM64, write MOVZ/MOVK sequence;
+            // for x86-64, write raw imm64.
+            if (request.arch == Common::FileArch::ARM64 && sz == 16) {
+                // ARM64: 4 instructions at payload->data[off..off+16)
+                auto write_insn = [&](size_t insn_off, uint32_t insn) {
+                    payload->data[insn_off+0] = static_cast<uint8_t>(insn);
+                    payload->data[insn_off+1] = static_cast<uint8_t>(insn >> 8);
+                    payload->data[insn_off+2] = static_cast<uint8_t>(insn >> 16);
+                    payload->data[insn_off+3] = static_cast<uint8_t>(insn >> 24);
+                };
+                // Preserve rd from existing MOVZ instruction
+                const uint8_t rd = payload->data[off] & 0x1F;
+                write_insn(off,      0xD2800000 | (static_cast<uint32_t>(
+                    static_cast<uint16_t>(static_va)) << 5) | rd);
+                write_insn(off + 4,  0xF2A00000 | (static_cast<uint32_t>(
+                    static_cast<uint16_t>(static_va >> 16)) << 5) | rd);
+                write_insn(off + 8,  0xF2C00000 | (static_cast<uint32_t>(
+                    static_cast<uint16_t>(static_va >> 32)) << 5) | rd);
+                write_insn(off + 12, 0xF2E00000 | (static_cast<uint32_t>(
+                    static_cast<uint16_t>(static_va >> 48)) << 5) | rd);
+            } else if (sz == 8) {
+                // x86-64: raw 8-byte immediate
+                std::memcpy(payload->data.data() + off, &static_va, 8);
+            }
+
+            // Overwrite in already-injected segment
+            const uint64_t fixup_va = seg_va + off;
+            auto ow = editor->overwrite_segment(
+                fixup_va, payload->data.data() + off, sz, diag);
+            if (!ow) return tl::unexpected(ow.error());
+        }
+
         // --- 6. Overwrite protected regions with JMP/B ---
         size_t patched = 0;
         for (size_t i = 0; i < request.regions.size(); ++i) {
