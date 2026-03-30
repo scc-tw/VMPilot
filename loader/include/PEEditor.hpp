@@ -4,16 +4,22 @@
 
 #include <BinaryEditor.hpp>
 
+#include <memory>
+
 namespace VMPilot::Loader {
 
-/// PE binary editor — not yet implemented.
+/// PE binary editor using COFFI. Pimpl to keep coffi out of the header.
 class PEEditor : public BinaryEditor {
 public:
+    ~PEEditor() override;
+    PEEditor(PEEditor&&) noexcept;
+    PEEditor& operator=(PEEditor&&) noexcept;
+
     [[nodiscard]] static tl::expected<PEEditor, Common::DiagnosticCode>
     open(const std::string& path,
          Common::DiagnosticCollector& diag) noexcept;
 
-    // --- BinaryEditor interface (all return PatchFormatUnsupported) ---
+    // --- BinaryEditor interface ---
     [[nodiscard]] TextSectionInfo text_section() const noexcept override;
     [[nodiscard]] uint64_t next_segment_va(uint64_t alignment) const noexcept override;
 
@@ -35,6 +41,11 @@ public:
     [[nodiscard]] tl::expected<void, Common::DiagnosticCode>
     save(const std::string& path,
          Common::DiagnosticCollector& diag) noexcept override;
+
+private:
+    PEEditor();
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };
 
 }  // namespace VMPilot::Loader

@@ -12,9 +12,11 @@
 ///   - Mach-O maxprot includes R|W|X — allows mprotect to RX after init
 
 #include <ELFEditor.hpp>
+#include <PEEditor.hpp>
 #include <PlatformTraits.hpp>
 #include <diagnostic_collector.hpp>
 
+#include <coffi/coffi.hpp>
 #include <elfio/elfio.hpp>
 
 #include <gtest/gtest.h>
@@ -335,4 +337,264 @@ TEST(EditorPermissions, MachOVerifyInitprotIsRW) {
     EXPECT_EQ(initprot, 0x03);
     EXPECT_EQ(initprot & VM_PROT_EXECUTE, 0)
         << "initprot must NOT include EXECUTE — W^X compliance";
+}
+
+// ============================================================================
+// PE Editor Tests
+// ============================================================================
+
+namespace {
+
+/// Build a minimal valid PE32 binary with a .text section using COFFI.
+std::string build_minimal_pe(uint32_t text_rva = 0x1000,
+                             size_t text_size = 0x100) {
+    COFFI::coffi writer;
+    writer.create(COFFI::COFFI_ARCHITECTURE_PE);
+    writer.create_optional_header();
+
+    // .text section with NOPs
+    auto* text_sec = writer.add_section(".text");
+    std::vector<uint8_t> nops(text_size, 0x90);
+    text_sec->set_data(reinterpret_cast<const char*>(nops.data()),
+                       static_cast<uint32_t>(nops.size()));
+    text_sec->set_virtual_address(text_rva);
+    text_sec->set_virtual_size(static_cast<uint32_t>(text_size));
+    text_sec->set_flags(IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ |
+                        IMAGE_SCN_CNT_CODE);
+
+    // Set minimal header properties
+    writer.get_header()->set_flags(IMAGE_FILE_EXECUTABLE_IMAGE |
+                                   IMAGE_FILE_32BIT_MACHINE);
+    writer.get_optional_header()->set_entry_point_address(text_rva);
+    writer.get_optional_header()->set_code_base(text_rva);
+    writer.get_win_header()->set_image_base(0x00400000);
+    writer.get_win_header()->set_section_alignment(0x1000);
+    writer.get_win_header()->set_file_alignment(0x200);
+    writer.get_win_header()->set_subsystem(3);  // Windows CUI
+
+    // Add standard data directories (16 entries, all zeroed)
+    for (int i = 0; i < 16; ++i) {
+        writer.add_directory(COFFI::image_data_directory{0, 0});
+    }
+
+    writer.layout();
+
+    char tmpname[] = "/tmp/vmpilot_test_pe_XXXXXX";
+    int fd = mkstemp(tmpname);
+    EXPECT_GE(fd, 0) << "mkstemp failed";
+    close(fd);
+
+    writer.save(tmpname);
+    return std::string(tmpname);
+}
+
+}  // namespace
+
+TEST(EditorPermissions, PEOpenAndTextSection) {
+    std::string pe_path = build_minimal_pe();
+    Common::DiagnosticCollector diag;
+
+    auto editor = Loader::PEEditor::open(pe_path, diag);
+    ASSERT_TRUE(editor.has_value()) << "Failed to open test PE: " << diag.summary();
+
+    auto text_info = editor->text_section();
+    // image_base (0x400000) + text_rva (0x1000) = 0x401000
+    EXPECT_EQ(text_info.base_addr, 0x00401000u);
+    EXPECT_EQ(text_info.size, 0x100u);
+
+    std::remove(pe_path.c_str());
+}
+
+TEST(EditorPermissions, PEAddSegmentWxCompliance) {
+    std::string pe_path = build_minimal_pe();
+    Common::DiagnosticCollector diag;
+
+    auto editor = Loader::PEEditor::open(pe_path, diag);
+    ASSERT_TRUE(editor.has_value()) << "Failed to open test PE";
+
+    std::vector<uint8_t> payload(128, 0x00);
+    auto seg_info = editor->add_segment(".vmpltt", payload, 0x1000, diag);
+    ASSERT_TRUE(seg_info.has_value()) << "add_segment failed: " << diag.summary();
+
+    std::string out_path = pe_path + ".patched";
+    auto save_result = editor->save(out_path, diag);
+    ASSERT_TRUE(save_result.has_value()) << "save failed: " << diag.summary();
+
+    // Re-open with COFFI and verify the new section's flags
+    COFFI::coffi reader;
+    ASSERT_TRUE(reader.load(out_path)) << "Failed to reload patched PE";
+
+    bool found_vmpltt = false;
+    for (const auto& sec : reader.get_sections()) {
+        if (sec.get_name() != ".vmpltt") continue;
+        found_vmpltt = true;
+        auto flags = sec.get_flags();
+
+        // Must have READ + WRITE
+        EXPECT_TRUE(flags & IMAGE_SCN_MEM_READ) << "Section missing MEM_READ";
+        EXPECT_TRUE(flags & IMAGE_SCN_MEM_WRITE) << "Section missing MEM_WRITE";
+        // Must have INITIALIZED_DATA
+        EXPECT_TRUE(flags & IMAGE_SCN_CNT_INITIALIZED_DATA)
+            << "Section missing CNT_INITIALIZED_DATA";
+        // Must NOT have EXECUTE — W^X compliance
+        EXPECT_FALSE(flags & IMAGE_SCN_MEM_EXECUTE)
+            << "Section has MEM_EXECUTE — violates W^X. "
+               "Section must start RW; runtime VirtualProtect to RX after init.";
+        break;
+    }
+    EXPECT_TRUE(found_vmpltt) << ".vmpltt section not found in patched PE";
+
+    std::remove(pe_path.c_str());
+    std::remove(out_path.c_str());
+}
+
+TEST(EditorPermissions, PENextSegmentVaAligned) {
+    std::string pe_path = build_minimal_pe();
+    Common::DiagnosticCollector diag;
+
+    auto editor = Loader::PEEditor::open(pe_path, diag);
+    ASSERT_TRUE(editor.has_value());
+
+    uint64_t next_va = editor->next_segment_va(0x1000);
+    // Must be page-aligned
+    EXPECT_EQ(next_va & 0xFFF, 0u) << "next_segment_va is not page-aligned";
+    // Must be >= image_base + text_rva + text_size
+    EXPECT_GE(next_va, 0x00401000u + 0x100u)
+        << "next_segment_va overlaps .text";
+
+    std::remove(pe_path.c_str());
+}
+
+TEST(EditorPermissions, PEOverwriteText) {
+    std::string pe_path = build_minimal_pe();
+    Common::DiagnosticCollector diag;
+
+    auto editor = Loader::PEEditor::open(pe_path, diag);
+    ASSERT_TRUE(editor.has_value());
+
+    // Overwrite 4 bytes at start of .text (VA = 0x401000)
+    std::vector<uint8_t> patch = {0xCC, 0xCC, 0xCC, 0xCC};
+    auto result = editor->overwrite_text(
+        0x00401000, patch.data(), patch.size(), diag);
+    ASSERT_TRUE(result.has_value()) << "overwrite_text failed: " << diag.summary();
+
+    std::string out_path = pe_path + ".patched";
+    ASSERT_TRUE(editor->save(out_path, diag).has_value());
+
+    // Verify patched bytes
+    COFFI::coffi reader;
+    ASSERT_TRUE(reader.load(out_path));
+    for (const auto& sec : reader.get_sections()) {
+        if (sec.get_name() != ".text") continue;
+        ASSERT_GE(sec.get_data_size(), 4u);
+        const auto* data = reinterpret_cast<const uint8_t*>(sec.get_data());
+        EXPECT_EQ(data[0], 0xCC);
+        EXPECT_EQ(data[1], 0xCC);
+        EXPECT_EQ(data[2], 0xCC);
+        EXPECT_EQ(data[3], 0xCC);
+        // Remaining bytes should still be NOPs
+        if (sec.get_data_size() > 4) {
+            EXPECT_EQ(data[4], 0x90);
+        }
+        break;
+    }
+
+    std::remove(pe_path.c_str());
+    std::remove(out_path.c_str());
+}
+
+TEST(EditorPermissions, PEOverwriteTextOutOfBounds) {
+    std::string pe_path = build_minimal_pe();
+    Common::DiagnosticCollector diag;
+
+    auto editor = Loader::PEEditor::open(pe_path, diag);
+    ASSERT_TRUE(editor.has_value());
+
+    // Try to overwrite beyond .text boundaries — should fail
+    std::vector<uint8_t> patch = {0xCC};
+    auto result = editor->overwrite_text(
+        0x00401000 + 0x100,  // one byte past end
+        patch.data(), patch.size(), diag);
+    EXPECT_FALSE(result.has_value()) << "overwrite_text should fail for out-of-bounds VA";
+
+    std::remove(pe_path.c_str());
+}
+
+TEST(EditorPermissions, PEInvalidateSignature) {
+    std::string pe_path = build_minimal_pe();
+    Common::DiagnosticCollector diag;
+
+    auto editor = Loader::PEEditor::open(pe_path, diag);
+    ASSERT_TRUE(editor.has_value());
+
+    editor->invalidate_signature();
+
+    std::string out_path = pe_path + ".patched";
+    ASSERT_TRUE(editor->save(out_path, diag).has_value());
+
+    // Verify Certificate Table directory entry is zeroed
+    COFFI::coffi reader;
+    ASSERT_TRUE(reader.load(out_path));
+    auto& dirs = reader.get_directories();
+    ASSERT_GT(dirs.get_count(), static_cast<size_t>(DIRECTORY_CERTIFICATE_TABLE));
+    auto* cert_dir = dirs[DIRECTORY_CERTIFICATE_TABLE];
+    EXPECT_EQ(cert_dir->get_virtual_address(), 0u)
+        << "Certificate Table RVA should be zero after invalidation";
+    EXPECT_EQ(cert_dir->get_size(), 0u)
+        << "Certificate Table size should be zero after invalidation";
+
+    std::remove(pe_path.c_str());
+    std::remove(out_path.c_str());
+}
+
+TEST(EditorPermissions, PEAddRuntimeDepSucceeds) {
+    std::string pe_path = build_minimal_pe();
+    Common::DiagnosticCollector diag;
+
+    auto editor = Loader::PEEditor::open(pe_path, diag);
+    ASSERT_TRUE(editor.has_value());
+
+    // Should succeed (returns ok) and emit a note
+    auto result = editor->add_runtime_dep("vmpilot_runtime.dll", diag);
+    EXPECT_TRUE(result.has_value());
+
+    std::remove(pe_path.c_str());
+}
+
+TEST(EditorPermissions, PECallSlotZeroAtSegmentStart) {
+    std::string pe_path = build_minimal_pe();
+    Common::DiagnosticCollector diag;
+
+    auto editor = Loader::PEEditor::open(pe_path, diag);
+    ASSERT_TRUE(editor.has_value());
+
+    // Payload with call_slot = 8 zero bytes at offset 0 + some blob data
+    std::vector<uint8_t> payload(64, 0xAB);
+    std::memset(payload.data(), 0, 8);  // call_slot at offset 0
+
+    auto seg_info = editor->add_segment(".vmpltt", payload, 0x1000, diag);
+    ASSERT_TRUE(seg_info.has_value());
+
+    std::string out_path = pe_path + ".patched";
+    ASSERT_TRUE(editor->save(out_path, diag).has_value());
+
+    // Verify call_slot bytes are zero in the output
+    COFFI::coffi reader;
+    ASSERT_TRUE(reader.load(out_path));
+
+    for (const auto& sec : reader.get_sections()) {
+        if (sec.get_name() != ".vmpltt") continue;
+        ASSERT_GE(sec.get_data_size(), 8u);
+        const auto* data = reinterpret_cast<const uint8_t*>(sec.get_data());
+        uint64_t call_slot = 0;
+        std::memcpy(&call_slot, data, 8);
+        EXPECT_EQ(call_slot, 0u)
+            << "call_slot must be zero-initialized (runtime fills it)";
+        // Blob data after call_slot should be preserved
+        EXPECT_EQ(data[8], 0xAB);
+        break;
+    }
+
+    std::remove(pe_path.c_str());
+    std::remove(out_path.c_str());
 }
