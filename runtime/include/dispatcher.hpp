@@ -14,6 +14,7 @@ namespace VMPilot::Runtime {
 
 /// Result returned by the VM execution loop.
 enum class VmResult : uint8_t {
+    Running,        ///< instruction executed, continue
     Halted,         ///< HALT instruction reached
     Error,          ///< unrecoverable error
     Breakpoint,     ///< debug breakpoint (debug_mode only)

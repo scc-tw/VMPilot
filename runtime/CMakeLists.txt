@@ -126,6 +126,17 @@ if(ENABLE_TESTS)
                 GTest::gtest_main
     )
 
+    add_executable(test_dispatcher
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_dispatcher.cpp
+    )
+    target_include_directories(test_dispatcher
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(test_dispatcher
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+
     include(GoogleTest)
     gtest_discover_tests(runtime_smoke_test)
     gtest_discover_tests(test_blob_loader)
@@ -133,4 +144,5 @@ if(ENABLE_TESTS)
     gtest_discover_tests(test_encoding)
     gtest_discover_tests(test_decoder)
     gtest_discover_tests(test_handlers)
+    gtest_discover_tests(test_dispatcher)
 endif()

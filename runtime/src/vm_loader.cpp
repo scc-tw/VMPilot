@@ -1,4 +1,5 @@
 #include <vm_loader.hpp>
+#include <handlers.hpp>
 #include <vm/vm_blob.hpp>
 #include <vm/vm_crypto.hpp>
 #include <vm/vm_encoding.hpp>
@@ -217,6 +218,11 @@ load_blob(const uint8_t* blob_data, size_t blob_size,
     // Derive opcode permutation (D4)
     derive_opcode_permutation(first.epoch_seed,
                               ctx.opcode_perm, ctx.opcode_perm_inv);
+
+    // Clear composition cache -- encoding tables are now derived for the
+    // first BB. Any stale cache entries from previous load_blob calls
+    // (e.g. in test harnesses) must be invalidated.
+    clear_composition_cache();
 
     return vm;
 }
