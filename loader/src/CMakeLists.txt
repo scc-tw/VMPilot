@@ -1,9 +1,6 @@
 set(INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
     ${CMAKE_SOURCE_DIR}/common/include
-    ${CMAKE_SOURCE_DIR}/sdk/include/core
-    ${CMAKE_SOURCE_DIR}/sdk/include/bytecode_compiler
-    ${CMAKE_SOURCE_DIR}/sdk/include/segmentator
     ${CMAKE_SOURCE_DIR}/third_party/expected/include
 )
 
@@ -17,7 +14,6 @@ set(TARGET_NAME VMPilot_Loader)
 
 set(SRC_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/BinaryPatcher.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/BlobSerializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/StubGenerator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/PayloadBuilder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ELFEditor.cpp

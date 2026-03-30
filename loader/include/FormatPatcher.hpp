@@ -33,7 +33,8 @@ public:
         using DC = Common::DiagnosticCode;
 
         // --- 1. Build payload (pure, no I/O) ---
-        auto payload = build_payload(request.regions, request.compiled_outputs,
+        auto payload = build_payload(request.regions, request.blob_data,
+                                     request.stored_seed,
                                      request.arch, request.mode, diag);
         if (!payload) return tl::unexpected(payload.error());
 

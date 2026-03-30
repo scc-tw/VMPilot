@@ -12,50 +12,62 @@
 
 namespace VMPilot::Loader {
 
-/// Machine-code stub with fixup metadata.
+/// Machine-code entry stub with fixup metadata.
+///
+/// Entry stubs call the Runtime API:
+///   vm_execute(blob_data*, blob_size, stored_seed*, config*)
+///
+/// Fixup offsets mark positions in `code` where PayloadBuilder patches
+/// addresses/immediates after the final layout is known.
 struct Stub {
     std::vector<uint8_t> code;
-    /// Offset within code where the dispatcher call needs patching (rel32 / BL).
-    size_t call_fixup_offset = 0;
-    /// Offset within code where the blob-pointer displacement needs patching
-    /// after final payload layout is known (LEA disp32 / ADR imm21).
+
+    // --- arg0: blob_data pointer (RIP-relative LEA / ADR) ---
     size_t blob_fixup_offset = 0;
-    /// Remaining bytes of the instruction at blob_fixup_offset.
-    /// For x86-64 LEA: 4 (disp32).  For ARM64 ADR: 4 (full instruction).
-    /// Used for RIP-relative: disp = target - (fixup_addr + blob_insn_size).
-    size_t blob_insn_size = 0;
+    size_t blob_insn_size = 0;    // remaining bytes of the fixup instruction
+
+    // --- arg1: blob_size (immediate) ---
+    size_t size_fixup_offset = 0;
+
+    // --- arg2: stored_seed pointer (RIP-relative LEA / ADR) ---
+    size_t seed_fixup_offset = 0;
+    size_t seed_insn_size = 0;
+
+    // --- call target (vm_execute, needs relocation) ---
+    size_t call_fixup_offset = 0;
 };
 
-/// Generates architecture-specific machine-code stubs for binary patching.
+/// Generates architecture-specific machine-code stubs.
 class StubGenerator {
 public:
-    /// Generate a JMP/B to overwrite the start of a protected region.
-    /// x86: E9 rel32 (5 bytes) + NOP fill.  ARM64: B imm26 (4 bytes) + NOP fill.
+    /// Generate a JMP/B to overwrite a protected region.
     [[nodiscard]] static tl::expected<std::vector<uint8_t>, Common::DiagnosticCode>
     generate_region_patch(Common::FileArch arch, Common::FileMode mode,
                           uint64_t region_size,
                           uint64_t from_addr, uint64_t to_addr) noexcept;
 
-    /// Generate an entry stub (save regs → load blob ptr → call dispatcher → restore → ret).
-    /// The blob_rel_offset is a placeholder; call fixup_blob_displacement() after layout.
+    /// Generate an entry stub.  All pointer/size fixups are placeholders
+    /// until PayloadBuilder calls the fixup_*() methods.
     [[nodiscard]] static tl::expected<Stub, Common::DiagnosticCode>
     generate_entry_stub(Common::FileArch arch, Common::FileMode mode,
-                        uint32_t region_idx,
-                        int64_t blob_rel_offset = 0) noexcept;
+                        uint32_t region_idx = 0) noexcept;
 
-    /// Patch the blob-pointer displacement in a stub after final layout is known.
-    /// Encapsulates arch-specific encoding (x86 disp32, ARM64 ADR imm21).
-    /// Returns error if displacement exceeds the architecture's range.
+    /// Patch blob-pointer displacement (arg0).
     [[nodiscard]] static tl::expected<void, Common::DiagnosticCode>
     fixup_blob_displacement(Stub& stub, int64_t displacement,
                             Common::FileArch arch) noexcept;
 
-    /// Minimum region size required for a JMP/B patch.
+    /// Patch seed-pointer displacement (arg2).  Same encoding as blob fixup.
+    [[nodiscard]] static tl::expected<void, Common::DiagnosticCode>
+    fixup_seed_displacement(Stub& stub, int64_t displacement,
+                            Common::FileArch arch) noexcept;
+
+    /// Patch blob_size immediate (arg1).
+    static void fixup_blob_size(Stub& stub, uint64_t blob_size) noexcept;
+
     [[nodiscard]] static size_t
     min_region_size(Common::FileArch arch, Common::FileMode mode) noexcept;
 
-    /// Maximum branch distance for region patch → entry stub.
-    /// x86: ±2GB (rel32).  ARM64: ±128MB (B imm26).
     [[nodiscard]] static int64_t
     max_branch_distance(Common::FileArch arch) noexcept;
 };

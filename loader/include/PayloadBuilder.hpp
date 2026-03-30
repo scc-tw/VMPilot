@@ -2,14 +2,13 @@
 #define __LOADER_PAYLOAD_BUILDER_HPP__
 #pragma once
 
-#include <CompilationOutput.hpp>
 #include <LoaderTypes.hpp>
 #include <StubGenerator.hpp>
 #include <diagnostic_collector.hpp>
-#include <file_type_parser.hpp>
 
 #include <tl/expected.hpp>
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -19,33 +18,38 @@ namespace VMPilot::Loader {
 /// Per-region layout within the assembled payload.
 struct RegionLayout {
     std::string name;
-    size_t stub_offset = 0;   // offset of entry stub within payload
+    size_t stub_offset = 0;
     size_t stub_size = 0;
 };
 
-/// Fully assembled payload ready for injection into a binary.
-/// Contains serialized bytecode blob + entry stubs with blob-pointer
-/// displacements already fixed up (relative to payload start).
+/// Fully assembled payload ready for injection.
+///
+/// Layout: [ blob_data | stored_seed (32B) | stub_0 | stub_1 | ... ]
+///
+/// Entry stubs reference blob_data and stored_seed via RIP-relative /
+/// ADR addressing.  All displacements are fixed up relative to payload
+/// offset 0 (blob start).
 struct PatchPayload {
     std::vector<uint8_t> data;
-    std::vector<RegionLayout> layouts;   // one per region
-    size_t blob_size = 0;                // for reporting
+    std::vector<RegionLayout> layouts;
+    size_t blob_size = 0;
+    size_t seed_offset = 0;     // offset of stored_seed within payload
 };
 
-/// Build the payload: serialize bytecodes → blob, generate entry stubs,
-/// compute layout, fix up blob-pointer displacements.
+/// Build the injection payload from pre-built blob bytes.
 ///
-/// This is a **pure data transformation** — no file I/O. Regions are
-/// matched to compiled outputs by name; mismatches are errors.
+/// Pure data transformation — no file I/O, no blob interpretation.
 ///
-/// @param regions           Protected regions to patch.
-/// @param compiled_outputs  Compiled bytecodes (matched by name).
-/// @param arch              Target architecture.
-/// @param mode              Sub-mode (32/64).
-/// @param diag              Diagnostic collector.
+/// @param regions       Protected regions (for stub generation).
+/// @param blob_data     Complete blob bytes from compiler pipeline.
+/// @param stored_seed   32-byte root secret to embed alongside blob.
+/// @param arch          Target architecture.
+/// @param mode          Sub-mode (32/64).
+/// @param diag          Diagnostic collector.
 [[nodiscard]] tl::expected<PatchPayload, Common::DiagnosticCode>
 build_payload(const std::vector<RegionPatchInfo>& regions,
-              const std::vector<SDK::BytecodeCompiler::CompilationOutput>& compiled_outputs,
+              const std::vector<uint8_t>& blob_data,
+              const std::array<uint8_t, SEED_SIZE>& stored_seed,
               Common::FileArch arch, Common::FileMode mode,
               Common::DiagnosticCollector& diag =
                   Common::DiagnosticCollector::noop()) noexcept;

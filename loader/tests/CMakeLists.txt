@@ -1,9 +1,6 @@
 set(INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
     ${CMAKE_SOURCE_DIR}/common/include
-    ${CMAKE_SOURCE_DIR}/sdk/include/core
-    ${CMAKE_SOURCE_DIR}/sdk/include/bytecode_compiler
-    ${CMAKE_SOURCE_DIR}/sdk/include/segmentator
     ${CMAKE_SOURCE_DIR}/third_party/expected/include
 )
 

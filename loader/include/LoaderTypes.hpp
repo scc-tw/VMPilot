@@ -2,14 +2,17 @@
 #define __LOADER_TYPES_HPP__
 #pragma once
 
-#include <CompilationOutput.hpp>
 #include <file_type_parser.hpp>
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
 
 namespace VMPilot::Loader {
+
+/// Seed size in bytes (32-byte root secret, spec §13.5).
+constexpr size_t SEED_SIZE = 32;
 
 /// Describes a single protected region to be patched.
 struct RegionPatchInfo {
@@ -19,6 +22,10 @@ struct RegionPatchInfo {
 };
 
 /// Input to the Loader's patch operation.
+///
+/// The Loader is a **passthrough binary mutation tool**.  It does NOT know
+/// the blob's internal structure — that is the compiler backend's concern.
+/// It receives pre-built blob bytes and injects them into the binary.
 struct PatchRequest {
     std::string input_path;     // Path to original binary
     std::string output_path;    // Path for patched output binary
@@ -26,13 +33,21 @@ struct PatchRequest {
     /// Protected regions to patch (from SegmentationResult).
     std::vector<RegionPatchInfo> regions;
 
-    /// Compiled bytecodes per region (from CompilationResult).
-    std::vector<SDK::BytecodeCompiler::CompilationOutput> compiled_outputs;
+    /// Complete bytecode blob produced by the compiler pipeline.
+    /// Format: Common::VM::BlobHeader + sections (see vm_blob.hpp).
+    /// Loader injects this verbatim — no interpretation or transformation.
+    std::vector<uint8_t> blob_data;
+
+    /// 32-byte root secret (stored_seed).
+    /// Embedded alongside the blob in the patched binary so the runtime
+    /// can derive encryption/encoding keys at execution time.
+    /// NEVER stored inside the blob itself (spec §13.5).
+    std::array<uint8_t, SEED_SIZE> stored_seed = {};
 
     /// Architecture info (from SegmentationResult.context).
-    Common::FileArch arch;
-    Common::FileMode mode;
-    Common::FileFormat format;
+    Common::FileArch arch = Common::FileArch::X86;
+    Common::FileMode mode = Common::FileMode::MODE_64;
+    Common::FileFormat format = Common::FileFormat::ELF;
 };
 
 /// Output from a successful patch operation.
@@ -42,37 +57,18 @@ struct PatchResult {
     size_t blob_bytes_injected = 0;
 };
 
-/// On-disk header for the injected bytecode blob.
-/// Layout: BlobHeader | BlobEntry[entry_count] | raw bytecode data
-struct BlobHeader {
-    uint32_t magic = 0x564D5031;    // "VMP1"
-    uint16_t version = 1;
-    uint16_t entry_count = 0;
-};
-static_assert(sizeof(BlobHeader) == 8, "BlobHeader must be 8 bytes");
-
-/// Per-region entry in the bytecode blob.
-struct BlobEntry {
-    uint64_t original_addr = 0;     // VA of original protected region
-    uint32_t bytecode_offset = 0;   // Offset from start of raw data section
-    uint32_t bytecode_size = 0;     // Size of serialized bytecodes
-};
-static_assert(sizeof(BlobEntry) == 16, "BlobEntry must be 16 bytes");
-
 // ---------------------------------------------------------------------------
 // Binary editor result types
 // ---------------------------------------------------------------------------
 
-/// Info about the .text section in the target binary.
 struct TextSectionInfo {
     uint64_t base_addr = 0;
     uint64_t size = 0;
 };
 
-/// Info about a newly added loadable segment/section.
 struct NewSegmentInfo {
-    uint64_t va = 0;       // Virtual address of the new segment
-    size_t size = 0;        // Size of injected data
+    uint64_t va = 0;
+    size_t size = 0;
 };
 
 }  // namespace VMPilot::Loader
