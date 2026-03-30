@@ -51,13 +51,19 @@ build_payload(const std::vector<RegionPatchInfo>& regions,
     }
 
     // --- Fix up all displacements (one pass, segment_va known) ---
+    //
+    // x86_64/x86_32: RIP/EIP = fixup_addr + 4 after reading disp32, so
+    //   disp = target - (fixup_addr + 4) = target - fixup_addr - bias.
+    // ARM64: PC = instruction_addr = fixup_addr, so bias = 0.
+    const int64_t bias = emitter.pc_fixup_bias();
+
     for (size_t i = 0; i < stubs.size(); ++i) {
         auto& s = stubs[i];
         const auto stub_va = static_cast<int64_t>(segment_va + layouts[i].stub_offset);
 
         // blob_ptr displacement
         const int64_t blob_disp = static_cast<int64_t>(segment_va)
-            - (stub_va + static_cast<int64_t>(s.blob_fixup_offset));
+            - (stub_va + static_cast<int64_t>(s.blob_fixup_offset) + bias);
         if (auto fx = emitter.fixup_ptr_disp(s.code, s.blob_fixup_offset, blob_disp); !fx) {
             diag.error("loader", DC::PatchStubGenerationFailed,
                        "blob displacement out of range for '" + regions[i].name + "'");
@@ -66,7 +72,7 @@ build_payload(const std::vector<RegionPatchInfo>& regions,
 
         // seed_ptr displacement
         const int64_t seed_disp = static_cast<int64_t>(segment_va + seed_offset)
-            - (stub_va + static_cast<int64_t>(s.seed_fixup_offset));
+            - (stub_va + static_cast<int64_t>(s.seed_fixup_offset) + bias);
         if (auto fx = emitter.fixup_ptr_disp(s.code, s.seed_fixup_offset, seed_disp); !fx) {
             diag.error("loader", DC::PatchStubGenerationFailed,
                        "seed displacement out of range for '" + regions[i].name + "'");
@@ -75,26 +81,26 @@ build_payload(const std::vector<RegionPatchInfo>& regions,
 
         // call_slot displacement
         const int64_t slot_disp = static_cast<int64_t>(segment_va + call_slot_offset)
-            - (stub_va + static_cast<int64_t>(s.call_slot_fixup_offset));
+            - (stub_va + static_cast<int64_t>(s.call_slot_fixup_offset) + bias);
         if (auto fx = emitter.fixup_ptr_disp(s.code, s.call_slot_fixup_offset, slot_disp); !fx) {
             diag.error("loader", DC::PatchStubGenerationFailed,
                        "call slot displacement out of range for '" + regions[i].name + "'");
             return tl::unexpected(fx.error());
         }
 
-        // blob_size immediate
+        // blob_size immediate (not PC-relative — no bias)
         emitter.fixup_immediate(s.code, s.size_fixup_offset, blob_size);
 
         // resume: jump to region.addr + region.size
         const int64_t resume_disp = static_cast<int64_t>(regions[i].addr + regions[i].size)
-            - (stub_va + static_cast<int64_t>(s.resume_fixup_offset));
+            - (stub_va + static_cast<int64_t>(s.resume_fixup_offset) + bias);
         if (auto fx = emitter.fixup_branch_disp(s.code, s.resume_fixup_offset, resume_disp); !fx) {
             diag.error("loader", DC::PatchStubGenerationFailed,
                        "resume displacement out of range for '" + regions[i].name + "'");
             return tl::unexpected(fx.error());
         }
 
-        // ASLR delta static VA
+        // ASLR delta static VA (absolute — no bias)
         if (s.delta_fixup_size > 0) {
             emitter.fixup_static_va(s.code, s.delta_fixup_offset, s.delta_fixup_size,
                                     segment_va + layouts[i].stub_offset + s.delta_ref_offset);

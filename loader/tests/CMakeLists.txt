@@ -11,3 +11,9 @@ set(TEST_NAME test_loader)
 add_executable(${TEST_NAME} test_loader.cpp)
 target_link_libraries(${TEST_NAME} PRIVATE VMPilot_Loader opcode_table GTest::gtest_main)
 gtest_discover_tests(${TEST_NAME})
+
+# Integration / handover tests
+set(TEST_NAME test_handover)
+add_executable(${TEST_NAME} test_handover.cpp)
+target_link_libraries(${TEST_NAME} PRIVATE VMPilot_Loader opcode_table GTest::gtest_main)
+gtest_discover_tests(${TEST_NAME})

@@ -60,7 +60,7 @@ ELFEditor::open(const std::string& path,
     if (!ed.impl_->text_sec)
         return fail(diag, DC::PatchBinaryReadFailed, "no .text section");
 
-    return std::move(ed);
+    return ed;
 }
 
 // ---------------------------------------------------------------------------

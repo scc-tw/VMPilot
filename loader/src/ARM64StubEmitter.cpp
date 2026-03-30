@@ -218,6 +218,7 @@ public:
 
     [[nodiscard]] size_t  min_region_size()    const noexcept override;
     [[nodiscard]] int64_t max_branch_distance() const noexcept override;
+    [[nodiscard]] int64_t pc_fixup_bias()       const noexcept override;
 };
 
 // -----------------------------------------------------------------------
@@ -417,6 +418,7 @@ void ARM64StubEmitter::fixup_static_va(std::vector<uint8_t>& code,
 
 size_t  ARM64StubEmitter::min_region_size()     const noexcept { return Traits::min_region_size; }
 int64_t ARM64StubEmitter::max_branch_distance() const noexcept { return Traits::max_branch_dist; }
+int64_t ARM64StubEmitter::pc_fixup_bias()       const noexcept { return 0; }
 
 // Factory — called from StubEmitter.cpp via create_emitter().
 std::unique_ptr<StubEmitter> make_arm64_emitter() {

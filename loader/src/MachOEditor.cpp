@@ -5,6 +5,7 @@
 #include <fstream>
 #include <functional>
 #include <numeric>
+#include <optional>
 
 namespace VMPilot::Loader {
 

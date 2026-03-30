@@ -161,6 +161,7 @@ public:
 
     [[nodiscard]] size_t  min_region_size()    const noexcept override;
     [[nodiscard]] int64_t max_branch_distance() const noexcept override;
+    [[nodiscard]] int64_t pc_fixup_bias()       const noexcept override;
 };
 
 // -----------------------------------------------------------------------
@@ -291,8 +292,6 @@ X86_64StubEmitter::fixup_ptr_disp(std::vector<uint8_t>& code,
     if (offset + 4 > code.size())
         return tl::unexpected(DC::PatchStubGenerationFailed);
 
-    // LEA disp32 is PC-relative: disp = target - (insn_addr + 4)
-    // Caller already provides the correct displacement.
     auto d32 = static_cast<int32_t>(disp);
     std::memcpy(&code[offset], &d32, 4);
     return {};
@@ -324,6 +323,7 @@ void X86_64StubEmitter::fixup_static_va(std::vector<uint8_t>& code,
 
 size_t  X86_64StubEmitter::min_region_size()     const noexcept { return Traits::min_region_size; }
 int64_t X86_64StubEmitter::max_branch_distance() const noexcept { return Traits::max_branch_dist; }
+int64_t X86_64StubEmitter::pc_fixup_bias()       const noexcept { return 4; }
 
 // Factory — called from StubEmitter.cpp via create_emitter().
 std::unique_ptr<StubEmitter> make_x86_64_emitter() {

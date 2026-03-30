@@ -91,6 +91,17 @@ public:
     /// Constants from ArchTraits, exposed for PayloadBuilder.
     [[nodiscard]] virtual size_t min_region_size() const noexcept = 0;
     [[nodiscard]] virtual int64_t max_branch_distance() const noexcept = 0;
+
+    /// Bias between the fixup field address and the IP/PC the CPU uses
+    /// when resolving the displacement.
+    ///
+    /// x86_64 / x86_32: RIP/EIP = fixup_addr + 4 (IP advances past the
+    ///         disp32 field), so bias = 4.
+    /// ARM64:  PC = instruction_addr = fixup_addr, so bias = 0.
+    ///
+    /// PayloadBuilder subtracts this from every RIP/PC-relative displacement
+    /// so that fixup methods can write the value as-is.
+    [[nodiscard]] virtual int64_t pc_fixup_bias() const noexcept = 0;
 };
 
 /// Factory. Creates the appropriate emitter for the given {arch, mode}.
