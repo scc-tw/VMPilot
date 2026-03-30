@@ -10,7 +10,9 @@ using ELFIO::SHT_PROGBITS;
 using ELFIO::SHF_ALLOC;
 using ELFIO::SHF_EXECINSTR;
 using ELFIO::PF_R;
+using ELFIO::PF_W;
 using ELFIO::PF_X;
+using ELFIO::SHF_WRITE;
 
 namespace VMPilot::Loader {
 
@@ -132,14 +134,17 @@ ELFEditor::add_segment(std::string_view name,
 
     auto* new_sec = reader.sections.add(std::string{name});
     new_sec->set_type(SHT_PROGBITS);
-    new_sec->set_flags(SHF_ALLOC | SHF_EXECINSTR);
+    new_sec->set_flags(SHF_ALLOC | SHF_WRITE | SHF_EXECINSTR);
     new_sec->set_addr_align(16);
     new_sec->set_address(seg_va);
     new_sec->set_data(reinterpret_cast<const char*>(payload.data()), payload.size());
 
     auto* new_seg = reader.segments.add();
     new_seg->set_type(PT_LOAD);
-    new_seg->set_flags(PF_R | PF_X);
+    // Initially RW (writable, NOT executable).  The runtime constructor
+    // writes &vm_stub_entry to call_slot (offset 0), then mprotects the
+    // entire section to RX.  This maintains W^X at all times.
+    new_seg->set_flags(PF_R | PF_W);
     new_seg->set_align(alignment);
     new_seg->set_virtual_address(seg_va);
     new_seg->set_physical_address(seg_va);

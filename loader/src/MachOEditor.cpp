@@ -189,8 +189,11 @@ MachOEditor::add_segment(std::string_view name,
     seg_cmd.vmsize   = seg_vmsize;
     seg_cmd.fileoff  = file_off;
     seg_cmd.filesize = payload.size();
-    seg_cmd.maxprot  = MO::VM_PROT_READ | MO::VM_PROT_EXECUTE;
-    seg_cmd.initprot = MO::VM_PROT_READ | MO::VM_PROT_EXECUTE;
+    // maxprot includes X so the runtime constructor can mprotect to RX
+    // after writing call_slot.  initprot is RW — the section starts
+    // writable (for call_slot init) and NOT executable, maintaining W^X.
+    seg_cmd.maxprot  = MO::VM_PROT_READ | MO::VM_PROT_WRITE | MO::VM_PROT_EXECUTE;
+    seg_cmd.initprot = MO::VM_PROT_READ | MO::VM_PROT_WRITE;
     seg_cmd.nsects   = 1;
 
     MO::section_64 sec{};
