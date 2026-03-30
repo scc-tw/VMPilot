@@ -13,8 +13,11 @@ include_directories(SYSTEM
 set(TARGET_NAME VMPilot_Loader)
 
 set(SRC_FILES
-    ${CMAKE_CURRENT_SOURCE_DIR}/BinaryPatcher.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/StubGenerator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Loader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/BinaryEditor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/StubEmitter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/X86_64StubEmitter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ARM64StubEmitter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/PayloadBuilder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ELFEditor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/MachOEditor.cpp

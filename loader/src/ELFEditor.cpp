@@ -95,27 +95,18 @@ ELFEditor::overwrite_text(uint64_t va, const uint8_t* data, size_t len,
 }
 
 // ---------------------------------------------------------------------------
-// overwrite_segment
+// next_segment_va
 // ---------------------------------------------------------------------------
 
-tl::expected<void, DC>
-ELFEditor::overwrite_segment(uint64_t va, const uint8_t* data, size_t len,
-                             Common::DiagnosticCollector& diag) noexcept {
-    // Search all sections for one containing this VA
-    for (auto& sec : impl_->reader.sections) {
-        const uint64_t sec_addr = sec->get_address();
-        const uint64_t sec_size = sec->get_size();
-        if (sec_addr == 0 || sec_size == 0) continue;
-        if (va >= sec_addr && va + len <= sec_addr + sec_size) {
-            const size_t offset = static_cast<size_t>(va - sec_addr);
-            std::vector<uint8_t> buf(sec->get_data(),
-                                      sec->get_data() + sec->get_size());
-            std::memcpy(buf.data() + offset, data, len);
-            sec->set_data(reinterpret_cast<const char*>(buf.data()), buf.size());
-            return {};
+uint64_t ELFEditor::next_segment_va(uint64_t alignment) const noexcept {
+    uint64_t highest = 0;
+    for (const auto& seg : impl_->reader.segments) {
+        if (seg->get_type() == PT_LOAD) {
+            uint64_t end = seg->get_virtual_address() + seg->get_memory_size();
+            if (end > highest) highest = end;
         }
     }
-    return fail(diag, DC::PatchSegmentCreationFailed, "VA not in any section");
+    return (highest + alignment - 1) & ~(alignment - 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -158,20 +149,26 @@ ELFEditor::add_segment(std::string_view name,
 }
 
 // ---------------------------------------------------------------------------
-// add_needed
+// add_runtime_dep
 // ---------------------------------------------------------------------------
 
 tl::expected<void, DC>
-ELFEditor::add_needed(std::string_view soname,
-                      Common::DiagnosticCollector& diag) noexcept {
-    // ELF DT_NEEDED injection requires modifying the .dynamic section,
-    // which is complex with ELFIO (the section has fixed size set by the
-    // linker). Deferred to a future release.
+ELFEditor::add_runtime_dep(std::string_view soname,
+                           Common::DiagnosticCollector& diag) noexcept {
+    // ELF DT_NEEDED injection requires modifying .dynamic section
+    // (fixed size set by linker). Deferred.
     diag.note("loader", DC::None,
-              "ELF DT_NEEDED injection deferred for '"
-              + std::string(soname)
-              + "'; runtime library must be preloaded via LD_PRELOAD");
+              "ELF DT_NEEDED deferred for '" + std::string(soname)
+              + "'; use LD_PRELOAD");
     return {};
+}
+
+// ---------------------------------------------------------------------------
+// invalidate_signature
+// ---------------------------------------------------------------------------
+
+void ELFEditor::invalidate_signature() noexcept {
+    // ELF has no binary-level code signature to invalidate.
 }
 
 // ---------------------------------------------------------------------------

@@ -86,6 +86,10 @@ size_t MachOEditor::header_padding() const noexcept {
         ? (first_sect_off_ - lcmds_end_) : 0;
 }
 
+uint64_t MachOEditor::next_segment_va(uint64_t alignment) const noexcept {
+    return (highest_va() + alignment - 1) & ~(alignment - 1);
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -159,36 +163,6 @@ MachOEditor::overwrite_text(uint64_t va, const uint8_t* data, size_t len,
     return {};
 }
 
-tl::expected<void, DC>
-MachOEditor::overwrite_segment(uint64_t va, const uint8_t* data, size_t len,
-                               Common::DiagnosticCollector& diag) noexcept {
-    // Find the segment containing this VA by scanning all known segments
-    // and computing the file offset from the segment's VA and fileoff.
-    namespace MO_ = MachO;
-    MO_::mach_header_64 hdr = read_at<MO_::mach_header_64>(0);
-    size_t off = sizeof(MO_::mach_header_64);
-    for (uint32_t i = 0; i < hdr.ncmds; ++i) {
-        MO_::load_command lc{};
-        std::memcpy(&lc, buf_.data() + off, sizeof(lc));
-        if (lc.cmd == MO_::LC_SEGMENT_64) {
-            MO_::segment_command_64 seg{};
-            std::memcpy(&seg, buf_.data() + off, sizeof(seg));
-            if (va >= seg.vmaddr && va + len <= seg.vmaddr + seg.filesize) {
-                const size_t foff = seg.fileoff +
-                    static_cast<size_t>(va - seg.vmaddr);
-                if (foff + len > buf_.size())
-                    return fail(diag, DC::PatchSegmentCreationFailed,
-                                "file offset out of bounds");
-                std::memcpy(buf_.data() + foff, data, len);
-                return {};
-            }
-        }
-        off += lc.cmdsize;
-    }
-    return fail(diag, DC::PatchSegmentCreationFailed,
-                "VA not in any loaded segment");
-}
-
 tl::expected<NewSegmentInfo, DC>
 MachOEditor::add_segment(std::string_view name,
                          const std::vector<uint8_t>& payload,
@@ -246,7 +220,7 @@ MachOEditor::add_segment(std::string_view name,
 }
 
 tl::expected<void, DC>
-MachOEditor::add_dylib(std::string_view install_name,
+MachOEditor::add_runtime_dep(std::string_view install_name,
                        Common::DiagnosticCollector& diag) noexcept {
     // LC_LOAD_DYLIB: dylib_command header (24 bytes) + null-terminated string,
     // total size aligned to 8 bytes.
@@ -291,6 +265,26 @@ MachOEditor::add_dylib(std::string_view install_name,
               "added LC_LOAD_DYLIB: " + std::string(install_name));
 
     return {};
+}
+
+void MachOEditor::invalidate_signature() noexcept {
+    size_t off = sizeof(MO::mach_header_64);
+    for (uint32_t i = 0; i < header_.ncmds; ++i) {
+        if (off + sizeof(MO::load_command) > buf_.size()) break;
+        auto lc = read_at<MO::load_command>(off);
+        if (lc.cmd == MO::LC_CODE_SIGNATURE) {
+            auto cs = read_at<MO::linkedit_data_command>(off);
+            // Truncate signature data if at EOF
+            if (cs.dataoff + cs.datasize == buf_.size())
+                buf_.resize(cs.dataoff);
+            // Zero dataoff/datasize but keep load command in chain
+            cs.dataoff = 0;
+            cs.datasize = 0;
+            write_at(off, cs);
+            return;
+        }
+        off += lc.cmdsize;
+    }
 }
 
 tl::expected<void, DC>

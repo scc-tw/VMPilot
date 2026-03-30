@@ -2,23 +2,16 @@
 #define __LOADER_ELF_EDITOR_HPP__
 #pragma once
 
-#include <LoaderTypes.hpp>
-#include <diagnostic_collector.hpp>
+#include <BinaryEditor.hpp>
 
-#include <tl/expected.hpp>
-
-#include <cstdint>
 #include <memory>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace VMPilot::Loader {
 
-/// ELF binary editor using ELFIO.  Pimpl to keep elfio out of the header.
-class ELFEditor {
+/// ELF binary editor using ELFIO. Pimpl to keep elfio out of the header.
+class ELFEditor : public BinaryEditor {
 public:
-    ~ELFEditor();
+    ~ELFEditor() override;
     ELFEditor(ELFEditor&&) noexcept;
     ELFEditor& operator=(ELFEditor&&) noexcept;
 
@@ -26,31 +19,28 @@ public:
     open(const std::string& path,
          Common::DiagnosticCollector& diag) noexcept;
 
-    [[nodiscard]] TextSectionInfo text_section() const noexcept;
+    // --- BinaryEditor interface ---
+    [[nodiscard]] TextSectionInfo text_section() const noexcept override;
+    [[nodiscard]] uint64_t next_segment_va(uint64_t alignment) const noexcept override;
+
+    [[nodiscard]] tl::expected<NewSegmentInfo, Common::DiagnosticCode>
+    add_segment(std::string_view name, const std::vector<uint8_t>& data,
+                uint64_t alignment,
+                Common::DiagnosticCollector& diag) noexcept override;
 
     [[nodiscard]] tl::expected<void, Common::DiagnosticCode>
     overwrite_text(uint64_t va, const uint8_t* data, size_t len,
-                   Common::DiagnosticCollector& diag) noexcept;
+                   Common::DiagnosticCollector& diag) noexcept override;
 
-    [[nodiscard]] tl::expected<NewSegmentInfo, Common::DiagnosticCode>
-    add_segment(std::string_view name, const std::vector<uint8_t>& payload,
-                uint64_t alignment,
-                Common::DiagnosticCollector& diag) noexcept;
-
-    /// Overwrite bytes at any VA in any loaded section (including .text.vm).
     [[nodiscard]] tl::expected<void, Common::DiagnosticCode>
-    overwrite_segment(uint64_t va, const uint8_t* data, size_t len,
-                      Common::DiagnosticCollector& diag) noexcept;
+    add_runtime_dep(std::string_view install_name,
+                    Common::DiagnosticCollector& diag) noexcept override;
 
-    /// Add a DT_NEEDED entry for the given shared library soname.
-    /// Currently deferred — emits a diagnostic note and succeeds.
-    [[nodiscard]] tl::expected<void, Common::DiagnosticCode>
-    add_needed(std::string_view soname,
-               Common::DiagnosticCollector& diag) noexcept;
+    void invalidate_signature() noexcept override;
 
     [[nodiscard]] tl::expected<void, Common::DiagnosticCode>
     save(const std::string& path,
-         Common::DiagnosticCollector& diag) noexcept;
+         Common::DiagnosticCollector& diag) noexcept override;
 
 private:
     ELFEditor();

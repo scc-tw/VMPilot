@@ -15,8 +15,9 @@ constexpr uint32_t MH_MAGIC_64    = 0xFEEDFACF;
 constexpr uint32_t MH_CIGAM_64    = 0xCFFAEDFE;  // byte-swapped
 
 // --- Load command types ---
-constexpr uint32_t LC_SEGMENT_64  = 0x19;
-constexpr uint32_t LC_LOAD_DYLIB  = 0xC;
+constexpr uint32_t LC_SEGMENT_64     = 0x19;
+constexpr uint32_t LC_LOAD_DYLIB     = 0xC;
+constexpr uint32_t LC_CODE_SIGNATURE = 0x1D;
 
 // --- VM protection flags ---
 constexpr int32_t VM_PROT_READ    = 0x01;
@@ -89,6 +90,15 @@ struct section_64 {
     uint32_t reserved3;
 };
 static_assert(sizeof(section_64) == 80, "section_64 must be 80 bytes");
+
+/// Linkedit data command (LC_CODE_SIGNATURE, LC_FUNCTION_STARTS, etc.)
+struct linkedit_data_command {
+    uint32_t cmd;
+    uint32_t cmdsize;
+    uint32_t dataoff;
+    uint32_t datasize;
+};
+static_assert(sizeof(linkedit_data_command) == 16);
 
 }  // namespace VMPilot::Loader::MachO
 

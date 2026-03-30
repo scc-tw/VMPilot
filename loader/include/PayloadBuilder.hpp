@@ -2,8 +2,15 @@
 #define __LOADER_PAYLOAD_BUILDER_HPP__
 #pragma once
 
+/// @file PayloadBuilder.hpp
+/// @brief Architecture-agnostic payload assembly.
+///
+/// Builds the injection payload from pre-built blob bytes.
+/// All fixups are resolved in one pass — segment_va is known before calling.
+/// Architecture-specific encoding is delegated to StubEmitter.
+
 #include <LoaderTypes.hpp>
-#include <StubGenerator.hpp>
+#include <StubEmitter.hpp>
 #include <diagnostic_collector.hpp>
 
 #include <tl/expected.hpp>
@@ -20,57 +27,39 @@ struct RegionLayout {
     std::string name;
     size_t stub_offset = 0;
     size_t stub_size = 0;
-    /// Offset within payload where the resume jump displacement must be
-    /// patched by FormatPatcher (needs segment VA + region resume address).
-    size_t resume_fixup_payload_offset = 0;
-    /// Instruction size for resume displacement calculation.
-    /// x86: 4 (rel32, target = RIP + disp). ARM64: 0 (B is PC-relative).
-    size_t resume_insn_size = 0;
-
-    // --- load_base_delta support (Phase 2: PIE/ASLR) ---
-
-    /// Offset within payload of the delta static VA fixup.
-    /// FormatPatcher writes the stub's static VA here so the entry stub
-    /// can compute load_base_delta = actual_va - static_va at runtime.
-    size_t delta_fixup_payload_offset = 0;
-    /// Offset of the ADR/LEA instruction (the "delta reference point")
-    /// relative to the start of this stub. The static VA that gets patched
-    /// is: seg_va + stub_offset + delta_ref_stub_offset.
-    size_t delta_ref_stub_offset = 0;
-    /// Size of the delta fixup region in bytes (8 for x86 imm64, 16 for
-    /// ARM64 4-instruction MOVZ/MOVK sequence).
-    size_t delta_fixup_size = 0;
 };
 
 /// Fully assembled payload ready for injection.
 ///
-/// Layout: [ blob_data | stored_seed (32B) | stub_0 | stub_1 | ... ]
+/// Layout: [ blob | seed (32B) | call_slot (8B) | stub_0 | stub_1 | ... ]
 ///
-/// Entry stubs reference blob_data and stored_seed via RIP-relative /
-/// ADR addressing.  All displacements are fixed up relative to payload
-/// offset 0 (blob start).
+/// All displacements resolved. Data is final — inject with one add_segment().
 struct PatchPayload {
     std::vector<uint8_t> data;
     std::vector<RegionLayout> layouts;
     size_t blob_size = 0;
-    size_t seed_offset = 0;     // offset of stored_seed within payload
+    size_t seed_offset = 0;
+    size_t call_slot_offset = 0;
 };
 
-/// Build the injection payload from pre-built blob bytes.
+/// Build the injection payload.
 ///
-/// Pure data transformation — no file I/O, no blob interpretation.
+/// Pure data transformation — no file I/O. Arch-agnostic: all instruction
+/// encoding delegated to `emitter`. All displacements resolved because
+/// `segment_va` is known (from BinaryEditor::next_segment_va()).
 ///
-/// @param regions       Protected regions (for stub generation).
-/// @param blob_data     Complete blob bytes from compiler pipeline.
-/// @param stored_seed   32-byte root secret to embed alongside blob.
-/// @param arch          Target architecture.
-/// @param mode          Sub-mode (32/64).
-/// @param diag          Diagnostic collector.
+/// @param regions      Protected regions (for stub generation + resume addrs).
+/// @param blob_data    Complete blob bytes from compiler pipeline.
+/// @param stored_seed  32-byte root secret (D15§13.5).
+/// @param segment_va   VA where the payload will be placed (pre-computed).
+/// @param emitter      Architecture-specific code generator.
+/// @param diag         Diagnostic collector.
 [[nodiscard]] tl::expected<PatchPayload, Common::DiagnosticCode>
 build_payload(const std::vector<RegionPatchInfo>& regions,
               const std::vector<uint8_t>& blob_data,
               const std::array<uint8_t, SEED_SIZE>& stored_seed,
-              Common::FileArch arch, Common::FileMode mode,
+              uint64_t segment_va,
+              StubEmitter& emitter,
               Common::DiagnosticCollector& diag =
                   Common::DiagnosticCollector::noop()) noexcept;
 

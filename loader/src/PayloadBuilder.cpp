@@ -4,11 +4,14 @@
 
 namespace VMPilot::Loader {
 
+constexpr size_t CALL_SLOT_SIZE = 8;
+
 tl::expected<PatchPayload, Common::DiagnosticCode>
 build_payload(const std::vector<RegionPatchInfo>& regions,
               const std::vector<uint8_t>& blob_data,
               const std::array<uint8_t, SEED_SIZE>& stored_seed,
-              Common::FileArch arch, Common::FileMode mode,
+              uint64_t segment_va,
+              StubEmitter& emitter,
               Common::DiagnosticCollector& diag) noexcept {
     using DC = Common::DiagnosticCode;
 
@@ -21,12 +24,11 @@ build_payload(const std::vector<RegionPatchInfo>& regions,
         return tl::unexpected(DC::PatchInputInvalid);
     }
 
-    // --- Generate entry stubs (placeholders, fixed up below) ---
+    // --- Generate entry stubs (placeholders) ---
     std::vector<Stub> stubs;
     stubs.reserve(regions.size());
     for (size_t i = 0; i < regions.size(); ++i) {
-        auto s = StubGenerator::generate_entry_stub(arch, mode,
-                     static_cast<uint32_t>(i));
+        auto s = emitter.emit_entry_stub();
         if (!s) {
             diag.error("loader", DC::PatchStubGenerationFailed,
                        "stub generation failed for '" + regions[i].name + "'");
@@ -35,67 +37,82 @@ build_payload(const std::vector<RegionPatchInfo>& regions,
         stubs.push_back(std::move(*s));
     }
 
-    // --- Layout: [ blob (N) | seed (32) | stub_0 | stub_1 | ... ] ---
+    // --- Layout: [ blob | seed (32) | call_slot (8) | stubs... ] ---
     const size_t blob_size = blob_data.size();
     const size_t seed_offset = blob_size;
-    size_t payload_size = blob_size + SEED_SIZE;
+    const size_t call_slot_offset = seed_offset + SEED_SIZE;
+    size_t payload_size = call_slot_offset + CALL_SLOT_SIZE;
 
     std::vector<RegionLayout> layouts;
     layouts.reserve(regions.size());
     for (size_t i = 0; i < stubs.size(); ++i) {
-        RegionLayout rl;
-        rl.name = regions[i].name;
-        rl.stub_offset = payload_size;
-        rl.stub_size = stubs[i].code.size();
-        // Resume fixup: payload_offset = stub_offset + resume_fixup within stub
-        rl.resume_fixup_payload_offset = payload_size + stubs[i].resume_fixup_offset;
-        rl.resume_insn_size = stubs[i].resume_insn_size;
-        // Delta fixup (Phase 2: PIE/ASLR)
-        rl.delta_fixup_payload_offset = payload_size + stubs[i].delta_static_va_fixup_offset;
-        rl.delta_ref_stub_offset = stubs[i].delta_ref_offset;
-        rl.delta_fixup_size = stubs[i].delta_fixup_size;
-        layouts.push_back(std::move(rl));
+        layouts.push_back({regions[i].name, payload_size, stubs[i].code.size()});
         payload_size += stubs[i].code.size();
     }
 
-    // --- Fix up all displacements ---
+    // --- Fix up all displacements (one pass, segment_va known) ---
     for (size_t i = 0; i < stubs.size(); ++i) {
         auto& s = stubs[i];
-        const auto stub_base = static_cast<int64_t>(layouts[i].stub_offset);
+        const auto stub_va = static_cast<int64_t>(segment_va + layouts[i].stub_offset);
 
-        // blob_ptr: blob is at offset 0
-        const int64_t blob_pc = stub_base +
-            static_cast<int64_t>(s.blob_fixup_offset + s.blob_insn_size);
-        if (auto fx = StubGenerator::fixup_blob_displacement(s, -blob_pc, arch); !fx) {
+        // blob_ptr displacement
+        const int64_t blob_disp = static_cast<int64_t>(segment_va)
+            - (stub_va + static_cast<int64_t>(s.blob_fixup_offset));
+        if (auto fx = emitter.fixup_ptr_disp(s.code, s.blob_fixup_offset, blob_disp); !fx) {
             diag.error("loader", DC::PatchStubGenerationFailed,
                        "blob displacement out of range for '" + regions[i].name + "'");
             return tl::unexpected(fx.error());
         }
 
-        // seed_ptr: seed is at offset seed_offset
-        const int64_t seed_pc = stub_base +
-            static_cast<int64_t>(s.seed_fixup_offset + s.seed_insn_size);
-        const int64_t seed_disp = static_cast<int64_t>(seed_offset) - seed_pc;
-        if (auto fx = StubGenerator::fixup_seed_displacement(s, seed_disp, arch); !fx) {
+        // seed_ptr displacement
+        const int64_t seed_disp = static_cast<int64_t>(segment_va + seed_offset)
+            - (stub_va + static_cast<int64_t>(s.seed_fixup_offset));
+        if (auto fx = emitter.fixup_ptr_disp(s.code, s.seed_fixup_offset, seed_disp); !fx) {
             diag.error("loader", DC::PatchStubGenerationFailed,
                        "seed displacement out of range for '" + regions[i].name + "'");
             return tl::unexpected(fx.error());
         }
 
-        // blob_size
-        StubGenerator::fixup_blob_size(s, blob_size);
+        // call_slot displacement
+        const int64_t slot_disp = static_cast<int64_t>(segment_va + call_slot_offset)
+            - (stub_va + static_cast<int64_t>(s.call_slot_fixup_offset));
+        if (auto fx = emitter.fixup_ptr_disp(s.code, s.call_slot_fixup_offset, slot_disp); !fx) {
+            diag.error("loader", DC::PatchStubGenerationFailed,
+                       "call slot displacement out of range for '" + regions[i].name + "'");
+            return tl::unexpected(fx.error());
+        }
+
+        // blob_size immediate
+        emitter.fixup_immediate(s.code, s.size_fixup_offset, blob_size);
+
+        // resume: jump to region.addr + region.size
+        const int64_t resume_disp = static_cast<int64_t>(regions[i].addr + regions[i].size)
+            - (stub_va + static_cast<int64_t>(s.resume_fixup_offset));
+        if (auto fx = emitter.fixup_branch_disp(s.code, s.resume_fixup_offset, resume_disp); !fx) {
+            diag.error("loader", DC::PatchStubGenerationFailed,
+                       "resume displacement out of range for '" + regions[i].name + "'");
+            return tl::unexpected(fx.error());
+        }
+
+        // ASLR delta static VA
+        if (s.delta_fixup_size > 0) {
+            emitter.fixup_static_va(s.code, s.delta_fixup_offset, s.delta_fixup_size,
+                                    segment_va + layouts[i].stub_offset + s.delta_ref_offset);
+        }
     }
 
     // --- Assemble ---
-    std::vector<uint8_t> payload(payload_size);
+    std::vector<uint8_t> payload(payload_size, 0);
     std::memcpy(payload.data(), blob_data.data(), blob_size);
     std::memcpy(payload.data() + seed_offset, stored_seed.data(), SEED_SIZE);
+    // call_slot = 0 initially (runtime fills it)
     for (size_t i = 0; i < stubs.size(); ++i) {
         std::memcpy(payload.data() + layouts[i].stub_offset,
                     stubs[i].code.data(), stubs[i].code.size());
     }
 
-    return PatchPayload{std::move(payload), std::move(layouts), blob_size, seed_offset};
+    return PatchPayload{std::move(payload), std::move(layouts),
+                        blob_size, seed_offset, call_slot_offset};
 }
 
 }  // namespace VMPilot::Loader
