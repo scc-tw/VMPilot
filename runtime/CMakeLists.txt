@@ -167,6 +167,17 @@ if(ENABLE_TESTS)
                 GTest::gtest_main
     )
 
+    add_executable(test_vm_stub_entry
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_vm_stub_entry.cpp
+    )
+    target_include_directories(test_vm_stub_entry
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(test_vm_stub_entry
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+
     add_executable(test_anti_tamper
         ${CMAKE_CURRENT_SOURCE_DIR}/test/test_anti_tamper.cpp
     )
@@ -232,6 +243,7 @@ if(ENABLE_TESTS)
     gtest_discover_tests(test_dispatcher)
     gtest_discover_tests(test_native_bridge)
     gtest_discover_tests(test_vm_entry)
+    gtest_discover_tests(test_vm_stub_entry)
     gtest_discover_tests(test_anti_tamper)
     gtest_discover_tests(test_mba_property)
     gtest_discover_tests(test_cross_bb)

@@ -10,7 +10,10 @@
 #include <LoaderTypes.hpp>
 #include <PayloadBuilder.hpp>
 #include <PlatformTraits.hpp>
+#include <StubArgsLayout.hpp>
 #include <StubEmitter.hpp>
+
+#include <vm/vm_stub_args.hpp>
 
 #include <diagnostic_collector.hpp>
 
@@ -818,3 +821,56 @@ TEST(HandoverRoundtrip, ARM64PatchToStubAndBack) {
         static_cast<int64_t>(b_pc) + bwd_off);
     EXPECT_EQ(bwd_target, REGION_ADDR + REGION_SIZE) << "resume B misses region end";
 }
+
+// ============================================================
+// StubArgsLayout cross-validation (native arch only)
+//
+// Verifies that the StubArgsLayout traits (used by loader codegen)
+// match the actual C++ struct layout of VmStubArgs (used by runtime).
+// This can only be checked on native builds where host == target.
+// ============================================================
+
+#if defined(__x86_64__) || defined(_M_X64)
+TEST(StubArgsLayoutValidation, X86_64OffsetsMatchStruct) {
+    using L = StubArgsLayout<FileArch::X86, FileMode::MODE_64>;
+    using S = VMPilot::Common::VM::VmStubArgs;
+    EXPECT_EQ(L::total_size, sizeof(S));
+    EXPECT_EQ(L::off_version, offsetof(S, version));
+    EXPECT_EQ(L::off_num_regs, offsetof(S, num_regs));
+    EXPECT_EQ(L::off_load_base_delta, offsetof(S, load_base_delta));
+    EXPECT_EQ(L::off_blob_data, offsetof(S, blob_data));
+    EXPECT_EQ(L::off_stored_seed, offsetof(S, stored_seed));
+    EXPECT_EQ(L::off_initial_regs, offsetof(S, initial_regs));
+    EXPECT_EQ(L::off_blob_size, offsetof(S, blob_size));
+}
+#endif
+
+#if defined(__i386__) || defined(_M_IX86)
+TEST(StubArgsLayoutValidation, X86_32OffsetsMatchStruct) {
+    using L = StubArgsLayout<FileArch::X86, FileMode::MODE_32>;
+    using S = VMPilot::Common::VM::VmStubArgs;
+    EXPECT_EQ(L::total_size, sizeof(S));
+    EXPECT_EQ(L::off_version, offsetof(S, version));
+    EXPECT_EQ(L::off_num_regs, offsetof(S, num_regs));
+    EXPECT_EQ(L::off_load_base_delta, offsetof(S, load_base_delta));
+    EXPECT_EQ(L::off_blob_data, offsetof(S, blob_data));
+    EXPECT_EQ(L::off_stored_seed, offsetof(S, stored_seed));
+    EXPECT_EQ(L::off_initial_regs, offsetof(S, initial_regs));
+    EXPECT_EQ(L::off_blob_size, offsetof(S, blob_size));
+}
+#endif
+
+#if defined(__aarch64__) || defined(_M_ARM64)
+TEST(StubArgsLayoutValidation, ARM64OffsetsMatchStruct) {
+    using L = StubArgsLayout<FileArch::ARM64, FileMode::MODE_LITTLE_ENDIAN>;
+    using S = VMPilot::Common::VM::VmStubArgs;
+    EXPECT_EQ(L::total_size, sizeof(S));
+    EXPECT_EQ(L::off_version, offsetof(S, version));
+    EXPECT_EQ(L::off_num_regs, offsetof(S, num_regs));
+    EXPECT_EQ(L::off_load_base_delta, offsetof(S, load_base_delta));
+    EXPECT_EQ(L::off_blob_data, offsetof(S, blob_data));
+    EXPECT_EQ(L::off_stored_seed, offsetof(S, stored_seed));
+    EXPECT_EQ(L::off_initial_regs, offsetof(S, initial_regs));
+    EXPECT_EQ(L::off_blob_size, offsetof(S, blob_size));
+}
+#endif
