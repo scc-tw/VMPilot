@@ -27,6 +27,12 @@ public:
         Stub s;
         auto& c = s.code;
 
+        // ---- 0. CET landing pad (Intel CET indirect-call target) ----
+        // ENDBR32: required on CET-enforced systems for indirect call targets.
+        // NOP on older CPUs.
+        c.push_back(0xF3); c.push_back(0x0F);
+        c.push_back(0x1E); c.push_back(0xFB);
+
         // ---- 1. Save callee-saved: push ebx(3), ebp(5), esi(6), edi(7) ----
         for (auto reg : Traits::callee_saved) {
             if (reg < 8) c.push_back(0x50 + reg);

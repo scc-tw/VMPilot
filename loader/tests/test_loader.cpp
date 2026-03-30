@@ -158,6 +158,49 @@ TEST(StubEmitter, ARM64EntryStubStructure) {
 }
 
 // ============================================================================
+// StubEmitter — CET/BTI landing pads
+// ============================================================================
+
+TEST(StubEmitter, X64EntryStubStartsWithENDBR64) {
+    auto e = Loader::create_emitter(Common::FileArch::X86, Common::FileMode::MODE_64);
+    auto r = e->emit_entry_stub();
+    ASSERT_TRUE(r);
+    auto& c = r->code;
+    ASSERT_GE(c.size(), 4u);
+    // ENDBR64 = F3 0F 1E FA
+    EXPECT_EQ(c[0], 0xF3);
+    EXPECT_EQ(c[1], 0x0F);
+    EXPECT_EQ(c[2], 0x1E);
+    EXPECT_EQ(c[3], 0xFA);
+}
+
+TEST(StubEmitter, X32EntryStubStartsWithENDBR32) {
+    auto e = Loader::create_emitter(Common::FileArch::X86, Common::FileMode::MODE_32);
+    ASSERT_NE(e, nullptr);
+    auto r = e->emit_entry_stub();
+    ASSERT_TRUE(r);
+    auto& c = r->code;
+    ASSERT_GE(c.size(), 4u);
+    // ENDBR32 = F3 0F 1E FB
+    EXPECT_EQ(c[0], 0xF3);
+    EXPECT_EQ(c[1], 0x0F);
+    EXPECT_EQ(c[2], 0x1E);
+    EXPECT_EQ(c[3], 0xFB);
+}
+
+TEST(StubEmitter, ARM64EntryStubStartsWithBTI) {
+    auto e = Loader::create_emitter(Common::FileArch::ARM64, Common::FileMode::MODE_LITTLE_ENDIAN);
+    auto r = e->emit_entry_stub();
+    ASSERT_TRUE(r);
+    auto& c = r->code;
+    ASSERT_GE(c.size(), 4u);
+    // BTI c = D503245F (little-endian: 5F 24 03 D5)
+    uint32_t first_insn;
+    std::memcpy(&first_insn, c.data(), 4);
+    EXPECT_EQ(first_insn, 0xD503245Fu) << "First instruction must be BTI c";
+}
+
+// ============================================================================
 // StubEmitter — emit_region_patch
 // ============================================================================
 

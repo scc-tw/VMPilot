@@ -254,6 +254,11 @@ ARM64StubEmitter::emit_entry_stub() noexcept {
     auto& c = s.code;
     c.reserve(512);
 
+    // ---- 0. BTI landing pad (ARM BTI indirect-call target) ----
+    // BTI c: required on BTI-enforced systems (FEAT_BTI) for indirect
+    // call targets.  NOP on non-BTI-aware CPUs.
+    emit32(c, 0xD503245F);  // BTI c
+
     constexpr uint8_t sp = 31;  // stack pointer encoding
     constexpr uint8_t xzr = 31; // zero register encoding (same as sp in reg context)
 

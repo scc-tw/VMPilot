@@ -177,6 +177,12 @@ X86_64StubEmitter::emit_entry_stub() noexcept {
     auto& c = s.code;
     c.reserve(256);
 
+    // ---- 0. CET landing pad (Intel CET indirect-call target) ----
+    // ENDBR64: required on CET-enforced systems for indirect call targets.
+    // NOP on older CPUs (decoded as a no-op by pre-CET microarchitectures).
+    c.push_back(0xF3); c.push_back(0x0F);
+    c.push_back(0x1E); c.push_back(0xFA);
+
     // ---- 1. Save callee-saved regs (push rbx, rbp, r12-r15) ----
     for (auto reg : Traits::callee_saved)
         emit_push(c, reg);
