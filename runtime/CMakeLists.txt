@@ -31,6 +31,10 @@ set(RUNTIME_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/handlers/width_extension.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/handlers/atomic.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/handlers/vm_internal.cpp
+    # Native call bridge (Phase 8)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/bridge/native_call_bridge.cpp
+    # VM entry/exit (Phase 10)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/vm_entry.cpp
 )
 
 # ---------------------------------------------------------------------------
@@ -137,6 +141,28 @@ if(ENABLE_TESTS)
                 GTest::gtest_main
     )
 
+    add_executable(test_native_bridge
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_native_bridge.cpp
+    )
+    target_include_directories(test_native_bridge
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(test_native_bridge
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+
+    add_executable(test_vm_entry
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_vm_entry.cpp
+    )
+    target_include_directories(test_vm_entry
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(test_vm_entry
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+
     include(GoogleTest)
     gtest_discover_tests(runtime_smoke_test)
     gtest_discover_tests(test_blob_loader)
@@ -145,4 +171,6 @@ if(ENABLE_TESTS)
     gtest_discover_tests(test_decoder)
     gtest_discover_tests(test_handlers)
     gtest_discover_tests(test_dispatcher)
+    gtest_discover_tests(test_native_bridge)
+    gtest_discover_tests(test_vm_entry)
 endif()
