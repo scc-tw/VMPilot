@@ -1,5 +1,8 @@
 #include <ArchTraits.hpp>
+#include <StubArgsLayout.hpp>
 #include <StubEmitter.hpp>
+
+#include <vm/vm_stub_args.hpp>
 
 #include <climits>
 #include <cstring>
@@ -7,6 +10,7 @@
 namespace VMPilot::Loader {
 
 using Traits = ArchTraits<Common::FileArch::ARM64, Common::FileMode::MODE_LITTLE_ENDIAN>;
+using Layout = StubArgsLayout<Common::FileArch::ARM64, Common::FileMode::MODE_LITTLE_ENDIAN>;
 using DC     = Common::DiagnosticCode;
 
 // -----------------------------------------------------------------------
@@ -100,6 +104,26 @@ static uint32_t arm64_str_uoff(uint8_t rt, uint8_t rn, uint16_t byte_off) {
     // F9 00 00 00 : STR Xt, [Xn, #uimm12<<3]
     uint32_t imm12 = static_cast<uint32_t>(byte_off / 8) & 0xFFFu;
     return 0xF9000000u
+         | (imm12 << 10)
+         | (static_cast<uint32_t>(rn) << 5)
+         | rt;
+}
+
+/// STR Wt, [Xn, #uimm12]   (unsigned offset, scaled by 4, 32-bit store)
+static uint32_t arm64_str_w_uoff(uint8_t rt, uint8_t rn, uint16_t byte_off) {
+    // B9 00 00 00 : STR Wt, [Xn, #uimm12<<2]
+    uint32_t imm12 = static_cast<uint32_t>(byte_off / 4) & 0xFFFu;
+    return 0xB9000000u
+         | (imm12 << 10)
+         | (static_cast<uint32_t>(rn) << 5)
+         | rt;
+}
+
+/// STRB Wt, [Xn, #uimm12]   (unsigned offset, byte store)
+static uint32_t arm64_strb_uoff(uint8_t rt, uint8_t rn, uint16_t byte_off) {
+    // 39 00 00 00 : STRB Wt, [Xn, #uimm12]
+    uint32_t imm12 = static_cast<uint32_t>(byte_off) & 0xFFFu;
+    return 0x39000000u
          | (imm12 << 10)
          | (static_cast<uint32_t>(rn) << 5)
          | rt;
@@ -231,6 +255,7 @@ ARM64StubEmitter::emit_entry_stub() noexcept {
     c.reserve(512);
 
     constexpr uint8_t sp = 31;  // stack pointer encoding
+    constexpr uint8_t xzr = 31; // zero register encoding (same as sp in reg context)
 
     // ---- 1. Save callee-saved regs (6 STP pairs, pre-index) ----
     // Pairs: (x19,x20), (x21,x22), (x23,x24), (x25,x26), (x27,x28), (x29,x30)
@@ -240,14 +265,13 @@ ARM64StubEmitter::emit_entry_stub() noexcept {
     for (auto& p : pairs)
         emit32(c, arm64_stp_pre(p[0], p[1], sp, -16));
 
-    // ---- 2. ASLR delta ----
+    // ---- 2. ASLR delta into x9 ----
     //   adr x9, .                           ; x9 = runtime VA of this insn
     //   movz x10, #0                        ; placeholder imm64 (4 insns)
     //   movk x10, #0, lsl #16
     //   movk x10, #0, lsl #32
     //   movk x10, #0, lsl #48
-    //   sub x9, x9, x10                     ; x9 = delta
-    //   str x9, [sp, #-8]!                  ; push delta
+    //   sub x9, x9, x10                     ; x9 = delta (kept in x9)
 
     s.delta_ref_offset = c.size();              // ADR instruction offset
     emit32(c, arm64_adr(9, 0));                 // adr x9, .
@@ -260,11 +284,8 @@ ARM64StubEmitter::emit_entry_stub() noexcept {
     emit32(c, arm64_movk_x(10, 0, 3));         // movk x10, #0, lsl #48
 
     emit32(c, arm64_sub_reg(9, 9, 10));         // sub x9, x9, x10
-    emit32(c, arm64_str_pre(9, sp, -8));        // str x9, [sp, #-8]!
 
-    // ---- 3. Build initial_regs[16] on stack ----
-    // We store 16 x 64-bit GPRs = 256 bytes (even though gpr_count is 31,
-    // the vm_execute_with_args interface uses num_regs=16 for the first 16).
+    // ---- 3. Build initial_regs[16] on stack (256 bytes) ----
     constexpr int16_t regs_frame = 256;         // 32 * 8 (space for pairs up to x30)
     emit32(c, arm64_sub_imm(sp, sp, regs_frame));
 
@@ -275,46 +296,69 @@ ARM64StubEmitter::emit_entry_stub() noexcept {
     // STR x30 (LR) at [sp, #240]
     emit32(c, arm64_str_uoff(30, sp, 240));
 
-    // ---- 4. Set up arguments ----
-    //   adr x0, blob                        ; arg0: blob_ptr
-    //   movz w1, #size                      ; arg1: blob_size (imm16 placeholder)
-    //   adr x2, seed                        ; arg2: seed_ptr
-    //   mov x3, sp                          ; arg3: initial_regs
-    //   mov w4, #16                         ; arg4: num_regs
-    //   mov x5, #0                          ; arg5: config = nullptr
+    // Save initial_regs pointer in x19 (callee-saved, already saved in step 1)
+    emit32(c, arm64_mov_reg(19, sp));           // mov x19, sp
 
+    // ---- 4. Allocate VmStubArgs (64 bytes) ----
+    constexpr uint16_t args_frame = static_cast<uint16_t>(Layout::total_size);
+    emit32(c, arm64_sub_imm(sp, sp, args_frame));
+
+    // ---- 5. Fill VmStubArgs ----
+    // Zero the entire 64-byte struct (4 STP pairs of xzr)
+    emit32(c, arm64_stp_offset(xzr, xzr, sp,  0));  // [sp, #0]
+    emit32(c, arm64_stp_offset(xzr, xzr, sp, 16));  // [sp, #16]
+    emit32(c, arm64_stp_offset(xzr, xzr, sp, 32));  // [sp, #32]
+    emit32(c, arm64_stp_offset(xzr, xzr, sp, 48));  // [sp, #48]
+
+    // version (uint32_t at offset 0)
+    emit32(c, arm64_movz_w(11, Common::VM::VM_STUB_ABI_VERSION));
+    emit32(c, arm64_str_w_uoff(11, sp, static_cast<uint16_t>(Layout::off_version)));
+
+    // num_regs (uint8_t at offset 4)
+    emit32(c, arm64_movz_w(11, 16));
+    emit32(c, arm64_strb_uoff(11, sp, static_cast<uint16_t>(Layout::off_num_regs)));
+
+    // load_base_delta (int64_t at offset 8) — x9 holds delta from step 2
+    emit32(c, arm64_str_uoff(9, sp, static_cast<uint16_t>(Layout::off_load_base_delta)));
+
+    // blob_data (pointer at offset 16)
     s.blob_fixup_offset = c.size();
-    emit32(c, arm64_adr(0, 0));                 // adr x0, blob (placeholder)
+    emit32(c, arm64_adr(11, 0));                // adr x11, blob (placeholder)
+    emit32(c, arm64_str_uoff(11, sp, static_cast<uint16_t>(Layout::off_blob_data)));
 
-    s.size_fixup_offset = c.size();
-    emit32(c, arm64_movz_w(1, 0));              // movz w1, #0 (placeholder)
-
+    // stored_seed (pointer at offset 24)
     s.seed_fixup_offset = c.size();
-    emit32(c, arm64_adr(2, 0));                 // adr x2, seed (placeholder)
+    emit32(c, arm64_adr(11, 0));                // adr x11, seed (placeholder)
+    emit32(c, arm64_str_uoff(11, sp, static_cast<uint16_t>(Layout::off_stored_seed)));
 
-    emit32(c, arm64_mov_reg(3, sp));            // mov x3, sp
+    // initial_regs (pointer at offset 32) — x19 from step 3
+    emit32(c, arm64_str_uoff(19, sp, static_cast<uint16_t>(Layout::off_initial_regs)));
 
-    emit32(c, arm64_movz_w(4, 16));             // mov w4, #16
+    // blob_size (uint32_t at offset 40)
+    s.size_fixup_offset = c.size();
+    emit32(c, arm64_movz_w(11, 0));             // movz w11, #0 (placeholder)
+    emit32(c, arm64_str_w_uoff(11, sp, static_cast<uint16_t>(Layout::off_blob_size)));
 
-    emit32(c, arm64_mov_imm0(5));               // mov x5, #0
+    // ---- 6. Set arg0 = pointer to VmStubArgs ----
+    emit32(c, arm64_mov_reg(0, sp));            // mov x0, sp
 
-    // ---- 5. Indirect call: adr x9, slot; ldr x9, [x9]; blr x9 ----
+    // ---- 7. Indirect call: adr x9, slot; ldr x9, [x9]; blr x9 ----
     s.call_slot_fixup_offset = c.size();
     emit32(c, arm64_adr(9, 0));                 // adr x9, slot (placeholder)
     emit32(c, arm64_ldr_uoff(9, 9, 0));        // ldr x9, [x9]
     emit32(c, arm64_blr(9));                    // blr x9
 
-    // ---- 6. Pop initial_regs frame ----
+    // ---- 8. Deallocate VmStubArgs ----
+    emit32(c, arm64_add_imm(sp, sp, args_frame));
+
+    // ---- 9. Deallocate initial_regs ----
     emit32(c, arm64_add_imm(sp, sp, regs_frame));
 
-    // ---- 7. Pop delta (discard) ----
-    emit32(c, arm64_add_imm(sp, sp, 8));
-
-    // ---- 8. Restore callee-saved (reverse order) ----
+    // ---- 10. Restore callee-saved (reverse order) ----
     for (int i = 5; i >= 0; --i)
         emit32(c, arm64_ldp_post(pairs[i][0], pairs[i][1], sp, 16));
 
-    // ---- 9. B <resume> (placeholder) ----
+    // ---- 11. B <resume> (placeholder) ----
     s.resume_fixup_offset = c.size();
     emit32(c, arm64_b(0));                      // b . (placeholder)
 

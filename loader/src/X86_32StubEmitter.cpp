@@ -1,5 +1,7 @@
 #include <StubEmitter.hpp>
+#include <StubArgsLayout.hpp>
 #include <ArchTraits.hpp>
+#include <vm/vm_stub_args.hpp>
 
 #include <cstring>
 #include <vector>
@@ -7,6 +9,7 @@
 namespace VMPilot::Loader {
 
 using Traits = ArchTraits<Common::FileArch::X86, Common::FileMode::MODE_32>;
+using Layout = StubArgsLayout<Common::FileArch::X86, Common::FileMode::MODE_32>;
 using DC = Common::DiagnosticCode;
 
 static void emit32(std::vector<uint8_t>& c, uint32_t v) {
@@ -24,97 +27,127 @@ public:
         Stub s;
         auto& c = s.code;
 
-        // 1. Save callee-saved: push ebx, ebp, esi, edi
+        // ---- 1. Save callee-saved: push ebx(3), ebp(5), esi(6), edi(7) ----
         for (auto reg : Traits::callee_saved) {
-            if (reg < 8) c.push_back(0x50 + reg); // push reg
+            if (reg < 8) c.push_back(0x50 + reg);
         }
 
-        // 2. ASLR delta: call/pop to get EIP (PIC trick)
-        // call .Lbase (E8 00 00 00 00)
+        // ---- 2. ASLR delta via call/pop PIC trick ----
+        // call .Lbase (E8 00000000) — pushes return address
         c.push_back(0xE8); emit32(c, 0);
-        // pop ebx (5B) — ebx = EIP of pop instruction
+        // pop ebx — ebx = EIP of this pop instruction
         c.push_back(0x5B);
-        s.delta_ref_offset = c.size() - 1; // address of pop = reference point
+        s.delta_ref_offset = c.size() - 1;
 
-        // mov eax, <static_va>; sub ebx, eax; (ebx = delta)
-        c.push_back(0xB8); // mov eax, imm32
+        // mov eax, <static_va> (placeholder); sub ebx, eax → ebx = delta
+        c.push_back(0xB8);  // mov eax, imm32
         s.delta_fixup_offset = c.size();
         s.delta_fixup_size = 4;
         placeholder32(c);
-        // sub ebx, eax
-        c.push_back(0x29); c.push_back(0xC3);
-        // Now ebx = load_base_delta. Save it.
-        c.push_back(0x53); // push ebx (delta on stack)
+        c.push_back(0x29); c.push_back(0xC3);  // sub ebx, eax
+        // ebx = load_base_delta (kept in register, NOT pushed)
 
-        // 3. Build initial_regs[8] on stack
-        // sub esp, 32 (8 regs * 4 bytes)
-        c.push_back(0x83); c.push_back(0xEC); c.push_back(0x20);
-        // mov [esp+i*4], reg for eax(0)..edi(7)
+        // ---- 3. Build initial_regs[8] on stack (32 bytes) ----
+        c.push_back(0x83); c.push_back(0xEC); c.push_back(0x20);  // sub esp, 32
         for (int i = 0; i < 8; ++i) {
-            // mov [esp+disp8], reg
             c.push_back(0x89);
-            c.push_back(0x44 | ((i & 7) << 3)); // ModRM: [esp+disp8], reg
-            c.push_back(0x24); // SIB: base=esp
+            c.push_back(0x44 | ((i & 7) << 3));  // ModRM [esp+disp8], reg
+            c.push_back(0x24);                    // SIB base=esp
             c.push_back(static_cast<uint8_t>(i * 4));
         }
+        // Save initial_regs pointer in esi (callee-saved, already pushed)
+        // mov esi, esp  (89 E6)
+        c.push_back(0x89); c.push_back(0xE6);
 
-        // 4. Push args for cdecl (right to left):
-        //    config(nullptr), load_base_delta, num_regs(8),
-        //    initial_regs, seed, size, blob
+        // ---- 4. Allocate VmStubArgs (64 bytes) ----
+        c.push_back(0x83); c.push_back(0xEC);
+        c.push_back(static_cast<uint8_t>(Layout::total_size));  // sub esp, 64
 
-        // push 0 (config = nullptr)
-        c.push_back(0x6A); c.push_back(0x00);
+        // Zero the struct: push 16 dwords of 0 would be expensive.
+        // Instead we rely on writing all meaningful fields; pad_ is
+        // don't-care (runtime only reads defined fields).
 
-        // push ebx (load_base_delta — still in ebx)
-        c.push_back(0x53);
+        // ---- 5. Fill VmStubArgs fields ----
 
-        // push 8 (num_regs)
-        c.push_back(0x6A); c.push_back(0x08);
+        // version: mov dword [esp+0], VM_STUB_ABI_VERSION
+        // C7 04 24 <imm32>
+        c.push_back(0xC7); c.push_back(0x04); c.push_back(0x24);
+        emit32(c, Common::VM::VM_STUB_ABI_VERSION);
 
-        // lea eax, [esp+12]; push eax (initial_regs ptr)
-        // After 3 pushes above, esp moved by 12. Array is at esp+12.
-        c.push_back(0x8D); c.push_back(0x44); c.push_back(0x24); c.push_back(0x0C);
-        c.push_back(0x50); // push eax
+        // num_regs: mov byte [esp+4], 8
+        // C6 44 24 04 08
+        c.push_back(0xC6); c.push_back(0x44); c.push_back(0x24);
+        c.push_back(static_cast<uint8_t>(Layout::off_num_regs));
+        c.push_back(Traits::gpr_count);  // 8
 
-        // lea eax, [ebx + disp32]; push eax (seed_ptr)
-        c.push_back(0x8D); c.push_back(0x83); // lea eax, [ebx + disp32]
+        // load_base_delta: ebx holds delta (32-bit value, sign-extended to 64)
+        // mov [esp+8], ebx  (low 32 bits)
+        // 89 5C 24 08
+        c.push_back(0x89); c.push_back(0x5C); c.push_back(0x24);
+        c.push_back(static_cast<uint8_t>(Layout::off_load_base_delta));
+        // mov [esp+12], edx (high 32 bits: sign-extend ebx into edx via CDQ)
+        // First: mov eax, ebx (89 D8); cdq (99) — edx:eax = sign-extend(ebx)
+        c.push_back(0x89); c.push_back(0xD8);  // mov eax, ebx
+        c.push_back(0x99);                      // cdq → edx = sign-extend of eax
+        c.push_back(0x89); c.push_back(0x54); c.push_back(0x24);
+        c.push_back(static_cast<uint8_t>(Layout::off_load_base_delta + 4));
+
+        // blob_data: lea eax, [ebx + disp32]; mov [esp+16], eax
+        c.push_back(0x8D); c.push_back(0x83);  // lea eax, [ebx + disp32]
+        s.blob_fixup_offset = c.size();
+        placeholder32(c);
+        c.push_back(0x89); c.push_back(0x44); c.push_back(0x24);
+        c.push_back(static_cast<uint8_t>(Layout::off_blob_data));
+
+        // stored_seed: lea eax, [ebx + disp32]; mov [esp+20], eax
+        c.push_back(0x8D); c.push_back(0x83);
         s.seed_fixup_offset = c.size();
         placeholder32(c);
-        c.push_back(0x50); // push eax
+        c.push_back(0x89); c.push_back(0x44); c.push_back(0x24);
+        c.push_back(static_cast<uint8_t>(Layout::off_stored_seed));
 
-        // push blob_size (imm32)
-        c.push_back(0x68);
+        // initial_regs: mov [esp+24], esi
+        c.push_back(0x89); c.push_back(0x74); c.push_back(0x24);
+        c.push_back(static_cast<uint8_t>(Layout::off_initial_regs));
+
+        // blob_size: mov dword [esp+28], imm32
+        // C7 44 24 1C <imm32>
+        c.push_back(0xC7); c.push_back(0x44); c.push_back(0x24);
+        c.push_back(static_cast<uint8_t>(Layout::off_blob_size));
         s.size_fixup_offset = c.size();
         placeholder32(c);
 
-        // lea eax, [ebx + disp32]; push eax (blob_ptr)
-        c.push_back(0x8D); c.push_back(0x83);
-        s.blob_fixup_offset = c.size();
-        placeholder32(c);
-        c.push_back(0x50); // push eax
+        // ---- 6. Push arg0 = pointer to VmStubArgs (cdecl: on stack) ----
+        // lea eax, [esp]; push eax — but push changes esp!
+        // Actually: push esp works (pushes current esp value)
+        // No — push esp pushes the value AFTER decrement on some x86.
+        // Safe way: mov eax, esp; push eax
+        c.push_back(0x89); c.push_back(0xE0);  // mov eax, esp
+        c.push_back(0x50);                      // push eax
 
-        // 5. Indirect call: lea eax, [ebx + disp32]; call [eax]
+        // ---- 7. Indirect call: lea eax, [ebx + slot_disp]; call [eax] ----
         c.push_back(0x8D); c.push_back(0x83);
         s.call_slot_fixup_offset = c.size();
         placeholder32(c);
-        c.push_back(0xFF); c.push_back(0x10); // call [eax]
+        c.push_back(0xFF); c.push_back(0x10);  // call [eax]
 
-        // 6. Clean up: add esp, 28 (7 pushed args * 4)
-        c.push_back(0x83); c.push_back(0xC4); c.push_back(0x1C);
-
-        // 7. Clean up initial_regs: add esp, 32
-        c.push_back(0x83); c.push_back(0xC4); c.push_back(0x20);
-
-        // 8. Pop delta: add esp, 4
+        // ---- 8. Clean up cdecl arg: add esp, 4 ----
         c.push_back(0x83); c.push_back(0xC4); c.push_back(0x04);
 
-        // 9. Restore callee-saved (reverse order): pop edi, esi, ebp, ebx
+        // ---- 9. Deallocate VmStubArgs: add esp, 64 ----
+        c.push_back(0x83); c.push_back(0xC4);
+        c.push_back(static_cast<uint8_t>(Layout::total_size));
+
+        // ---- 10. Deallocate initial_regs: add esp, 32 ----
+        c.push_back(0x83); c.push_back(0xC4); c.push_back(0x20);
+
+        // ---- 11. Restore callee-saved (reverse): pop edi, esi, ebp, ebx ----
         for (int i = static_cast<int>(Traits::callee_saved.size()) - 1; i >= 0; --i) {
             auto reg = Traits::callee_saved[static_cast<size_t>(i)];
-            if (reg < 8) c.push_back(0x58 + reg); // pop reg
+            if (reg < 8) c.push_back(0x58 + reg);
         }
 
-        // 10. jmp resume (E9 rel32)
+        // ---- 12. JMP resume (E9 rel32 placeholder) ----
         c.push_back(0xE9);
         s.resume_fixup_offset = c.size();
         placeholder32(c);

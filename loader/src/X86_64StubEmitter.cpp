@@ -1,5 +1,8 @@
 #include <ArchTraits.hpp>
+#include <StubArgsLayout.hpp>
 #include <StubEmitter.hpp>
+
+#include <vm/vm_stub_args.hpp>
 
 #include <climits>
 #include <cstring>
@@ -7,6 +10,7 @@
 namespace VMPilot::Loader {
 
 using Traits = ArchTraits<Common::FileArch::X86, Common::FileMode::MODE_64>;
+using Layout = StubArgsLayout<Common::FileArch::X86, Common::FileMode::MODE_64>;
 using DC     = Common::DiagnosticCode;
 
 // -----------------------------------------------------------------------
@@ -177,27 +181,21 @@ X86_64StubEmitter::emit_entry_stub() noexcept {
     for (auto reg : Traits::callee_saved)
         emit_push(c, reg);
 
-    // ---- 2. Compute ASLR delta ----
+    // ---- 2. Compute ASLR delta into rax (keep in rax) ----
     //   lea rax, [rip + 0]        ; rax = runtime VA of next insn
     //   mov r10, <imm64>          ; r10 = static VA (placeholder)
-    //   sub rax, r10              ; rax = delta
-    //   push rax                  ; save delta on stack
+    //   sub rax, r10              ; rax = load_base_delta
 
-    // The LEA [rip+0] loads the address of the instruction following
-    // the LEA itself.  We record delta_ref_offset = end of LEA insn
-    // (i.e. the address loaded is stub_base + delta_ref_offset).
     size_t lea_disp = emit_lea_rip(c, 0 /* rax */);
-    // Write 0 displacement so rax = address right after this LEA.
-    // (The disp32 is already 0x00000000 from the placeholder.)
-    s.delta_ref_offset = lea_disp + 4;          // runtime VA = stub + this
+    s.delta_ref_offset = lea_disp + 4;
 
     s.delta_fixup_offset = emit_mov_imm64(c, 10 /* r10 */);
     s.delta_fixup_size   = 8;
 
     emit_sub_rax_r10(c);
-    emit_push(c, 0 /* rax */);
+    // Delta stays in rax — do NOT push.
 
-    // ---- 3. Build initial_regs[16] array on stack ----
+    // ---- 3. Build initial_regs[16] array on stack (128 bytes) ----
     constexpr int32_t regs_frame = Traits::gpr_count * 8;  // 128
     emit_sub_rsp_imm32(c, regs_frame);
 
@@ -210,48 +208,93 @@ X86_64StubEmitter::emit_entry_stub() noexcept {
         emit_mov_to_rsp_disp(c, static_cast<int32_t>(i * 8), i);
     }
 
-    // ---- 4. Set up vm_execute_with_args arguments ----
-    //   arg0 (rdi) : blob_ptr       — LEA rdi, [rip + blob_offset]
-    //   arg1 (esi) : blob_size      — MOV esi, <imm32>
-    //   arg2 (rdx) : seed_ptr       — LEA rdx, [rip + seed_offset]
-    //   arg3 (rcx) : initial_regs   — LEA rcx, [rsp]
-    //   arg4 (r8d) : num_regs = 16  — MOV r8d, 16
-    //   arg5 (r9d) : config = 0     — XOR r9d, r9d
+    // Save pointer to initial_regs array (current rsp) into r12.
+    // mov r12, rsp  — 49 89 E4
+    c.push_back(0x49);
+    c.push_back(0x89);
+    c.push_back(0xE4);
 
-    s.blob_fixup_offset = emit_lea_rip(c, 7 /* rdi */);
-    s.size_fixup_offset = emit_mov_imm32(c, 6 /* esi */);
-    s.seed_fixup_offset = emit_lea_rip(c, 2 /* rdx */);
+    // ---- 4. Allocate VmStubArgs on the stack ----
+    constexpr int32_t args_frame = static_cast<int32_t>(Layout::total_size);  // 64
+    emit_sub_rsp_imm32(c, args_frame);
 
-    emit_lea_rcx_rsp(c);
+    // ---- 5. Fill VmStubArgs fields ----
 
-    // mov r8d, 16
+    // mov dword [rsp + off_version], VM_STUB_ABI_VERSION (=1)
+    // off_version == 0, so: C7 04 24 <imm32>  (7 bytes)
     {
-        size_t off = emit_mov_imm32(c, 8 /* r8 */);
-        uint32_t val = 16;
-        std::memcpy(&c[off], &val, 4);
+        c.push_back(0xC7);
+        c.push_back(0x04);
+        c.push_back(0x24);
+        uint32_t ver = Common::VM::VM_STUB_ABI_VERSION;
+        c.push_back(static_cast<uint8_t>(ver));
+        c.push_back(static_cast<uint8_t>(ver >> 8));
+        c.push_back(static_cast<uint8_t>(ver >> 16));
+        c.push_back(static_cast<uint8_t>(ver >> 24));
     }
 
-    emit_xor_r32(c, 9 /* r9 */);
+    // mov byte [rsp + off_num_regs], 16
+    // C6 44 24 <disp8> <imm8>  (5 bytes)
+    {
+        c.push_back(0xC6);
+        c.push_back(0x44);
+        c.push_back(0x24);
+        c.push_back(static_cast<uint8_t>(Layout::off_num_regs));
+        c.push_back(16);
+    }
 
-    // ---- 5. Indirect call: lea rax, [rip + slot]; call [rax] ----
+    // mov [rsp + off_load_base_delta], rax  (8-byte, delta from step 2)
+    emit_mov_to_rsp_disp(c, static_cast<int32_t>(Layout::off_load_base_delta),
+                          0 /* rax */);
+
+    // lea rcx, [rip + blob_offset]; mov [rsp + off_blob_data], rcx
+    s.blob_fixup_offset = emit_lea_rip(c, 1 /* rcx */);
+    emit_mov_to_rsp_disp(c, static_cast<int32_t>(Layout::off_blob_data),
+                          1 /* rcx */);
+
+    // lea rcx, [rip + seed_offset]; mov [rsp + off_stored_seed], rcx
+    s.seed_fixup_offset = emit_lea_rip(c, 1 /* rcx */);
+    emit_mov_to_rsp_disp(c, static_cast<int32_t>(Layout::off_stored_seed),
+                          1 /* rcx */);
+
+    // mov [rsp + off_initial_regs], r12  (pointer from step 3)
+    emit_mov_to_rsp_disp(c, static_cast<int32_t>(Layout::off_initial_regs),
+                          12 /* r12 */);
+
+    // mov dword [rsp + off_blob_size], <imm32>  (fixup placeholder)
+    // C7 44 24 <disp8> <imm32>  (8 bytes)
+    {
+        c.push_back(0xC7);
+        c.push_back(0x44);
+        c.push_back(0x24);
+        c.push_back(static_cast<uint8_t>(Layout::off_blob_size));
+        s.size_fixup_offset = c.size();
+        c.insert(c.end(), 4, 0x00);     // placeholder imm32
+    }
+
+    // ---- 6. Set arg0 = pointer to VmStubArgs ----
+    // lea rdi, [rsp]  — 48 8D 3C 24  (4 bytes)
+    c.push_back(0x48);
+    c.push_back(0x8D);
+    c.push_back(0x3C);
+    c.push_back(0x24);
+
+    // ---- 7. Indirect call: lea rax, [rip + slot]; call [rax] ----
     s.call_slot_fixup_offset = emit_lea_rip(c, 0 /* rax */);
     emit_call_rax_indirect(c);
 
-    // ---- 6. Return mapping ----
-    // VmExecResult.return_value is already in rax — nothing to do.
+    // ---- 8. Deallocate VmStubArgs ----
+    emit_add_rsp_imm32(c, args_frame);
 
-    // ---- 7. Pop initial_regs frame ----
+    // ---- 9. Deallocate initial_regs ----
     emit_add_rsp_imm32(c, regs_frame);
 
-    // ---- 8. Pop delta (discard) ----
-    emit_add_rsp_imm32(c, 8);
-
-    // ---- 9. Restore callee-saved (reverse order) ----
+    // ---- 10. Restore callee-saved (reverse order) ----
     for (auto it = Traits::callee_saved.rbegin();
          it != Traits::callee_saved.rend(); ++it)
         emit_pop(c, *it);
 
-    // ---- 10. JMP <resume_addr> (E9 rel32 placeholder) ----
+    // ---- 11. JMP <resume_addr> (E9 rel32 placeholder) ----
     c.push_back(0xE9);
     s.resume_fixup_offset = c.size();
     c.insert(c.end(), 4, 0x00);         // placeholder rel32
