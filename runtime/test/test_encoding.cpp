@@ -13,6 +13,7 @@
 #include <numeric>
 #include <random>
 #include <vector>
+#include <algorithm>
 
 using namespace VMPilot::Common::VM;
 using namespace VMPilot::Common::VM::Encoding;
