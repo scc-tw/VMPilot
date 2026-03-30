@@ -55,7 +55,7 @@ struct EpochCheckpoint {
 };
 
 /// Full VM state model (ISA Design v1, Section 8).
-struct VMContext {
+struct alignas(64) VMContext {
     // D2: encoded registers (register domain, per-BB encoding)
     uint64_t encoded_regs[VM_REG_COUNT];
 
@@ -73,8 +73,11 @@ struct VMContext {
     uint32_t current_epoch;
     uint32_t insn_index_in_bb;  ///< for enc_state chain (j within BB)
 
+    // Padding so oblivious_workspace starts at offset 256 (cache-line aligned)
+    uint8_t reserved_[40];
+
     // D2+D3: VM Internal Oblivious Workspace (Rolling Keystream ORAM)
-    alignas(64) uint8_t oblivious_workspace[VM_OBLIVIOUS_SIZE];
+    uint8_t oblivious_workspace[VM_OBLIVIOUS_SIZE];
     uint64_t oram_nonce;
     uint8_t  oram_key[16];
 
@@ -158,6 +161,11 @@ struct VMContext {
     uint32_t branch_target_bb;  ///< set by JMP/JCC/CALL, read by dispatcher
     bool branch_taken;
 };
+
+static_assert(alignof(VMContext) >= 64,
+              "VMContext must be 64-byte aligned for ORAM cache-line access");
+static_assert(offsetof(VMContext, oblivious_workspace) % 64 == 0,
+              "oblivious_workspace must sit at a 64-byte-aligned offset");
 
 }  // namespace VMPilot::Common::VM
 
