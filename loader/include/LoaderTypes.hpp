@@ -48,6 +48,10 @@ struct PatchRequest {
     Common::FileArch arch = Common::FileArch::X86;
     Common::FileMode mode = Common::FileMode::MODE_64;
     Common::FileFormat format = Common::FileFormat::ELF;
+
+    /// Segmentator version string for diagnostics.
+    /// Region-too-small is a Segmentator bug; the version helps triage.
+    std::string segmentator_version;
 };
 
 /// Output from a successful patch operation.

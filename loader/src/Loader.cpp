@@ -58,11 +58,15 @@ patch(const PatchRequest& request,
     for (size_t i = 0; i < request.regions.size(); ++i) {
         const auto& region = request.regions[i];
         if (region.size < emitter->min_region_size()) {
-            diag.warn("loader", DC::PatchRegionTooSmall,
-                      "'" + region.name + "' too small ("
-                      + std::to_string(region.size) + "B) — Segmentator bug?",
-                      region.name, region.addr);
-            continue;
+            std::string msg = "region '" + region.name + "' too small ("
+                + std::to_string(region.size) + "B, min "
+                + std::to_string(emitter->min_region_size())
+                + "B) — Segmentator bug";
+            if (!request.segmentator_version.empty())
+                msg += " (segmentator v" + request.segmentator_version + ")";
+            diag.error("loader", DC::PatchRegionTooSmall, msg,
+                       region.name, region.addr);
+            return tl::unexpected(DC::PatchRegionTooSmall);
         }
 
         const uint64_t stub_va = seg_va + payload->layouts[i].stub_offset;
