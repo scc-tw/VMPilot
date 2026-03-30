@@ -193,6 +193,70 @@ TEST(StubGenerator, FixupBlobDispARM64OutOfRange) {
         *r, 2 * 1024 * 1024, Common::FileArch::ARM64));
 }
 
+// --- Delta fixup infrastructure (Phase 2: load_base_delta) ---
+
+TEST(StubGenerator, DeltaFixupOffsetsX64) {
+    auto r = Loader::StubGenerator::generate_entry_stub(
+        Common::FileArch::X86, Common::FileMode::MODE_64);
+    ASSERT_TRUE(r);
+    EXPECT_GT(r->delta_static_va_fixup_offset, 0u);
+    EXPECT_LT(r->delta_static_va_fixup_offset + r->delta_fixup_size, r->code.size());
+    EXPECT_GT(r->delta_ref_offset, 0u);
+    EXPECT_EQ(r->delta_fixup_size, 8u);
+}
+
+TEST(StubGenerator, DeltaFixupOffsetsARM64) {
+    auto r = Loader::StubGenerator::generate_entry_stub(
+        Common::FileArch::ARM64, Common::FileMode::MODE_LITTLE_ENDIAN);
+    ASSERT_TRUE(r);
+    EXPECT_GT(r->delta_static_va_fixup_offset, 0u);
+    EXPECT_LT(r->delta_static_va_fixup_offset + r->delta_fixup_size, r->code.size());
+    EXPECT_GT(r->delta_ref_offset, 0u);
+    EXPECT_EQ(r->delta_fixup_size, 16u);  // 4 ARM64 instructions
+}
+
+TEST(StubGenerator, FixupDeltaStaticVaX64) {
+    auto r = Loader::StubGenerator::generate_entry_stub(
+        Common::FileArch::X86, Common::FileMode::MODE_64);
+    ASSERT_TRUE(r);
+    constexpr uint64_t test_va = 0xDEADBEEF12345678ULL;
+    Loader::StubGenerator::fixup_delta_static_va(*r, test_va);
+    uint64_t patched;
+    std::memcpy(&patched, r->code.data() + r->delta_static_va_fixup_offset, 8);
+    EXPECT_EQ(patched, test_va);
+}
+
+TEST(StubGenerator, FixupDeltaStaticVaARM64) {
+    auto r = Loader::StubGenerator::generate_entry_stub(
+        Common::FileArch::ARM64, Common::FileMode::MODE_LITTLE_ENDIAN);
+    ASSERT_TRUE(r);
+    constexpr uint64_t test_va = 0x0000000100004000ULL;
+    Loader::StubGenerator::fixup_delta_static_va(*r, test_va);
+    // Verify MOVZ/MOVK instruction encoding
+    const auto off = r->delta_static_va_fixup_offset;
+    uint32_t insn0, insn1, insn2, insn3;
+    std::memcpy(&insn0, r->code.data() + off,      4);
+    std::memcpy(&insn1, r->code.data() + off + 4,  4);
+    std::memcpy(&insn2, r->code.data() + off + 8,  4);
+    std::memcpy(&insn3, r->code.data() + off + 12, 4);
+    // Extract imm16 from each: bits [20:5]
+    // VA 0x0000'0001'0000'4000: lo16=0x4000, bits16-31=0x0000, bits32-47=0x0001, bits48-63=0x0000
+    EXPECT_EQ((insn0 >> 5) & 0xFFFF, 0x4000u);  // bits 0-15
+    EXPECT_EQ((insn1 >> 5) & 0xFFFF, 0x0000u);  // bits 16-31
+    EXPECT_EQ((insn2 >> 5) & 0xFFFF, 0x0001u);  // bits 32-47
+    EXPECT_EQ((insn3 >> 5) & 0xFFFF, 0x0000u);  // bits 48-63
+}
+
+TEST(StubGenerator, FixupDeltaStaticVaZeroSizeNoop) {
+    Loader::Stub s;
+    s.code = {0xAA, 0xBB, 0xCC, 0xDD};
+    s.delta_static_va_fixup_offset = 0;
+    s.delta_fixup_size = 0;
+    auto orig = s.code;
+    Loader::StubGenerator::fixup_delta_static_va(s, 0x12345678);
+    EXPECT_EQ(s.code, orig);  // no change
+}
+
 // ============================================================================
 // PayloadBuilder
 // ============================================================================
@@ -247,6 +311,26 @@ TEST(PayloadBuilder, BlobDataPreserved) {
         Common::FileArch::X86, Common::FileMode::MODE_64);
     ASSERT_TRUE(r);
     EXPECT_EQ(std::memcmp(r->data.data(), blob.data(), blob.size()), 0);
+}
+
+TEST(PayloadBuilder, DeltaFixupLayoutPopulatedX64) {
+    std::vector<Loader::RegionPatchInfo> regions = {{"f", 0x1000, 32}};
+    auto r = Loader::build_payload(regions, make_fake_blob(), FAKE_SEED,
+        Common::FileArch::X86, Common::FileMode::MODE_64);
+    ASSERT_TRUE(r);
+    EXPECT_GT(r->layouts[0].delta_fixup_payload_offset, 0u);
+    EXPECT_EQ(r->layouts[0].delta_fixup_size, 8u);
+    EXPECT_GT(r->layouts[0].delta_ref_stub_offset, 0u);
+}
+
+TEST(PayloadBuilder, DeltaFixupLayoutPopulatedARM64) {
+    std::vector<Loader::RegionPatchInfo> regions = {{"f", 0x1000, 32}};
+    auto r = Loader::build_payload(regions, make_fake_blob(), FAKE_SEED,
+        Common::FileArch::ARM64, Common::FileMode::MODE_LITTLE_ENDIAN);
+    ASSERT_TRUE(r);
+    EXPECT_GT(r->layouts[0].delta_fixup_payload_offset, 0u);
+    EXPECT_EQ(r->layouts[0].delta_fixup_size, 16u);
+    EXPECT_GT(r->layouts[0].delta_ref_stub_offset, 0u);
 }
 
 // ============================================================================
