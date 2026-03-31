@@ -27,6 +27,59 @@
 #include <cstdint>
 #include <vector>
 
+// ---------------------------------------------------------------------------
+// Portable large-stack thread helper (ASan inflates frames ~4x; 100-level
+// VM reentrancy needs ~64MB under ASan).
+// ---------------------------------------------------------------------------
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
+
+struct LargeStackResult { bool ok; std::string error; };
+
+/// Run `fn(arg)` on a thread with `stack_bytes` stack.
+/// Blocks until fn completes.  Returns fn's LargeStackResult.
+static LargeStackResult run_on_large_stack(
+    LargeStackResult (*fn)(void*), void* arg,
+    size_t stack_bytes = 64u * 1024 * 1024)
+{
+    LargeStackResult out{false, "thread launch failed"};
+    struct Ctx { LargeStackResult (*fn)(void*); void* arg; LargeStackResult result; };
+    Ctx ctx{fn, arg, {}};
+
+#if defined(_WIN32)
+    auto trampoline = [](LPVOID p) -> DWORD {
+        auto* c = static_cast<Ctx*>(p);
+        c->result = c->fn(c->arg);
+        return 0;
+    };
+    HANDLE h = CreateThread(nullptr, stack_bytes, trampoline, &ctx, 0, nullptr);
+    if (!h) return out;
+    WaitForSingleObject(h, INFINITE);
+    CloseHandle(h);
+#else
+    auto trampoline = [](void* p) -> void* {
+        auto* c = static_cast<Ctx*>(p);
+        c->result = c->fn(c->arg);
+        return nullptr;
+    };
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, stack_bytes);
+    pthread_t tid;
+    if (pthread_create(&tid, &attr, trampoline, &ctx) != 0) {
+        pthread_attr_destroy(&attr);
+        return out;
+    }
+    pthread_join(tid, nullptr);
+    pthread_attr_destroy(&attr);
+#endif
+
+    return ctx.result;
+}
+
 using namespace VMPilot::Common;
 using namespace VMPilot::Common::VM;
 using namespace VMPilot::Runtime;
@@ -535,11 +588,41 @@ static uint64_t native_recursive_vm(
     return result->return_value;
 }
 
+// The 100-level deep reentrancy body — runs on a thread with 64MB stack
+// because each vm_execute + ephemeral encoding frame is ~40KB+ under ASan.
+static LargeStackResult deep_reentrancy_body(void* arg) {
+    auto* data = static_cast<RecursiveTestData*>(arg);
+    g_recursive_data = data;
+
+    constexpr uint64_t DEPTH = 100;
+    constexpr uint64_t EXPECTED = DEPTH * (DEPTH + 1) / 2;  // 5050
+
+    VmExecRequest req{};
+    req.blob_data   = data->blob.data();
+    req.blob_size   = data->blob.size();
+    req.stored_seed = data->seed;
+    req.config.debug_mode = true;
+
+    uint64_t regs[16] = {};
+    regs[0] = DEPTH;
+    regs[1] = 0;
+    req.initial_regs = regs;
+    req.num_regs     = 2;
+
+    auto result = vm_execute(req);
+    g_recursive_data = nullptr;
+
+    if (!result.has_value())
+        return {false, "vm_execute failed at 100 levels"};
+    if (result->return_value != EXPECTED)
+        return {false, "expected " + std::to_string(EXPECTED)
+                       + " got " + std::to_string(result->return_value)};
+    return {true, {}};
+}
+
 TEST(NativeCallE2E, DeepReentrancy100Levels) {
     uint8_t seed[32]; fill_seed(seed);
 
-    // Blob: NATIVE_CALL[0] (recursive), HALT
-    // The native function re-enters vm_execute with the same blob.
     TestBB bb{};
     bb.bb_id = 1; bb.epoch = 0;
     bb.live_regs_bitmap = 0xFFFF; bb.flags = 0;
@@ -556,36 +639,15 @@ TEST(NativeCallE2E, DeepReentrancy100Levels) {
 
     TestNativeCall tc{};
     tc.call_site_ip = 0;
-    tc.arg_count    = 2;  // r0=depth, r1=acc
+    tc.arg_count    = 2;
     tc.target_addr  = reinterpret_cast<uint64_t>(&native_recursive_vm);
 
     RecursiveTestData data;
     std::memcpy(data.seed, seed, 32);
     data.blob = build_test_blob(seed, {bb}, {}, false, {tc});
-    g_recursive_data = &data;
 
-    constexpr uint64_t DEPTH = 100;
-    constexpr uint64_t EXPECTED = DEPTH * (DEPTH + 1) / 2;  // sum(0..100)
-
-    VmExecRequest req{};
-    req.blob_data   = data.blob.data();
-    req.blob_size   = data.blob.size();
-    req.stored_seed = seed;
-    req.config.debug_mode = true;
-
-    uint64_t regs[16] = {};
-    regs[0] = DEPTH;  // starting depth
-    regs[1] = 0;      // initial accumulator
-    req.initial_regs = regs;
-    req.num_regs     = 2;
-
-    auto result = vm_execute(req);
-    ASSERT_TRUE(result.has_value())
-        << "Deep reentrancy failed at 100 levels";
-
-    EXPECT_EQ(result->return_value, EXPECTED)
-        << "Expected sum(0..100)=" << EXPECTED
-        << " got " << result->return_value;
-
-    g_recursive_data = nullptr;
+    // Run on a 64MB stack thread — ASan inflates each reentrancy frame
+    // to ~40KB+ (VMContext + ephemeral LUT tables + red zones).
+    auto r = run_on_large_stack(deep_reentrancy_body, &data);
+    ASSERT_TRUE(r.ok) << r.error;
 }
