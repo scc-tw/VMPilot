@@ -310,4 +310,22 @@ if(ENABLE_TESTS)
                 GTest::gtest_main
     )
     gtest_discover_tests(test_tls_helpers)
+
+    add_executable(test_phase1_foundation
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_phase1_foundation.cpp
+    )
+    target_link_libraries(test_phase1_foundation
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+    gtest_discover_tests(test_phase1_foundation)
+
+    add_executable(test_phase2_state
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_phase2_state.cpp
+    )
+    target_link_libraries(test_phase2_state
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+    gtest_discover_tests(test_phase2_state)
 endif()
