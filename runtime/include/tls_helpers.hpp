@@ -38,6 +38,14 @@ uint64_t vmpilot_tls_read32(uint64_t offset) noexcept;
 /// Write a 32-bit value to thread-local storage.
 void vmpilot_tls_write32(uint64_t offset, uint64_t value) noexcept;
 
+/// Layer 2 fallback: same semantics as above, but implemented via
+/// OS API (arch_prctl/NtCurrentTeb/pthread) + pointer arithmetic.
+/// Always available for testing both layers produce identical results.
+uint64_t vmpilot_tls_read64_fallback(uint64_t offset) noexcept;
+void     vmpilot_tls_write64_fallback(uint64_t offset, uint64_t value) noexcept;
+uint64_t vmpilot_tls_read32_fallback(uint64_t offset) noexcept;
+void     vmpilot_tls_write32_fallback(uint64_t offset, uint64_t value) noexcept;
+
 }  // extern "C"
 
 #endif  // __RUNTIME_TLS_HELPERS_HPP__

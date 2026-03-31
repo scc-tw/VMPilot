@@ -97,6 +97,37 @@ TEST(TlsHelpers, ThreadIsolation) {
     EXPECT_EQ(vmpilot_tls_read64(offset), 42u);
 }
 
+// Layer 2 fallback must produce identical results to Layer 1
+TEST(TlsHelpersFallback, Read64MatchesLayer1) {
+    tls_test_var_64 = 0xAAAABBBBCCCCDDDDull;
+    uint64_t offset = tls_offset_of(&tls_test_var_64);
+    EXPECT_EQ(vmpilot_tls_read64_fallback(offset), vmpilot_tls_read64(offset));
+}
+
+TEST(TlsHelpersFallback, Write64ThenReadBack) {
+    uint64_t offset = tls_offset_of(&tls_test_var_64);
+    vmpilot_tls_write64_fallback(offset, 0xFEDCBA9876543210ull);
+    EXPECT_EQ(tls_test_var_64, 0xFEDCBA9876543210ull);
+    // Read back via Layer 1 — must see the Layer 2 write
+    EXPECT_EQ(vmpilot_tls_read64(offset), 0xFEDCBA9876543210ull);
+}
+
+TEST(TlsHelpersFallback, Read32MatchesLayer1) {
+    tls_test_var_32 = 0x12345678;
+    uint64_t offset = tls_offset_of(&tls_test_var_32);
+    EXPECT_EQ(vmpilot_tls_read32_fallback(offset), vmpilot_tls_read32(offset));
+}
+
+TEST(TlsHelpersFallback, CrossLayerWriteRead) {
+    uint64_t offset = tls_offset_of(&tls_test_var_32);
+    // Write via Layer 2, read via Layer 1
+    vmpilot_tls_write32_fallback(offset, 0xDEADBEEF);
+    EXPECT_EQ(vmpilot_tls_read32(offset), 0xDEADBEEFu);
+    // Write via Layer 1, read via Layer 2
+    vmpilot_tls_write32(offset, 0xCAFEBABE);
+    EXPECT_EQ(vmpilot_tls_read32_fallback(offset), 0xCAFEBABEu);
+}
+
 #elif defined(__aarch64__) && defined(__linux__)
 
 // ARM64: TPIDR_EL0 holds the thread pointer.
@@ -146,6 +177,34 @@ TEST(TlsHelpers, ThreadIsolation) {
     t.join();
 
     EXPECT_EQ(tls_test_var_64, 42u);
+}
+
+// Layer 2 fallback must produce identical results to Layer 1
+TEST(TlsHelpersFallback, Read64MatchesLayer1) {
+    tls_test_var_64 = 0xAAAABBBBCCCCDDDDull;
+    uint64_t offset = tls_offset_of(&tls_test_var_64);
+    EXPECT_EQ(vmpilot_tls_read64_fallback(offset), vmpilot_tls_read64(offset));
+}
+
+TEST(TlsHelpersFallback, Write64ThenReadBack) {
+    uint64_t offset = tls_offset_of(&tls_test_var_64);
+    vmpilot_tls_write64_fallback(offset, 0xFEDCBA9876543210ull);
+    EXPECT_EQ(tls_test_var_64, 0xFEDCBA9876543210ull);
+    EXPECT_EQ(vmpilot_tls_read64(offset), 0xFEDCBA9876543210ull);
+}
+
+TEST(TlsHelpersFallback, Read32MatchesLayer1) {
+    tls_test_var_32 = 0x12345678;
+    uint64_t offset = tls_offset_of(&tls_test_var_32);
+    EXPECT_EQ(vmpilot_tls_read32_fallback(offset), vmpilot_tls_read32(offset));
+}
+
+TEST(TlsHelpersFallback, CrossLayerWriteRead) {
+    uint64_t offset = tls_offset_of(&tls_test_var_32);
+    vmpilot_tls_write32_fallback(offset, 0xDEADBEEF);
+    EXPECT_EQ(vmpilot_tls_read32(offset), 0xDEADBEEFu);
+    vmpilot_tls_write32(offset, 0xCAFEBABE);
+    EXPECT_EQ(vmpilot_tls_read32_fallback(offset), 0xCAFEBABEu);
 }
 
 #else
