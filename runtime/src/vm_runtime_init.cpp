@@ -50,7 +50,6 @@
 // TODO: make this configurable or discover via a magic marker.
 #if defined(__APPLE__)
 static constexpr const char* VMPILOT_SEGMENT = "__VMPILOT";
-static constexpr const char* VMPILOT_SECTION = ".vmpilot";
 #elif defined(_WIN32)
 static constexpr const char* VMPILOT_SECTION_NAME = ".vmpltt";
 #else  // Linux / FreeBSD / ELF

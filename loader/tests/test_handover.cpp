@@ -52,7 +52,6 @@ constexpr size_t CALL_SLOT_SIZE = 8;
 
 // Typical ELF segment layout
 constexpr uint64_t TEXT_BASE  = 0x401000;
-constexpr uint64_t TEXT_SIZE  = 0x2000;
 constexpr uint64_t SEGMENT_VA = 0x500000;
 
 // ARM64 B instruction decoder: returns byte offset from instruction PC

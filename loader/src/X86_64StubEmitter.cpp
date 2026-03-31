@@ -72,17 +72,6 @@ static size_t emit_mov_imm64(std::vector<uint8_t>& c, uint8_t reg) {
     return off;
 }
 
-/// MOV r32, imm32 — optional REX + B8+rd  (5 or 6 bytes)
-/// Returns offset of imm32 within `c`.
-static size_t emit_mov_imm32(std::vector<uint8_t>& c, uint8_t reg) {
-    if (reg >= 8)
-        c.push_back(0x41);              // REX.B
-    c.push_back(0xB8 + (reg & 7));
-    size_t off = c.size();
-    c.insert(c.end(), 4, 0x00);              // placeholder imm32
-    return off;
-}
-
 /// SUB rax, r10  — REX.W 4C 29 D0  (actually REX.WR 29 /r)
 static void emit_sub_rax_r10(std::vector<uint8_t>& c) {
     c.push_back(0x4C);                  // REX.WR
@@ -110,23 +99,6 @@ static void emit_add_rsp_imm32(std::vector<uint8_t>& c, int32_t imm) {
     c.push_back(static_cast<uint8_t>(imm >> 8));
     c.push_back(static_cast<uint8_t>(imm >> 16));
     c.push_back(static_cast<uint8_t>(imm >> 24));
-}
-
-/// XOR r32, r32 — zero a 32-bit register (implicit zero-extend to 64).
-static void emit_xor_r32(std::vector<uint8_t>& c, uint8_t reg) {
-    uint8_t rex = 0x00;
-    if (reg >= 8) rex = 0x45;           // REX.RB
-    if (rex) c.push_back(rex);
-    c.push_back(0x31);
-    c.push_back(0xC0 | ((reg & 7) << 3) | (reg & 7));
-}
-
-/// LEA rcx, [rsp] — load address of initial_regs array into rcx.
-static void emit_lea_rcx_rsp(std::vector<uint8_t>& c) {
-    c.push_back(0x48);                  // REX.W
-    c.push_back(0x8D);
-    c.push_back(0x0C);                  // ModRM(00, rcx=1, 100=SIB)
-    c.push_back(0x24);                  // SIB(00, 100=none, 100=rsp)
 }
 
 /// CALL [rax] — FF /2 (call indirect through memory at [rax]).

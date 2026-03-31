@@ -89,16 +89,6 @@ static uint32_t arm64_stp_offset(uint8_t rt1, uint8_t rt2,
          | rt1;
 }
 
-/// STR Xt, [Xn, #simm9]!   (pre-index)
-static uint32_t arm64_str_pre(uint8_t rt, uint8_t rn, int16_t simm9) {
-    // F8 00 0C 00 : STR Xt, [Xn, #simm9]!
-    uint32_t imm9_field = static_cast<uint32_t>(simm9) & 0x1FFu;
-    return 0xF8000C00u
-         | (imm9_field << 12)
-         | (static_cast<uint32_t>(rn) << 5)
-         | rt;
-}
-
 /// STR Xt, [Xn, #uimm12]   (unsigned offset, scaled by 8)
 static uint32_t arm64_str_uoff(uint8_t rt, uint8_t rn, uint16_t byte_off) {
     // F9 00 00 00 : STR Xt, [Xn, #uimm12<<3]
@@ -165,11 +155,6 @@ static uint32_t arm64_movz_w(uint8_t rd, uint16_t imm16) {
     return 0x52800000u
          | (static_cast<uint32_t>(imm16) << 5)
          | rd;
-}
-
-/// MOV Xd, #0  (MOVZ Xd, #0)
-static uint32_t arm64_mov_imm0(uint8_t rd) {
-    return arm64_movz_x(rd, 0, 0);
 }
 
 /// LDR Xd, [Xn]  (unsigned offset 0)
