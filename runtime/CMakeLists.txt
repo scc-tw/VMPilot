@@ -244,6 +244,28 @@ if(ENABLE_TESTS)
                 GTest::gtest_main
     )
 
+    add_executable(test_rekey
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_rekey.cpp
+    )
+    target_include_directories(test_rekey
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(test_rekey
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+
+    add_executable(test_ephemeral_encoding
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_ephemeral_encoding.cpp
+    )
+    target_include_directories(test_ephemeral_encoding
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(test_ephemeral_encoding
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+
     include(GoogleTest)
     gtest_discover_tests(runtime_smoke_test)
     gtest_discover_tests(test_blob_loader)
@@ -261,4 +283,6 @@ if(ENABLE_TESTS)
     gtest_discover_tests(test_cross_bb)
     gtest_discover_tests(test_full_prp)
     gtest_discover_tests(test_cfg_patterns)
+    gtest_discover_tests(test_rekey)
+    gtest_discover_tests(test_ephemeral_encoding)
 endif()

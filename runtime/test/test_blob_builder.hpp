@@ -237,6 +237,26 @@ inline std::vector<uint8_t> build_test_blob(
             std::memcpy(blob.data() + insn_offset + global_ip * 8,
                         &encrypted, 8);
 
+            // If this instruction is REKEY, replay the BLAKE3+SipHash mix
+            // that handle_rekey() applies at runtime.  This keeps the
+            // encryption enc_state in sync with what the decoder expects.
+            {
+                uint8_t sem = static_cast<uint8_t>(ti.opcode);
+                if (sem == static_cast<uint8_t>(VmOpcode::REKEY)) {
+                    uint32_t rk_counter = ti.aux;
+                    uint8_t rk_ctx[9];
+                    std::memcpy(rk_ctx, "rekey", 5);
+                    std::memcpy(rk_ctx + 5, &rk_counter, 4);
+                    uint8_t rk_mat[16];
+                    blake3_kdf(stored_seed,
+                               reinterpret_cast<const char*>(rk_ctx), 9,
+                               rk_mat, 16);
+                    uint8_t es[8];
+                    std::memcpy(es, &enc_state, 8);
+                    enc_state = siphash_2_4(rk_mat, es, 8);
+                }
+            }
+
             // Advance enc_state with the plaintext opcode (as stored in VmInsn)
             // and aux. Note: enc_state chain uses the PRP-encoded opcode value,
             // NOT the semantic opcode — this matches what the decoder sees after

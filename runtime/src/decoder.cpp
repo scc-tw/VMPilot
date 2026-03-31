@@ -166,9 +166,30 @@ verify_bb_mac(const VMContext& ctx) noexcept {
         // Store plaintext bytes
         std::memcpy(plaintext_bytes.data() + j * 8, &plain, 8);
 
-        // Advance enc_state for the next instruction
+        // Check if this instruction is REKEY — if so, replay the same
+        // BLAKE3+SipHash mix that handle_rekey() applies at runtime.
+        // Without this, the local enc_state diverges from runtime's
+        // enc_state, causing all subsequent keystreams to mismatch.
         VmInsn insn{};
         std::memcpy(&insn, &plain, 8);
+        {
+            uint8_t enc_alias = static_cast<uint8_t>(insn.opcode & 0xFF);
+            uint8_t alias = ctx.opcode_perm_inv[enc_alias];
+            uint8_t sem_op = ctx.alias_lut[alias];
+            if (sem_op == static_cast<uint8_t>(VmOpcode::REKEY)) {
+                uint32_t rekey_counter = insn.aux;
+                uint8_t rk_ctx[9];
+                std::memcpy(rk_ctx, "rekey", 5);
+                std::memcpy(rk_ctx + 5, &rekey_counter, 4);
+                uint8_t rk_mat[16];
+                blake3_kdf(ctx.stored_seed,
+                           reinterpret_cast<const char*>(rk_ctx), 9,
+                           rk_mat, 16);
+                uint8_t es[8];
+                std::memcpy(es, &enc_state, 8);
+                enc_state = siphash_2_4(rk_mat, es, 8);
+            }
+        }
         enc_state = update_enc_state_impl(enc_state, insn.opcode, insn.aux);
     }
 

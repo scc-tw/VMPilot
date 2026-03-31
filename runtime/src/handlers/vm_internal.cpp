@@ -9,19 +9,24 @@
 ///   CHECK_INTEGRITY: Verifies BB MAC (BLAKE3_keyed).
 ///   CHECK_DEBUG: Phase 9 stub (anti-debug traps).
 ///   MUTATE_ISA: Re-derives opcode permutation from epoch_seed.
-///   REKEY: Phase 8 stub (re-keying).
+///   REKEY (D14§5.4): Mixes BLAKE3-derived entropy into enc_state mid-BB.
+///     Why: increases offline simulation cost — each REKEY requires a
+///     BLAKE3 evaluation (~100ns) that the attacker must reproduce.
+///     Does NOT add forward secrecy (D15§11.8 applies).
 ///   SAVE_EPOCH / RESYNC: Shadow stack epoch checkpointing.
 
 #include <handlers.hpp>
 #include <decoder.hpp>
 #include <anti_tamper.hpp>
 #include <vm/vm_encoding.hpp>
+#include <vm/vm_crypto.hpp>
 
 #include <cstring>
 
 namespace VMPilot::Runtime::handlers {
 
 using Common::DiagnosticCode;
+namespace Crypto = Common::VM::Crypto;
 using Common::VM::VMContext;
 using Common::VM::VM_MAX_NESTING;
 
@@ -82,12 +87,44 @@ handle_mutate_isa(VMContext& ctx, const DecodedInsn& /*insn*/) noexcept {
 }
 
 // ---------------------------------------------------------------------------
-// REKEY: Phase 8 stub (re-keying)
+// REKEY (D14§5.4): Mix BLAKE3-derived entropy into enc_state mid-BB.
+//
+// Why this strengthens D1: an attacker simulating the enc_state chain
+// offline must execute BLAKE3 at each REKEY point (~100ns each).  With
+// N REKEY instructions per BB, simulation cost += N × BLAKE3_eval.
+//
+// Why this does NOT add forward secrecy: stored_seed compromise still
+// allows full chain simulation (D15§11.8 fundamental limitation).
+// The value of REKEY is cost amplification, not new security invariants.
+//
+// The dispatcher's advance_enc_state() still runs AFTER this handler,
+// so enc_state is double-mixed: REKEY transform + normal SipHash advance.
+// verify_bb_mac() must replay this transform to keep the chain in sync.
 // ---------------------------------------------------------------------------
 
 tl::expected<void, DiagnosticCode>
-handle_rekey(VMContext& /*ctx*/, const DecodedInsn& /*insn*/) noexcept {
-    // Phase 8: will re-derive encryption keys mid-BB.
+handle_rekey(VMContext& ctx, const DecodedInsn& insn) noexcept {
+    const uint32_t rekey_counter = insn.aux;
+
+    // Derive 16 bytes of key material from stored_seed + "rekey" + counter.
+    // BLAKE3 in KDF mode ensures independence from all other key derivations
+    // (enc_state, fast_key, oram_key, etc.) via domain separation.
+    uint8_t context[9];
+    std::memcpy(context, "rekey", 5);
+    std::memcpy(context + 5, &rekey_counter, 4);
+
+    uint8_t rekey_material[16];
+    Crypto::blake3_kdf(ctx.stored_seed,
+                       reinterpret_cast<const char*>(context), 9,
+                       rekey_material, 16);
+
+    // Mix into enc_state: SipHash(rekey_material_as_key, enc_state_as_msg)
+    // This is a one-way transform — knowing enc_state after REKEY does not
+    // help recover enc_state before REKEY (preimage resistance of SipHash).
+    uint8_t enc_state_bytes[8];
+    std::memcpy(enc_state_bytes, &ctx.enc_state, 8);
+    ctx.enc_state = Crypto::siphash_2_4(rekey_material,
+                                         enc_state_bytes, 8);
     return {};
 }
 
