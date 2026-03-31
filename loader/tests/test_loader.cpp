@@ -385,6 +385,8 @@ public:
         return Loader::NewSegmentInfo{cfg.next_va, payload.size()};
     }
 
+    bool cfi_enforced() const noexcept override { return false; }
+
     std::vector<Loader::TextGap>
     find_text_gaps(std::size_t) const noexcept override { return {}; }
 

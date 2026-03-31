@@ -224,6 +224,16 @@ MachOEditor::add_segment(std::string_view name,
 }
 
 // ---------------------------------------------------------------------------
+// cfi_enforced
+// ---------------------------------------------------------------------------
+
+/// Apple controls BTI enforcement through code signing entitlements and
+/// the arm64e ABI slice, not through in-binary metadata flags.  A Mach-O
+/// binary's BTI status cannot be determined from its headers alone.
+/// We conservatively return false — our stubs carry BTI c regardless.
+bool MachOEditor::cfi_enforced() const noexcept { return false; }
+
+// ---------------------------------------------------------------------------
 // find_text_gaps
 // ---------------------------------------------------------------------------
 

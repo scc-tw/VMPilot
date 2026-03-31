@@ -28,6 +28,8 @@ public:
                 uint64_t alignment,
                 Common::DiagnosticCollector& diag) noexcept override;
 
+    [[nodiscard]] bool cfi_enforced() const noexcept override;
+
     [[nodiscard]] std::vector<TextGap>
     find_text_gaps(std::size_t min_size) const noexcept override;
 

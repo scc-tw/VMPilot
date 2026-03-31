@@ -101,6 +101,72 @@ ELFEditor::overwrite_text(uint64_t va, const uint8_t* data, size_t len,
 }
 
 // ---------------------------------------------------------------------------
+// cfi_enforced
+// ---------------------------------------------------------------------------
+
+/// If the original binary was compiled with CET or BTI, the kernel
+/// validates ALL indirect-call targets at runtime.  A patched binary
+/// that introduces new call targets (our stubs) without landing pads
+/// will be killed by the kernel.  This query lets Loader::patch()
+/// confirm that stubs carry ENDBR64/BTI c before injecting them.
+bool ELFEditor::cfi_enforced() const noexcept {
+    // GNU_PROPERTY_X86_FEATURE_1_IBT  = 0x00000001  (Indirect Branch Tracking)
+    // GNU_PROPERTY_AARCH64_FEATURE_1_BTI = 0x00000001
+    // Both live in a .note.gnu.property section with type NT_GNU_PROPERTY_TYPE_0.
+    constexpr uint32_t NT_GNU_PROPERTY_TYPE_0 = 5;
+    constexpr uint32_t GNU_PROPERTY_X86_FEATURE_1_AND = 0xC0000002;
+    constexpr uint32_t GNU_PROPERTY_AARCH64_FEATURE_1_AND = 0xC0000000;
+    constexpr uint32_t FEATURE_1_IBT_OR_BTI = 0x00000001;
+
+    for (const auto& sec : impl_->reader.sections) {
+        if (sec->get_name() != ".note.gnu.property") continue;
+        if (sec->get_size() < 16) continue;
+
+        const auto* data = reinterpret_cast<const uint8_t*>(sec->get_data());
+        size_t off = 0;
+        while (off + 12 <= sec->get_size()) {
+            uint32_t namesz, descsz, type;
+            std::memcpy(&namesz, data + off, 4);
+            std::memcpy(&descsz, data + off + 4, 4);
+            std::memcpy(&type,   data + off + 8, 4);
+
+            // Align namesz to 4 bytes
+            const size_t name_pad = (namesz + 3) & ~3u;
+            const size_t desc_start = off + 12 + name_pad;
+
+            if (type == NT_GNU_PROPERTY_TYPE_0 && namesz == 4 &&
+                desc_start + descsz <= sec->get_size()) {
+                // Parse property entries within the descriptor
+                size_t p = desc_start;
+                while (p + 8 <= desc_start + descsz) {
+                    uint32_t pr_type, pr_datasz;
+                    std::memcpy(&pr_type,   data + p, 4);
+                    std::memcpy(&pr_datasz, data + p + 4, 4);
+                    if (pr_datasz >= 4 &&
+                        (pr_type == GNU_PROPERTY_X86_FEATURE_1_AND ||
+                         pr_type == GNU_PROPERTY_AARCH64_FEATURE_1_AND)) {
+                        uint32_t features;
+                        std::memcpy(&features, data + p + 8, 4);
+                        if (features & FEATURE_1_IBT_OR_BTI)
+                            return true;
+                    }
+                    // Next property: 8 (header) + pr_datasz aligned to 4/8
+                    const size_t entry_align =
+                        (impl_->reader.get_class() == ELFIO::ELFCLASS64) ? 8 : 4;
+                    p += 8 + ((pr_datasz + entry_align - 1) & ~(entry_align - 1));
+                }
+            }
+
+            // Next note: 12 + aligned namesz + aligned descsz
+            const size_t desc_pad = (descsz + 3) & ~3u;
+            off = desc_start + desc_pad;
+        }
+        break;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
 // find_text_gaps
 // ---------------------------------------------------------------------------
 

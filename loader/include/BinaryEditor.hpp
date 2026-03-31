@@ -38,6 +38,14 @@ public:
     [[nodiscard]] virtual uint64_t
     next_segment_va(uint64_t alignment) const noexcept = 0;
 
+    /// Check if the binary enforces Control-Flow Integrity.
+    ///   ELF:   .note.gnu.property with GNU_PROPERTY_X86_FEATURE_1_IBT
+    ///          or GNU_PROPERTY_AARCH64_FEATURE_1_BTI
+    ///   PE:    IMAGE_DLLCHARACTERISTICS_CET_COMPAT in DllCharacteristics
+    ///   MachO: Always false for now (Apple controls BTI via code signing)
+    /// Loader uses this to emit diagnostics confirming stubs have landing pads.
+    [[nodiscard]] virtual bool cfi_enforced() const noexcept = 0;
+
     /// Find usable gaps (NOP sleds, INT3/BRK padding, alignment fill)
     /// in .text that are at least `min_size` bytes.
     /// Returned sorted by size descending (largest first).

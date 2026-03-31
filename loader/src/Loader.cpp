@@ -39,6 +39,14 @@ patch(const PatchRequest& request,
         }
     }
 
+    // --- 3b. CFI/BTI: log if the binary enforces indirect-branch tracking.
+    //         Our stubs already carry ENDBR64/ENDBR32/BTI c (af6ca03),
+    //         so this is informational — not a blocker.
+    if (editor.cfi_enforced()) {
+        diag.note("loader", DC::None,
+                  "binary has CET/BTI enforcement; stubs include landing pads");
+    }
+
     // --- 4. Query segment VA (read-only, no mutation) ---
     const uint64_t seg_va = editor.next_segment_va(cfg.page_align);
 

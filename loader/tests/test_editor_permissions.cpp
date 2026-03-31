@@ -561,6 +561,144 @@ TEST(EditorPermissions, PEAddRuntimeDepSucceeds) {
     std::remove(pe_path.c_str());
 }
 
+// ============================================================================
+// CFI/BTI Enforcement Detection Tests
+// ============================================================================
+
+TEST(CfiDetection, ELF_NoCfiByDefault) {
+    std::string elf_path = build_minimal_elf();
+    Common::DiagnosticCollector diag;
+
+    auto editor = Loader::ELFEditor::open(elf_path, diag);
+    ASSERT_TRUE(editor.has_value());
+    EXPECT_FALSE(editor->cfi_enforced())
+        << "Minimal ELF without .note.gnu.property should not report CFI";
+
+    std::remove(elf_path.c_str());
+}
+
+TEST(CfiDetection, ELF_WithCetProperty) {
+    ELFIO::elfio writer;
+    writer.create(ELFIO::ELFCLASS64, ELFIO::ELFDATA2LSB);
+    writer.set_os_abi(ELFIO::ELFOSABI_LINUX);
+    writer.set_type(ELFIO::ET_EXEC);
+    writer.set_machine(ELFIO::EM_X86_64);
+    writer.set_entry(0x401000);
+
+    auto* text_sec = writer.sections.add(".text");
+    text_sec->set_type(ELFIO::SHT_PROGBITS);
+    text_sec->set_flags(ELFIO::SHF_ALLOC | ELFIO::SHF_EXECINSTR);
+    text_sec->set_addr_align(16);
+    text_sec->set_address(0x401000);
+    std::vector<uint8_t> nops(0x100, 0x90);
+    text_sec->set_data(reinterpret_cast<const char*>(nops.data()), nops.size());
+
+    auto* text_seg = writer.segments.add();
+    text_seg->set_type(ELFIO::PT_LOAD);
+    text_seg->set_flags(ELFIO::PF_R | ELFIO::PF_X);
+    text_seg->set_align(0x1000);
+    text_seg->set_virtual_address(0x401000);
+    text_seg->set_physical_address(0x401000);
+    text_seg->add_section_index(text_sec->get_index(), text_sec->get_addr_align());
+
+    // .note.gnu.property with GNU_PROPERTY_X86_FEATURE_1_AND = IBT (0x01)
+    // Without this note, the kernel won't enforce CET on the binary.
+    // With it, every indirect-call target must have ENDBR64.
+    std::vector<uint8_t> note_data;
+    auto push32 = [&](uint32_t v) {
+        for (int i = 0; i < 4; ++i)
+            note_data.push_back(static_cast<uint8_t>(v >> (i * 8)));
+    };
+    push32(4);            // namesz ("GNU\0")
+    push32(16);           // descsz (property header 8 + data 4 + pad 4)
+    push32(5);            // NT_GNU_PROPERTY_TYPE_0
+    note_data.push_back('G'); note_data.push_back('N');
+    note_data.push_back('U'); note_data.push_back('\0');
+    push32(0xC0000002);   // GNU_PROPERTY_X86_FEATURE_1_AND
+    push32(4);            // pr_datasz
+    push32(0x00000001);   // FEATURE_1_IBT
+    push32(0);            // alignment padding
+
+    auto* note_sec = writer.sections.add(".note.gnu.property");
+    note_sec->set_type(ELFIO::SHT_NOTE);
+    note_sec->set_flags(ELFIO::SHF_ALLOC);
+    note_sec->set_addr_align(8);
+    note_sec->set_data(reinterpret_cast<const char*>(note_data.data()),
+                       note_data.size());
+
+    char tmpname[] = "/tmp/vmpilot_cfi_XXXXXX";
+    int fd = mkstemp(tmpname);
+    ASSERT_GE(fd, 0);
+    close(fd);
+    writer.save(tmpname);
+
+    Common::DiagnosticCollector diag;
+    auto editor = Loader::ELFEditor::open(tmpname, diag);
+    ASSERT_TRUE(editor.has_value());
+    EXPECT_TRUE(editor->cfi_enforced())
+        << "ELF with IBT flag in .note.gnu.property must report CFI enforced";
+
+    std::remove(tmpname);
+}
+
+TEST(CfiDetection, PE_NoCfiByDefault) {
+    std::string pe_path = build_minimal_pe();
+    Common::DiagnosticCollector diag;
+
+    auto editor = Loader::PEEditor::open(pe_path, diag);
+    ASSERT_TRUE(editor.has_value());
+    EXPECT_FALSE(editor->cfi_enforced())
+        << "Minimal PE without CET_COMPAT should not report CFI";
+
+    std::remove(pe_path.c_str());
+}
+
+TEST(CfiDetection, PE_WithCetCompat) {
+    COFFI::coffi writer;
+    writer.create(COFFI::COFFI_ARCHITECTURE_PE);
+    writer.create_optional_header();
+
+    auto* text_sec = writer.add_section(".text");
+    std::vector<uint8_t> nops(0x100, 0x90);
+    text_sec->set_data(reinterpret_cast<const char*>(nops.data()),
+                       static_cast<uint32_t>(nops.size()));
+    text_sec->set_virtual_address(0x1000);
+    text_sec->set_virtual_size(0x100);
+    text_sec->set_flags(IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ |
+                        IMAGE_SCN_CNT_CODE);
+
+    writer.get_header()->set_flags(IMAGE_FILE_EXECUTABLE_IMAGE |
+                                   IMAGE_FILE_32BIT_MACHINE);
+    writer.get_optional_header()->set_entry_point_address(0x1000);
+    writer.get_optional_header()->set_code_base(0x1000);
+    writer.get_win_header()->set_image_base(0x00400000);
+    writer.get_win_header()->set_section_alignment(0x1000);
+    writer.get_win_header()->set_file_alignment(0x200);
+    writer.get_win_header()->set_subsystem(3);
+    // CET_COMPAT tells the Windows kernel to enforce Shadow Stack + IBT.
+    // Without it, ENDBR instructions are NOPs. With it, missing ENDBR
+    // at an indirect-call target causes #CP (Control Protection exception).
+    writer.get_win_header()->set_dll_flags(0x8000);
+
+    for (int i = 0; i < 16; ++i)
+        writer.add_directory(COFFI::image_data_directory{0, 0});
+    writer.layout();
+
+    char tmpname[] = "/tmp/vmpilot_pe_cet_XXXXXX";
+    int fd = mkstemp(tmpname);
+    ASSERT_GE(fd, 0);
+    close(fd);
+    writer.save(tmpname);
+
+    Common::DiagnosticCollector diag;
+    auto editor = Loader::PEEditor::open(tmpname, diag);
+    ASSERT_TRUE(editor.has_value());
+    EXPECT_TRUE(editor->cfi_enforced())
+        << "PE with CET_COMPAT (0x8000) must report CFI enforced";
+
+    std::remove(tmpname);
+}
+
 TEST(EditorPermissions, PECallSlotZeroAtSegmentStart) {
     std::string pe_path = build_minimal_pe();
     Common::DiagnosticCollector diag;

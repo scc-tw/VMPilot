@@ -125,6 +125,24 @@ PEEditor::add_segment(std::string_view name,
 }
 
 // ---------------------------------------------------------------------------
+// cfi_enforced
+// ---------------------------------------------------------------------------
+
+/// Windows CET (Shadow Stack + Indirect Branch Tracking) is flagged in
+/// the PE Optional Header's DllCharacteristics.  If a binary is marked
+/// CET-compatible, the Windows kernel enforces ENDBR at all indirect-call
+/// targets.  Our stubs must carry ENDBR32/64 (they do since af6ca03).
+bool PEEditor::cfi_enforced() const noexcept {
+    // IMAGE_DLLCHARACTERISTICS_CET_COMPAT = 0x8000 (undocumented but used
+    // by MSVC /cetcompat and link.exe /CETCOMPAT).  COFFI exposes this
+    // through get_win_header()->get_dll_flags().
+    constexpr uint16_t CET_COMPAT = 0x8000;
+    const auto* win_hdr = impl_->pe.get_win_header();
+    if (!win_hdr) return false;
+    return (win_hdr->get_dll_flags() & CET_COMPAT) != 0;
+}
+
+// ---------------------------------------------------------------------------
 // find_text_gaps
 // ---------------------------------------------------------------------------
 

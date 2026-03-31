@@ -40,6 +40,8 @@ set(RUNTIME_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/vm_stub_entry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/vm_runtime_init.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ephemeral_encoding.cpp
+    # TLS helpers (L6)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tls_helpers.cpp
 )
 
 # ---------------------------------------------------------------------------
@@ -298,4 +300,14 @@ if(ENABLE_TESTS)
     gtest_discover_tests(test_native_fp)
     gtest_discover_tests(test_rekey)
     gtest_discover_tests(test_ephemeral_encoding)
+
+    add_executable(test_tls_helpers
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_tls_helpers.cpp
+    )
+    target_link_libraries(test_tls_helpers
+        PRIVATE VMPilot_Runtime
+                Threads::Threads
+                GTest::gtest_main
+    )
+    gtest_discover_tests(test_tls_helpers)
 endif()
