@@ -398,52 +398,122 @@ MachOEditor::extend_text(const std::vector<uint8_t>& data,
     return NewSegmentInfo{new_data_va, data.size()};
 }
 
+/// Inject LC_LOAD_DYLIB so dyld loads the runtime library.
+///
+/// Multi-layer fallback:
+///   Layer 1: Write into existing header padding (between load commands
+///            end and first section file offset).
+///   Layer 2: Expand header space by shifting first_sect_off_ forward.
+///            Only possible if the file has room after headers before
+///            the first section's data.
+///   Layer 3: Return PatchRuntimeDepFailed — dyld won't load the lib.
 tl::expected<void, DC>
 MachOEditor::add_runtime_dep(std::string_view install_name,
                        Common::DiagnosticCollector& diag) noexcept {
-    // LC_LOAD_DYLIB: dylib_command header (24 bytes) + null-terminated string,
-    // total size aligned to 8 bytes.
-    const size_t name_len = install_name.size() + 1;  // include null terminator
+    const size_t name_len = install_name.size() + 1;
     const size_t raw_size = sizeof(MO::dylib_command) + name_len;
     const size_t cmdsize = align_up(raw_size, 8);
 
-    if (header_padding() < cmdsize)
-        return fail(diag, DC::PatchSegmentCreationFailed,
-                    "not enough header padding for LC_LOAD_DYLIB ("
-                    + std::to_string(header_padding()) + " < "
-                    + std::to_string(cmdsize) + ")");
+    // ================================================================
+    // Layer 1: Use existing header padding
+    // ================================================================
+    if (header_padding() >= cmdsize) {
+        MO::dylib_command cmd{};
+        cmd.cmd             = MO::LC_LOAD_DYLIB;
+        cmd.cmdsize         = static_cast<uint32_t>(cmdsize);
+        cmd.name_offset     = sizeof(MO::dylib_command);
+        cmd.timestamp       = 0;
+        cmd.current_version = 0x00010000;
+        cmd.compat_version  = 0x00010000;
 
-    // Build the dylib_command
+        write_at(lcmds_end_, cmd);
+
+        const size_t str_off = lcmds_end_ + sizeof(MO::dylib_command);
+        std::memset(buf_.data() + str_off, 0, cmdsize - sizeof(MO::dylib_command));
+        std::memcpy(buf_.data() + str_off, install_name.data(), install_name.size());
+
+        header_.ncmds     += 1;
+        header_.sizeofcmds += static_cast<uint32_t>(cmdsize);
+        write_at(0, header_);
+        lcmds_end_ += cmdsize;
+
+        return {};  // Layer 1 success
+    }
+
+    // ================================================================
+    // Layer 2: Expand header space by shifting section data forward.
+    // Apple's linker page-aligns the first section, leaving room between
+    // the end of load commands and the first section's file data.
+    // We shift all section data forward by `needed` bytes.
+    // ================================================================
+    const size_t needed = cmdsize - header_padding();
+    const size_t shift = align_up(needed, 16);  // keep 16-byte alignment
+
+    diag.warn("loader", DC::None,
+              "header padding insufficient (" + std::to_string(header_padding())
+              + " < " + std::to_string(cmdsize)
+              + "); expanding by " + std::to_string(shift) + " bytes");
+
+    // Insert `shift` zero bytes at first_sect_off_ to make room
+    buf_.insert(buf_.begin() + static_cast<ptrdiff_t>(first_sect_off_),
+                shift, 0x00);
+    first_sect_off_ += static_cast<uint32_t>(shift);
+
+    // Fix up all section file offsets and segment fileoffs that point
+    // at or past the old first_sect_off_.
+    const size_t old_first = first_sect_off_ - static_cast<uint32_t>(shift);
+    size_t lc_off = sizeof(MO::mach_header_64);
+    for (uint32_t i = 0; i < header_.ncmds; ++i) {
+        if (lc_off + sizeof(MO::load_command) > buf_.size()) break;
+        auto lc = read_at<MO::load_command>(lc_off);
+        if (lc.cmd == MO::LC_SEGMENT_64 &&
+            lc_off + sizeof(MO::segment_command_64) <= buf_.size()) {
+            auto seg = read_at<MO::segment_command_64>(lc_off);
+            if (seg.fileoff >= old_first) {
+                seg.fileoff += shift;
+                seg.filesize += (seg.fileoff == old_first + shift) ? 0 : 0;
+                write_at(lc_off, seg);
+            }
+            size_t sec_off = lc_off + sizeof(MO::segment_command_64);
+            for (uint32_t s = 0; s < seg.nsects; ++s) {
+                if (sec_off + sizeof(MO::section_64) > buf_.size()) break;
+                auto sec = read_at<MO::section_64>(sec_off);
+                if (sec.offset >= old_first) {
+                    sec.offset += static_cast<uint32_t>(shift);
+                    write_at(sec_off, sec);
+                }
+                sec_off += sizeof(MO::section_64);
+            }
+        }
+        lc_off += lc.cmdsize;
+    }
+
+    // Now retry Layer 1 — we have enough padding.
+    if (header_padding() < cmdsize) {
+        return fail(diag, DC::PatchRuntimeDepFailed,
+                    "failed to expand header space for LC_LOAD_DYLIB");
+    }
+
     MO::dylib_command cmd{};
     cmd.cmd             = MO::LC_LOAD_DYLIB;
     cmd.cmdsize         = static_cast<uint32_t>(cmdsize);
-    cmd.name_offset     = sizeof(MO::dylib_command);  // string starts right after header
+    cmd.name_offset     = sizeof(MO::dylib_command);
     cmd.timestamp       = 0;
-    cmd.current_version = 0x00010000;   // 1.0.0
-    cmd.compat_version  = 0x00010000;   // 1.0.0
+    cmd.current_version = 0x00010000;
+    cmd.compat_version  = 0x00010000;
 
-    // Write the command header into header padding
     write_at(lcmds_end_, cmd);
 
-    // Write the install name string (null-terminated) after the header
     const size_t str_off = lcmds_end_ + sizeof(MO::dylib_command);
-    // Zero the entire region first (for alignment padding)
-    std::memset(buf_.data() + lcmds_end_ + sizeof(MO::dylib_command), 0,
-                cmdsize - sizeof(MO::dylib_command));
+    std::memset(buf_.data() + str_off, 0, cmdsize - sizeof(MO::dylib_command));
     std::memcpy(buf_.data() + str_off, install_name.data(), install_name.size());
-    // null terminator is already set by memset
 
-    // Update header
     header_.ncmds     += 1;
     header_.sizeofcmds += static_cast<uint32_t>(cmdsize);
     write_at(0, header_);
-
     lcmds_end_ += cmdsize;
 
-    diag.note("loader", DC::None,
-              "added LC_LOAD_DYLIB: " + std::string(install_name));
-
-    return {};
+    return {};  // Layer 2 success (degraded)
 }
 
 void MachOEditor::invalidate_signature() noexcept {

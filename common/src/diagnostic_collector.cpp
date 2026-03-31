@@ -94,6 +94,7 @@ const char* to_string(DiagnosticCode code) noexcept {
         case DiagnosticCode::PatchBinaryWriteFailed:     return "LDR:binary_write_failed";
         case DiagnosticCode::PatchStubGenerationFailed:  return "LDR:stub_generation_failed";
         case DiagnosticCode::PatchSegmentCreationFailed: return "LDR:segment_creation_failed";
+        case DiagnosticCode::PatchRuntimeDepFailed:      return "LDR:runtime_dep_failed";
     }
     return "unknown";
 }

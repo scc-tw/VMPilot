@@ -394,7 +394,10 @@ std::string build_test_pe() {
 
 }  // namespace
 
-TEST(PatchE2E, PE_X86_32_SingleRegion) {
+TEST(PatchE2E, PE_X86_32_FailsWithoutImportInjection) {
+    // PE import injection is not yet implemented.  patch() must fail
+    // at step 8 (add_runtime_dep) with PatchRuntimeDepFailed rather
+    // than silently producing a binary that crashes at the first stub.
     auto pe_path = build_test_pe();
     std::string out_path = pe_path + ".patched";
     auto blob = make_fake_blob(256);
@@ -411,57 +414,10 @@ TEST(PatchE2E, PE_X86_32_SingleRegion) {
     req.format      = Common::FileFormat::PE;
 
     auto result = patch(req, diag);
-    ASSERT_TRUE(result.has_value())
-        << "PE patch() failed";
-    EXPECT_EQ(result->regions_patched, 1u);
-    EXPECT_EQ(result->blob_bytes_injected, 256u);
-
-    // Reload and verify .vmpltt section exists with payload
-    COFFI::coffi reader;
-    ASSERT_TRUE(reader.load(out_path));
-
-    bool found_vmpltt = false;
-    for (const auto& sec : reader.get_sections()) {
-        if (sec.get_name() == ".vmpltt") {
-            found_vmpltt = true;
-            const auto* data = reinterpret_cast<const uint8_t*>(sec.get_data());
-            const size_t sz = sec.get_data_size();
-
-            // call_slot at offset 0 must be zero
-            ASSERT_GE(sz, 8u + blob.size() + SEED_SIZE);
-            uint64_t call_slot = read64_le(data);
-            EXPECT_EQ(call_slot, 0u) << "call_slot must be zero-initialized";
-
-            // Blob at offset 8
-            EXPECT_EQ(std::memcmp(data + 8, blob.data(), blob.size()), 0)
-                << "Blob data not preserved";
-
-            // Seed after blob
-            EXPECT_EQ(std::memcmp(data + 8 + blob.size(),
-                                  TEST_SEED.data(), SEED_SIZE), 0)
-                << "Seed not preserved";
-
-            // W^X: section should be RW, not RWX
-            auto flags = sec.get_flags();
-            EXPECT_TRUE(flags & IMAGE_SCN_MEM_READ);
-            EXPECT_TRUE(flags & IMAGE_SCN_MEM_WRITE);
-            EXPECT_FALSE(flags & IMAGE_SCN_MEM_EXECUTE)
-                << ".vmpltt must be RW, not RWX (W^X)";
-            break;
-        }
-    }
-    EXPECT_TRUE(found_vmpltt) << ".vmpltt section not found in patched PE";
-
-    // Verify .text region overwritten with JMP (0xE9)
-    for (const auto& sec : reader.get_sections()) {
-        if (sec.get_name() != ".text") continue;
-        const auto* data = reinterpret_cast<const uint8_t*>(sec.get_data());
-        EXPECT_EQ(data[0], 0xE9) << "Region not overwritten with JMP";
-        break;
-    }
+    EXPECT_FALSE(result.has_value())
+        << "PE patch() should fail until import injection is implemented";
 
     std::remove(pe_path.c_str());
-    std::remove(out_path.c_str());
 }
 
 TEST(PatchE2E, PE_X86_32_RegionOutsideText) {

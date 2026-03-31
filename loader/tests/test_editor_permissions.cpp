@@ -298,7 +298,9 @@ TEST(EditorPermissions, ELFDtNeededInjection) {
 }
 
 TEST(EditorPermissions, ELFDtNeededNoDynamicSection) {
-    // Build a minimal ELF WITHOUT .dynamic — should gracefully fall back
+    // A static binary has no .dynamic section.  DT_NEEDED cannot be
+    // injected — add_runtime_dep must return a hard error so patch()
+    // can abort rather than silently produce a broken binary.
     std::string elf_path = build_minimal_elf();
     Common::DiagnosticCollector diag;
 
@@ -306,10 +308,111 @@ TEST(EditorPermissions, ELFDtNeededNoDynamicSection) {
     ASSERT_TRUE(editor.has_value());
 
     auto result = editor->add_runtime_dep("libvmpilot_runtime.so", diag);
-    // Should succeed (returns ok) but emit a note about LD_PRELOAD
-    EXPECT_TRUE(result.has_value());
+    EXPECT_FALSE(result.has_value())
+        << "Static binary (no .dynamic) must return error, not silent success";
 
     std::remove(elf_path.c_str());
+}
+
+TEST(EditorPermissions, ELFDtNeededNoSpareSlotsFallsBackToGrowth) {
+    // .dynamic with exactly 1 DT_NULL (no spare) — Layer 1 fails,
+    // Layer 2 (ELFIO add_entry growth) should succeed.
+    ELFIO::elfio writer;
+    writer.create(ELFIO::ELFCLASS64, ELFIO::ELFDATA2LSB);
+    writer.set_os_abi(ELFIO::ELFOSABI_LINUX);
+    writer.set_type(ELFIO::ET_EXEC);
+    writer.set_machine(ELFIO::EM_X86_64);
+    writer.set_entry(0x401000);
+
+    auto* text_sec = writer.sections.add(".text");
+    text_sec->set_type(ELFIO::SHT_PROGBITS);
+    text_sec->set_flags(ELFIO::SHF_ALLOC | ELFIO::SHF_EXECINSTR);
+    text_sec->set_addr_align(16);
+    text_sec->set_address(0x401000);
+    std::vector<uint8_t> nops(256, 0x90);
+    text_sec->set_data(reinterpret_cast<const char*>(nops.data()), nops.size());
+
+    auto* text_seg = writer.segments.add();
+    text_seg->set_type(ELFIO::PT_LOAD);
+    text_seg->set_flags(ELFIO::PF_R | ELFIO::PF_X);
+    text_seg->set_align(0x1000);
+    text_seg->set_virtual_address(0x401000);
+    text_seg->set_physical_address(0x401000);
+    text_seg->add_section_index(text_sec->get_index(), text_sec->get_addr_align());
+
+    auto* dynstr_sec = writer.sections.add(".dynstr");
+    dynstr_sec->set_type(ELFIO::SHT_STRTAB);
+    dynstr_sec->set_flags(ELFIO::SHF_ALLOC);
+    dynstr_sec->set_addr_align(1);
+    dynstr_sec->set_address(0x402000);
+    const char null_byte = '\0';
+    dynstr_sec->set_data(&null_byte, 1);
+
+    // Only 1 DT_NULL entry — no spare slot for Layer 1
+    auto* dyn_sec = writer.sections.add(".dynamic");
+    dyn_sec->set_type(ELFIO::SHT_DYNAMIC);
+    dyn_sec->set_flags(ELFIO::SHF_ALLOC | ELFIO::SHF_WRITE);
+    dyn_sec->set_addr_align(8);
+    dyn_sec->set_address(0x402100);
+    dyn_sec->set_entry_size(sizeof(ELFIO::Elf64_Dyn));
+    dyn_sec->set_link(dynstr_sec->get_index());
+    // 1 entry = 1 DT_NULL (terminator only, no spare)
+    ELFIO::Elf64_Dyn single_null{};
+    dyn_sec->set_data(reinterpret_cast<const char*>(&single_null),
+                      sizeof(single_null));
+
+    auto* data_seg = writer.segments.add();
+    data_seg->set_type(ELFIO::PT_LOAD);
+    data_seg->set_flags(ELFIO::PF_R | ELFIO::PF_W);
+    data_seg->set_align(0x1000);
+    data_seg->set_virtual_address(0x402000);
+    data_seg->set_physical_address(0x402000);
+    data_seg->add_section_index(dynstr_sec->get_index(), dynstr_sec->get_addr_align());
+    data_seg->add_section_index(dyn_sec->get_index(), dyn_sec->get_addr_align());
+
+    auto* dyn_seg = writer.segments.add();
+    dyn_seg->set_type(ELFIO::PT_DYNAMIC);
+    dyn_seg->set_flags(ELFIO::PF_R | ELFIO::PF_W);
+    dyn_seg->set_align(8);
+    dyn_seg->add_section_index(dyn_sec->get_index(), dyn_sec->get_addr_align());
+
+    char tmpname[] = "/tmp/vmpilot_nospare_XXXXXX";
+    int fd = mkstemp(tmpname);
+    ASSERT_GE(fd, 0);
+    close(fd);
+    writer.save(tmpname);
+
+    Common::DiagnosticCollector diag;
+    auto editor = Loader::ELFEditor::open(tmpname, diag);
+    ASSERT_TRUE(editor.has_value());
+
+    // Layer 1 should fail (no spare DT_NULL), Layer 2 should succeed
+    auto result = editor->add_runtime_dep("libvmpilot_runtime.so", diag);
+    EXPECT_TRUE(result.has_value())
+        << "Layer 2 (ELFIO growth) should succeed when Layer 1 has no spare slots";
+
+    // Save and verify DT_NEEDED was injected via Layer 2
+    std::string out_path = std::string(tmpname) + ".patched";
+    ASSERT_TRUE(editor->save(out_path, diag).has_value());
+
+    ELFIO::elfio reader;
+    ASSERT_TRUE(reader.load(out_path));
+    bool found = false;
+    for (const auto& sec : reader.sections) {
+        if (sec->get_type() != ELFIO::SHT_DYNAMIC) continue;
+        ELFIO::dynamic_section_accessor dyn(reader, sec.get());
+        for (ELFIO::Elf_Xword i = 0; i < dyn.get_entries_num(); ++i) {
+            ELFIO::Elf_Xword tag, value;
+            std::string str;
+            dyn.get_entry(i, tag, value, str);
+            if (tag == ELFIO::DT_NEEDED && str == "libvmpilot_runtime.so")
+                found = true;
+        }
+    }
+    EXPECT_TRUE(found) << "DT_NEEDED not found after Layer 2 fallback";
+
+    std::remove(tmpname);
+    std::remove(out_path.c_str());
 }
 
 // ============================================================================
@@ -547,16 +650,18 @@ TEST(EditorPermissions, PEInvalidateSignature) {
     std::remove(out_path.c_str());
 }
 
-TEST(EditorPermissions, PEAddRuntimeDepSucceeds) {
+TEST(EditorPermissions, PEAddRuntimeDepReturnsError) {
+    // PE import injection is not implemented yet.  add_runtime_dep must
+    // return an error — not silent success — so patch() can abort.
     std::string pe_path = build_minimal_pe();
     Common::DiagnosticCollector diag;
 
     auto editor = Loader::PEEditor::open(pe_path, diag);
     ASSERT_TRUE(editor.has_value());
 
-    // Should succeed (returns ok) and emit a note
     auto result = editor->add_runtime_dep("vmpilot_runtime.dll", diag);
-    EXPECT_TRUE(result.has_value());
+    EXPECT_FALSE(result.has_value())
+        << "PE add_runtime_dep must fail until import injection is implemented";
 
     std::remove(pe_path.c_str());
 }

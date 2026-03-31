@@ -258,19 +258,18 @@ PEEditor::overwrite_text(uint64_t va, const uint8_t* data, size_t len,
 // add_runtime_dep
 // ---------------------------------------------------------------------------
 
+/// PE import injection is not yet implemented (IDT/ILT/IAT manipulation
+/// requires raw byte construction — COFFI has no import table API).
+/// Without the import entry, the Windows loader won't load the DLL,
+/// the runtime constructor won't run, and call_slot stays null.
+/// This is a hard error — the patched binary will crash at the first stub.
 tl::expected<void, DC>
 PEEditor::add_runtime_dep(std::string_view install_name,
                           Common::DiagnosticCollector& diag) noexcept {
-    // PE import injection is complex (IDT/ILT/IAT manipulation).
-    // For v1, log a note about the required DLL. The call_slot + runtime
-    // constructor pattern means we need vmpilot_runtime.dll loaded, but
-    // the actual import can be handled by placing the DLL in PATH or via
-    // LoadLibrary in the runtime constructor.
-    diag.note("loader", DC::None,
-              "PE import injection deferred; ensure '" +
-              std::string(install_name) +
-              "' is in PATH or loaded via LoadLibrary");
-    return {};
+    return fail(diag, DC::PatchRuntimeDepFailed,
+                "PE import injection not yet implemented for '"
+                + std::string(install_name)
+                + "' — patched binary will not auto-load the runtime DLL");
 }
 
 // ---------------------------------------------------------------------------

@@ -95,6 +95,7 @@ enum class DiagnosticCode : uint32_t {
     PatchBinaryWriteFailed     = 0x0007'0008,
     PatchStubGenerationFailed  = 0x0007'0009,
     PatchSegmentCreationFailed = 0x0007'000A,
+    PatchRuntimeDepFailed      = 0x0007'000B,  // all dep-injection strategies exhausted
 };
 
 /// Extract the module ID (upper 16 bits) from a DiagnosticCode.
