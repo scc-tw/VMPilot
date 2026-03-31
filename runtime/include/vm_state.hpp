@@ -102,7 +102,12 @@ struct GlobalMemTables {
 /// Shared via shared_ptr<const VmImmutable> across reentrant VM invocations.
 /// Thread-safe because it's const after construction.
 struct VmImmutable {
-    /// Type-safe view over the bytecode blob (validated at construction).
+    /// Owned copy of the raw blob bytes.
+    /// BlobView points into this buffer, so it must not be moved after
+    /// blob is created.  The vector's heap allocation stays stable.
+    std::vector<uint8_t> blob_storage;
+
+    /// Type-safe view over blob_storage (validated at construction).
     BlobView blob;
 
     /// Global memory encoding tables (derived once from stored_seed).

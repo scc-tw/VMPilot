@@ -90,28 +90,56 @@ inline uint64_t mba_shl1(uint64_t encoded,
     return result;
 }
 
-/// MBA ADD: XOR + AND + MBA_SHL1 loop (64 iterations worst case).
-inline uint64_t mba_add(uint64_t a, uint64_t b,
-                         VmEpoch& epoch, uint8_t dst, uint8_t src_b,
-                         uint8_t iterations) noexcept {
+/// MBA ADD on two values already in the SAME encoding domain (dst_reg).
+/// Used for carry propagation iterations and for SUB/NEG chaining.
+inline uint64_t mba_add_self(uint64_t a, uint64_t b,
+                              VmEpoch& epoch, uint8_t dst_reg,
+                              int iterations) noexcept {
     ensure_cache(epoch);
-    auto xor_tbl = epoch.cache->get_binary(2, dst, dst, src_b, op_xor, epoch.reg);
-    auto and_tbl = epoch.cache->get_binary(1, dst, dst, src_b, op_and, epoch.reg);
-    auto& mba = epoch.cache->get_mba(dst, src_b, epoch.reg);
+    // Both operands are in dst_reg's encoding — use self-domain tables
+    auto xor_tbl = epoch.cache->get_binary(12, dst_reg, dst_reg, dst_reg, op_xor, epoch.reg);
+    auto and_tbl = epoch.cache->get_binary(13, dst_reg, dst_reg, dst_reg, op_and, epoch.reg);
+    auto& mba = epoch.cache->get_mba(dst_reg, dst_reg, epoch.reg);
 
     uint64_t s = apply_comp(xor_tbl, a, b);
     uint64_t c = apply_comp(and_tbl, a, b);
     c = mba_shl1(c, mba);
 
-    uint8_t iters = iterations > 0 ? iterations : 64;
-    for (uint8_t i = 0; i < iters && c != 0; ++i) {
-        // Need XOR/AND of (s, c) — both in dst register's encoding
-        auto xor2 = epoch.cache->get_binary(2, dst, dst, dst, op_xor, epoch.reg);
-        auto and2 = epoch.cache->get_binary(1, dst, dst, dst, op_and, epoch.reg);
-        auto& mba2 = epoch.cache->get_mba(dst, dst, epoch.reg);
-        uint64_t t = apply_comp(xor2, s, c);
-        c = apply_comp(and2, s, c);
-        c = mba_shl1(c, mba2);
+    int iters = iterations > 0 ? iterations : 64;
+    for (int i = 0; i < iters; ++i) {
+        uint64_t t = apply_comp(xor_tbl, s, c);
+        c = apply_comp(and_tbl, s, c);
+        c = mba_shl1(c, mba);
+        s = t;
+    }
+    return s;
+}
+
+/// MBA ADD of two values from DIFFERENT registers (reg_a, reg_b).
+/// The first XOR/AND uses cross-register tables; then carry propagation
+/// uses self-domain tables (both s,c are in dst=reg_a's domain after first step).
+inline uint64_t mba_add_cross(uint64_t a, uint64_t b,
+                               VmEpoch& epoch, uint8_t reg_a, uint8_t reg_b,
+                               int iterations) noexcept {
+    ensure_cache(epoch);
+    // First half-add: cross-register (reg_a × reg_b → reg_a domain)
+    auto xor_cross = epoch.cache->get_binary(10, reg_a, reg_a, reg_b, op_xor, epoch.reg);
+    auto and_cross = epoch.cache->get_binary(11, reg_a, reg_a, reg_b, op_and, epoch.reg);
+    auto& mba = epoch.cache->get_mba(reg_a, reg_a, epoch.reg);
+
+    uint64_t s = apply_comp(xor_cross, a, b);
+    uint64_t c = apply_comp(and_cross, a, b);
+    c = mba_shl1(c, mba);
+
+    // Carry propagation: both s and c are now in reg_a's domain
+    auto xor_self = epoch.cache->get_binary(12, reg_a, reg_a, reg_a, op_xor, epoch.reg);
+    auto and_self = epoch.cache->get_binary(13, reg_a, reg_a, reg_a, op_and, epoch.reg);
+
+    int iters = iterations > 0 ? iterations : 64;
+    for (int i = 0; i < iters; ++i) {
+        uint64_t t = apply_comp(xor_self, s, c);
+        c = apply_comp(and_self, s, c);
+        c = mba_shl1(c, mba);
         s = t;
     }
     return s;
@@ -303,8 +331,10 @@ template<> struct HandlerTraits<VmOpcode::ADD, HighSecPolicy> {
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        e.regs[i.reg_a] = RegVal(detail::mba_add(e.regs[i.reg_a].bits, e.regs[i.reg_b].bits,
-                                                    ep, i.reg_a, i.reg_b, i.condition));
+        int iters = (i.condition == 0) ? 64 : i.condition;
+        e.regs[i.reg_a] = RegVal(detail::mba_add_cross(
+            e.regs[i.reg_a].bits, e.regs[i.reg_b].bits,
+            ep, i.reg_a, i.reg_b, iters));
         return {};
     }
 };
@@ -313,8 +343,10 @@ template<> struct HandlerTraits<VmOpcode::ADD, StandardPolicy> {
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        e.regs[i.reg_a] = RegVal(detail::mba_add(e.regs[i.reg_a].bits, e.regs[i.reg_b].bits,
-                                                    ep, i.reg_a, i.reg_b, i.condition));
+        int iters = (i.condition == 0) ? 64 : i.condition;
+        e.regs[i.reg_a] = RegVal(detail::mba_add_cross(
+            e.regs[i.reg_a].bits, e.regs[i.reg_b].bits,
+            ep, i.reg_a, i.reg_b, iters));
         return {};
     }
 };
@@ -336,15 +368,18 @@ template<> struct HandlerTraits<VmOpcode::SUB, HighSecPolicy> {
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        // SUB(a,b) = ADD(a, NOT(b) + 1) = ADD(a, NEG(b))
+        int iters = (i.condition == 0) ? 64 : i.condition;
+        // SUB(a,b) = ADD(a, ADD(NOT(b), 1))
+        // NOT(b) in reg_a's domain (cross-register NOT: src=reg_b, dst=reg_a)
         detail::ensure_cache(ep);
-        auto not_tbl = ep.cache->get_unary(3, i.reg_b, i.reg_b, detail::op_not, ep.reg);
+        auto not_tbl = ep.cache->get_unary(14, i.reg_a, i.reg_b, detail::op_not, ep.reg);
         uint64_t not_b = detail::apply_unary(not_tbl, e.regs[i.reg_b].bits);
-        // NEG(b) = NOT(b) + 1 → need encoded(1)
-        uint64_t one_enc = detail::encode_reg(ep, i.reg_b, 1);
-        uint64_t neg_b = detail::mba_add(not_b, one_enc, ep, i.reg_b, i.reg_b, 0);
-        e.regs[i.reg_a] = RegVal(detail::mba_add(e.regs[i.reg_a].bits, neg_b,
-                                                    ep, i.reg_a, i.reg_b, 0));
+        // not_b is now in reg_a's domain. ADD(not_b, 1) is self-domain.
+        uint64_t one_enc = detail::encode_reg(ep, i.reg_a, 1);
+        uint64_t neg_b = detail::mba_add_self(not_b, one_enc, ep, i.reg_a, iters);
+        // ADD(a, neg_b) — both in reg_a's domain → self-domain
+        e.regs[i.reg_a] = RegVal(detail::mba_add_self(
+            e.regs[i.reg_a].bits, neg_b, ep, i.reg_a, iters));
         return {};
     }
 };
@@ -367,11 +402,13 @@ template<> struct HandlerTraits<VmOpcode::NEG, HighSecPolicy> {
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
+        int iters = (i.condition == 0) ? 64 : i.condition;
         detail::ensure_cache(ep);
-        auto not_tbl = ep.cache->get_unary(3, i.reg_a, i.reg_a, detail::op_not, ep.reg);
+        auto not_tbl = ep.cache->get_unary(14, i.reg_a, i.reg_a, detail::op_not, ep.reg);
         uint64_t not_a = detail::apply_unary(not_tbl, e.regs[i.reg_a].bits);
         uint64_t one_enc = detail::encode_reg(ep, i.reg_a, 1);
-        e.regs[i.reg_a] = RegVal(detail::mba_add(not_a, one_enc, ep, i.reg_a, i.reg_a, 0));
+        e.regs[i.reg_a] = RegVal(detail::mba_add_self(
+            not_a, one_enc, ep, i.reg_a, iters));
         return {};
     }
 };

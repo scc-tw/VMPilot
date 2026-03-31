@@ -355,4 +355,16 @@ if(ENABLE_TESTS)
                 GTest::gtest_main
     )
     gtest_discover_tests(test_phase4_engine)
+
+    add_executable(test_engine_comprehensive
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_engine_comprehensive.cpp
+    )
+    target_include_directories(test_engine_comprehensive
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(test_engine_comprehensive
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+    gtest_discover_tests(test_engine_comprehensive)
 endif()

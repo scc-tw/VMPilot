@@ -163,7 +163,7 @@ private:
     // ── Constructor (private — use create() / create_reentrant()) ───────
 
     VmEngine(std::shared_ptr<const VmImmutable> imm,
-             VmExecution exec,
+             VmExecution&& exec,
              std::unique_ptr<VmEpoch> epoch,
              std::unique_ptr<VmOramState> oram) noexcept
         : imm_(std::move(imm))
@@ -209,14 +209,17 @@ VmEngine<Policy, Oram>::create(
     using namespace Common::VM::Crypto;
     using namespace Common::VM::Encoding;
 
-    // 1. Validate blob via BlobView
-    auto blob_or = BlobView::create(blob_data, blob_size);
-    if (!blob_or) return tl::make_unexpected(blob_or.error());
-
+    // 1. Copy blob data so VmImmutable owns it (BlobView points into this copy)
     auto imm = std::make_shared<VmImmutable>();
-    auto* m = const_cast<VmImmutable*>(imm.get());  // mutable during construction only
+    auto* m = const_cast<VmImmutable*>(imm.get());
 
+    m->blob_storage.assign(blob_data, blob_data + blob_size);
+
+    // Validate blob via BlobView (pointing into owned storage)
+    auto blob_or = BlobView::create(m->blob_storage.data(), m->blob_storage.size());
+    if (!blob_or) return tl::make_unexpected(blob_or.error());
     m->blob = *blob_or;
+
     std::memcpy(m->stored_seed, stored_seed, 32);
 
     // 2. Key derivation
