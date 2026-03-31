@@ -51,16 +51,16 @@ TEST(VmOpcodeTest, ToString) {
     EXPECT_STREQ(to_string(VmOpcode::ADD), "ADD");
 }
 
-TEST(VmContextTest, ObliviousWorkspaceAlignment) {
-    VMContext ctx{};
-    auto addr = reinterpret_cast<uintptr_t>(&ctx.oblivious_workspace);
-    EXPECT_EQ(addr % 64, 0u);
+TEST(VmConstantsTest, ObliviousSizeIs4KB) {
+    EXPECT_EQ(VM_OBLIVIOUS_SIZE, 4096u);
+    EXPECT_EQ(VM_ORAM_LINE_SIZE, 64u);
+    EXPECT_EQ(VM_ORAM_NUM_LINES, 64u);
 }
 
-TEST(VmContextTest, DefaultInit) {
-    VMContext ctx{};
-    EXPECT_EQ(ctx.vm_ip, 0u);
-    EXPECT_FALSE(ctx.halted);
+TEST(VmConstantsTest, RegisterAndLaneCount) {
+    EXPECT_EQ(VM_REG_COUNT, 16u);
+    EXPECT_EQ(VM_BYTE_LANES, 8u);
+    EXPECT_EQ(VM_MAX_NESTING, 8u);
 }
 
 TEST(VmConfigTest, Defaults) {

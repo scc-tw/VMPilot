@@ -621,10 +621,13 @@ struct HandlerTraits<VmOpcode::CALL_VM, P> {
         if (e.shadow_depth >= VM_MAX_NESTING)
             return tl::make_unexpected(DiagnosticCode::ShadowStackOverflow);
         auto& cp = e.shadow_stack[e.shadow_depth];
+        // Save resume point: vm_ip of the CALL instruction itself.
+        // The dispatcher will advance to vm_ip+1 after RET_VM re-enters
+        // this BB (resume after the CALL, not at BB entry).
         cp.vm_ip = e.vm_ip;
         cp.bb_id = e.current_bb_id;
-        std::memcpy(cp.epoch_seed, ep.reg.encode[0], 32); // save reference
-        cp.salt = 0;
+        std::memcpy(cp.epoch_seed, ep.reg.encode[0], 32);
+        cp.salt = static_cast<uint64_t>(e.insn_index_in_bb);  // save insn index for resume
         for (int r = 0; r < VM_REG_COUNT; ++r)
             cp.encoded_regs_snapshot[r] = e.regs[r].bits;
         e.shadow_depth++;
@@ -644,8 +647,17 @@ struct HandlerTraits<VmOpcode::RET_VM, P> {
             return tl::make_unexpected(DiagnosticCode::StackUnderflow);
         e.shadow_depth--;
         auto& cp = e.shadow_stack[e.shadow_depth];
+        // Restore register snapshot from before CALL_VM
+        for (int r = 0; r < VM_REG_COUNT; ++r)
+            e.regs[r] = RegVal(cp.encoded_regs_snapshot[r]);
         e.branch_target_bb = cp.bb_id;
         e.branch_taken = true;
+        // Resume AFTER the CALL_VM instruction (cp.vm_ip is CALL's ip,
+        // cp.salt stores the insn_index_in_bb at CALL time).
+        // The dispatcher will use these to override enter_basic_block's
+        // default vm_ip = entry_ip.
+        e.return_resume_ip = cp.vm_ip + 1;
+        e.return_resume_insn_idx = static_cast<uint32_t>(cp.salt) + 1;
         return {};
     }
 };

@@ -181,6 +181,12 @@ struct alignas(64) VmExecution {
     bool     branch_taken = false;
     uint32_t branch_target_bb = 0;
 
+    /// If non-zero after a branch, the dispatcher resumes execution
+    /// at this vm_ip instead of the BB's entry_ip.  Set by RET_VM to
+    /// resume after the CALL_VM instruction.  Reset to 0 after use.
+    uint64_t return_resume_ip = 0;
+    uint32_t return_resume_insn_idx = 0;
+
     // ── Shadow stack (CALL_VM / RET_VM) ─────────────────────────────────
 
     EpochCheckpoint shadow_stack[VM_MAX_NESTING];

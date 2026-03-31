@@ -57,140 +57,18 @@ struct EpochCheckpoint {
     uint64_t encoded_regs_snapshot[16];
 };
 
-/// Full VM state model (ISA Design v1, Section 8).
-struct alignas(64) VMContext {
-    // D2: encoded registers (register domain, per-BB encoding)
-    uint64_t encoded_regs[VM_REG_COUNT];
-
-    // D1: per-BB encryption state
-    uint64_t enc_state;
-    uint8_t  stored_seed[32];
-    uint8_t  fast_key[16];
-
-    // Execution
-    uint64_t vm_ip;
-    uint64_t vm_sp;
-    uint32_t current_bb_id;
-    uint32_t current_bb_index;  ///< index into bb_metadata[] (not bb_id);
-                                ///< avoids O(n) linear search on every MAC check
-    uint32_t current_epoch;
-    uint32_t insn_index_in_bb;  ///< for enc_state chain (j within BB)
-
-    // Padding so oblivious_workspace starts at offset 256 (cache-line aligned)
-    uint8_t reserved_[40];
-
-    // D2+D3: VM Internal Oblivious Workspace (Rolling Keystream ORAM)
-    uint8_t oblivious_workspace[VM_OBLIVIOUS_SIZE];
-    uint64_t oram_nonce;
-    uint8_t  oram_key[16];
-
-    // Bytecode + constant pool (encrypted)
-    const uint8_t* bytecodes;
-    uint32_t insn_count;
-    const uint8_t* constant_pool;
-    uint32_t pool_size;
-
-    // Integrity
-    const uint8_t* bb_macs;
-    uint8_t integrity_key[32];
-
-    // D2: register encoding tables (per-BB, liveness-aware).
-    // Derived at BB entry from epoch_seed via shared generate_bijection().
-    // Owned by VMContext — rebuilt on every BB transition.
-    uint8_t reg_encode[VM_REG_COUNT][VM_BYTE_LANES][256];
-    uint8_t reg_decode[VM_REG_COUNT][VM_BYTE_LANES][256];
-
-    // D2: memory domain conversion tables (per-BB, derived from
-    // reg_encode/decode + global mem_encode/decode).
-    uint8_t store_tables[VM_REG_COUNT][VM_BYTE_LANES][256];
-    uint8_t load_tables[VM_REG_COUNT][VM_BYTE_LANES][256];
-
-    // D2: global memory encoding (fixed for entire execution, derived
-    // once from stored_seed at init).
-    uint8_t mem_encode[VM_BYTE_LANES][256];
-    uint8_t mem_decode[VM_BYTE_LANES][256];
-
-    // D4: opcode permutation (per-epoch)
-    uint8_t opcode_perm[256];
-    uint8_t opcode_perm_inv[256];
-
-    // GSS: 8-bit alias (256 bytes)
-    uint8_t alias_lut[256];
-
-    // Native context
-    NativeContext* native_ctx;
-    const TransitionData* transition_table;
-
-    // NATIVE_CALL transition entries (from blob section 5).
-    // Each entry maps a call-site instruction index to a native function
-    // target offset + argument count.  The handler uses insn.aux as
-    // an index into this array.
-    const TransitionEntry* native_call_entries;
-    uint32_t native_call_count;
-
-    // Exception: shadow stack
-    EpochCheckpoint shadow_stack[VM_MAX_NESTING];
-    uint8_t shadow_depth;
-
-    // GSS: trash registers
-    uint64_t trash_regs[VM_REG_COUNT];
-
-    // BB metadata
-    const BBMetadata* bb_metadata;
-    uint32_t bb_count;
-
-    /// Comparison flags (CMP/TEST results, read by JCC).
-    /// Stored as plaintext — 1-bit predicates gain nothing from MCSP encoding.
-    /// The uniform pipeline (D3) ensures JCC executes identically regardless
-    /// of flag value (branchless CMOV), so the flag itself is not an
-    /// information leak beyond what the branch outcome reveals.
-    ///
-    /// Layout: bit 0 = ZF (zero), bit 1 = SF (sign),
-    ///         bit 2 = CF (carry), bit 3 = OF (overflow)
-    uint8_t vm_flags;
-
-    // Anti-tamper: blob integrity hash computed at load time (Phase 9.2).
-    // verify_blob_integrity() recomputes the hash and compares against this.
-    uint8_t blob_integrity_hash[32];  ///< BLAKE3_keyed(integrity_key, blob)
-    const uint8_t* blob_data_ptr;     ///< pointer to original blob for re-verification
-    uint32_t blob_data_size;          ///< blob size for re-verification
-
-    /// PIE/ASLR support: difference between actual load address and static
-    /// base address.  The Loader's entry stub computes this at runtime as
-    ///   load_base_delta = actual_binary_base - static_binary_base
-    /// and passes it to vm_execute_with_args().  LOAD/STORE and atomic
-    /// handlers add this delta to guest memory addresses so that
-    /// RIP-relative and absolute references resolve correctly under ASLR.
-    ///
-    /// Signed because the delta can be negative if the binary loads at a
-    /// lower address than the static base.
-    int64_t load_base_delta;
-
-    /// Monotonic nonce for ephemeral transition encoding (NATIVE_CALL).
-    /// Each invocation generates a fresh random bijection LUT from
-    /// BLAKE3(stored_seed, call_site, nonce).  The nonce never repeats
-    /// within a vm_execute() invocation, so each LUT is used exactly
-    /// once — achieving one-time-pad semantics for the transition
-    /// encoding.  An attacker observing (plain, masked) at invocation i
-    /// learns nothing about invocation i+1 (independent PRF evaluations).
-    /// Security reduces to stored_seed (D15§11.8).
-    uint64_t native_call_nonce;
-
-    /// Monotonic nonce for ephemeral transition encoding (Class C ops).
-    /// Separate from native_call_nonce because NATIVE_CALL and Class C
-    /// may interleave — independent counters prevent cross-contamination.
-    uint64_t class_c_nonce;
-
-    // Flags set by handlers
-    bool halted;
-    uint32_t branch_target_bb;  ///< set by JMP/JCC/CALL, read by dispatcher
-    bool branch_taken;
-};
-
-static_assert(alignof(VMContext) >= 64,
-              "VMContext must be 64-byte aligned for ORAM cache-line access");
-static_assert(offsetof(VMContext, oblivious_workspace) % 64 == 0,
-              "oblivious_workspace must sit at a 64-byte-aligned offset");
+// ─────────────────────────────────────────────────────────────────────────────
+// NOTE: The monolithic VMContext struct has been REMOVED.
+//
+// It is replaced by the 4-way state split defined in runtime/include/vm_state.hpp:
+//   VmImmutable   — blob, keys, BB metadata (shared via shared_ptr)
+//   VmExecution   — registers, IP, SP, flags (stack, ~2KB)
+//   VmEpoch       — per-BB encoding tables (heap, ~131KB)
+//   VmOramState   — ORAM workspace (heap, ~4KB)
+//
+// The constants, BBMetadata, and EpochCheckpoint above are shared types
+// used by both the compiler (SDK) and the runtime.
+// ─────────────────────────────────────────────────────────────────────────────
 
 }  // namespace VMPilot::Common::VM
 
