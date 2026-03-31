@@ -346,7 +346,9 @@ TEST(PayloadBuilder, MultipleRegionsLayout) {
 // MockEditor — DI for Loader::patch() tests
 // ============================================================================
 
-class MockEditor : public Loader::BinaryEditor {
+class MockEditor : public Loader::EditorBase<MockEditor> {
+    friend class Loader::EditorBase<MockEditor>;
+
 public:
     struct Config {
         Loader::TextSectionInfo text = {0x1000, 0x2000};
@@ -367,17 +369,17 @@ public:
 
     static void reset() { cfg = {}; calls = {}; }
 
-    Loader::TextSectionInfo text_section() const noexcept override {
+    Loader::TextSectionInfo text_section_impl() const noexcept {
         return {cfg.text.base_addr, cfg.text.size};
     }
 
-    uint64_t next_segment_va(uint64_t) const noexcept override {
+    uint64_t next_segment_va_impl(uint64_t) const noexcept {
         return cfg.next_va;
     }
 
     tl::expected<Loader::NewSegmentInfo, DC>
-    add_segment(std::string_view, const std::vector<uint8_t>& payload,
-                uint64_t, Common::DiagnosticCollector& diag) noexcept override {
+    add_segment_impl(std::string_view, const std::vector<uint8_t>& payload,
+                     uint64_t, Common::DiagnosticCollector& diag) noexcept {
         if (cfg.fail_add_segment) {
             diag.error("mock", DC::PatchSegmentCreationFailed, "fail");
             return tl::unexpected(DC::PatchSegmentCreationFailed);
@@ -385,20 +387,20 @@ public:
         return Loader::NewSegmentInfo{cfg.next_va, payload.size()};
     }
 
-    bool cfi_enforced() const noexcept override { return false; }
+    bool cfi_enforced_impl() const noexcept { return false; }
 
     std::vector<Loader::TextGap>
-    find_text_gaps(std::size_t) const noexcept override { return {}; }
+    find_text_gaps_impl(std::size_t) const noexcept { return {}; }
 
     tl::expected<Loader::NewSegmentInfo, DC>
-    extend_text(const std::vector<uint8_t>& data, uint64_t,
-                Common::DiagnosticCollector&) noexcept override {
+    extend_text_impl(const std::vector<uint8_t>& data, uint64_t,
+                     Common::DiagnosticCollector&) noexcept {
         return Loader::NewSegmentInfo{cfg.next_va, data.size()};
     }
 
     tl::expected<void, DC>
-    overwrite_text(uint64_t va, const uint8_t*, size_t,
-                   Common::DiagnosticCollector& diag) noexcept override {
+    overwrite_text_impl(uint64_t va, const uint8_t*, size_t,
+                        Common::DiagnosticCollector& diag) noexcept {
         calls.overwrite_count++;
         calls.overwrite_vas.push_back(va);
         if (cfg.fail_overwrite) {
@@ -409,14 +411,14 @@ public:
     }
 
     tl::expected<void, DC>
-    add_runtime_dep(std::string_view, Common::DiagnosticCollector&) noexcept override {
+    add_runtime_dep_impl(std::string_view, Common::DiagnosticCollector&) noexcept {
         return {};
     }
 
-    void invalidate_signature() noexcept override {}
+    void invalidate_signature_impl() noexcept {}
 
     tl::expected<void, DC>
-    save(const std::string&, Common::DiagnosticCollector& diag) noexcept override {
+    save_impl(const std::string&, Common::DiagnosticCollector& diag) noexcept {
         calls.saved = true;
         if (cfg.fail_save) {
             diag.error("mock", DC::PatchBinaryWriteFailed, "fail");

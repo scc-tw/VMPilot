@@ -87,7 +87,7 @@ size_t MachOEditor::header_padding() const noexcept {
         ? (first_sect_off_ - lcmds_end_) : 0;
 }
 
-uint64_t MachOEditor::next_segment_va(uint64_t alignment) const noexcept {
+uint64_t MachOEditor::next_segment_va_impl(uint64_t alignment) const noexcept {
     return (highest_va() + alignment - 1) & ~(alignment - 1);
 }
 
@@ -146,12 +146,12 @@ MachOEditor::open(const std::string& path,
     return ed;
 }
 
-TextSectionInfo MachOEditor::text_section() const noexcept {
+TextSectionInfo MachOEditor::text_section_impl() const noexcept {
     return {text_va_, text_size_};
 }
 
 tl::expected<void, DC>
-MachOEditor::overwrite_text(uint64_t va, const uint8_t* data, size_t len,
+MachOEditor::overwrite_text_impl(uint64_t va, const uint8_t* data, size_t len,
                             Common::DiagnosticCollector& diag) noexcept {
     if (va < text_va_ || va + len > text_va_ + text_size_)
         return fail(diag, DC::PatchSegmentCreationFailed, "VA outside __text");
@@ -165,7 +165,7 @@ MachOEditor::overwrite_text(uint64_t va, const uint8_t* data, size_t len,
 }
 
 tl::expected<NewSegmentInfo, DC>
-MachOEditor::add_segment(std::string_view name,
+MachOEditor::add_segment_impl(std::string_view name,
                          const std::vector<uint8_t>& payload,
                          uint64_t alignment,
                          Common::DiagnosticCollector& diag) noexcept {
@@ -231,7 +231,7 @@ MachOEditor::add_segment(std::string_view name,
 /// the arm64e ABI slice, not through in-binary metadata flags.  A Mach-O
 /// binary's BTI status cannot be determined from its headers alone.
 /// We conservatively return false — our stubs carry BTI c regardless.
-bool MachOEditor::cfi_enforced() const noexcept { return false; }
+bool MachOEditor::cfi_enforced_impl() const noexcept { return false; }
 
 // ---------------------------------------------------------------------------
 // find_text_gaps
@@ -244,7 +244,7 @@ bool MachOEditor::cfi_enforced() const noexcept { return false; }
 ///   - Zero words (0x00000000) — linker fill
 /// Returns gaps >= min_size, sorted by size descending.
 std::vector<TextGap>
-MachOEditor::find_text_gaps(std::size_t min_size) const noexcept {
+MachOEditor::find_text_gaps_impl(std::size_t min_size) const noexcept {
     if (text_size_ == 0 || text_file_off_ + text_size_ > buf_.size())
         return {};
 
@@ -408,7 +408,7 @@ MachOEditor::extend_text(const std::vector<uint8_t>& data,
 ///            the first section's data.
 ///   Layer 3: Return PatchRuntimeDepFailed — dyld won't load the lib.
 tl::expected<void, DC>
-MachOEditor::add_runtime_dep(std::string_view install_name,
+MachOEditor::add_runtime_dep_impl(std::string_view install_name,
                        Common::DiagnosticCollector& diag) noexcept {
     const size_t name_len = install_name.size() + 1;
     const size_t raw_size = sizeof(MO::dylib_command) + name_len;
@@ -516,7 +516,7 @@ MachOEditor::add_runtime_dep(std::string_view install_name,
     return {};  // Layer 2 success (degraded)
 }
 
-void MachOEditor::invalidate_signature() noexcept {
+void MachOEditor::invalidate_signature_impl() noexcept {
     size_t off = sizeof(MO::mach_header_64);
     for (uint32_t i = 0; i < header_.ncmds; ++i) {
         if (off + sizeof(MO::load_command) > buf_.size()) break;
@@ -537,7 +537,7 @@ void MachOEditor::invalidate_signature() noexcept {
 }
 
 tl::expected<void, DC>
-MachOEditor::save(const std::string& path,
+MachOEditor::save_impl(const std::string& path,
                   Common::DiagnosticCollector& diag) noexcept {
     std::ofstream ofs(path, std::ios::binary | std::ios::trunc);
     if (!ofs) return fail(diag, DC::PatchBinaryWriteFailed, "cannot write: " + path);

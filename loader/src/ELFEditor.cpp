@@ -73,7 +73,7 @@ ELFEditor::open(const std::string& path,
 // text_section
 // ---------------------------------------------------------------------------
 
-TextSectionInfo ELFEditor::text_section() const noexcept {
+TextSectionInfo ELFEditor::text_section_impl() const noexcept {
     return {impl_->text_va, impl_->text_size};
 }
 
@@ -82,8 +82,8 @@ TextSectionInfo ELFEditor::text_section() const noexcept {
 // ---------------------------------------------------------------------------
 
 tl::expected<void, DC>
-ELFEditor::overwrite_text(uint64_t va, const uint8_t* data, size_t len,
-                          Common::DiagnosticCollector& diag) noexcept {
+ELFEditor::overwrite_text_impl(uint64_t va, const uint8_t* data, size_t len,
+                               Common::DiagnosticCollector& diag) noexcept {
     auto* sec = impl_->text_sec;
     const uint64_t sec_addr = sec->get_address();
     const uint64_t sec_size = sec->get_size();
@@ -109,7 +109,7 @@ ELFEditor::overwrite_text(uint64_t va, const uint8_t* data, size_t len,
 /// that introduces new call targets (our stubs) without landing pads
 /// will be killed by the kernel.  This query lets Loader::patch()
 /// confirm that stubs carry ENDBR64/BTI c before injecting them.
-bool ELFEditor::cfi_enforced() const noexcept {
+bool ELFEditor::cfi_enforced_impl() const noexcept {
     // GNU_PROPERTY_X86_FEATURE_1_IBT  = 0x00000001  (Indirect Branch Tracking)
     // GNU_PROPERTY_AARCH64_FEATURE_1_BTI = 0x00000001
     // Both live in a .note.gnu.property section with type NT_GNU_PROPERTY_TYPE_0.
@@ -245,7 +245,7 @@ void ELFEditor::ensure_cfi_note() noexcept {
 ///   - Zero padding (0x00) — linker alignment fill
 /// Returns gaps >= min_size, sorted by size descending.
 std::vector<TextGap>
-ELFEditor::find_text_gaps(std::size_t min_size) const noexcept {
+ELFEditor::find_text_gaps_impl(std::size_t min_size) const noexcept {
     auto* sec = impl_->text_sec;
     if (!sec || sec->get_size() == 0) return {};
 
@@ -345,7 +345,7 @@ ELFEditor::extend_text(const std::vector<uint8_t>& data,
 // next_segment_va
 // ---------------------------------------------------------------------------
 
-uint64_t ELFEditor::next_segment_va(uint64_t alignment) const noexcept {
+uint64_t ELFEditor::next_segment_va_impl(uint64_t alignment) const noexcept {
     uint64_t highest = 0;
     for (const auto& seg : impl_->reader.segments) {
         if (seg->get_type() == PT_LOAD) {
@@ -361,7 +361,7 @@ uint64_t ELFEditor::next_segment_va(uint64_t alignment) const noexcept {
 // ---------------------------------------------------------------------------
 
 tl::expected<NewSegmentInfo, DC>
-ELFEditor::add_segment(std::string_view name,
+ELFEditor::add_segment_impl(std::string_view name,
                        const std::vector<uint8_t>& payload,
                        uint64_t alignment,
                        Common::DiagnosticCollector& /*diag*/) noexcept {
@@ -416,7 +416,7 @@ ELFEditor::add_segment(std::string_view name,
 ///   Layer 3: Return PatchRuntimeDepFailed — the patched binary will NOT
 ///            auto-load the runtime.  Stubs will dereference null call_slot.
 tl::expected<void, DC>
-ELFEditor::add_runtime_dep(std::string_view soname,
+ELFEditor::add_runtime_dep_impl(std::string_view soname,
                            Common::DiagnosticCollector& diag) noexcept {
     auto& reader = impl_->reader;
     const std::string soname_str(soname);
@@ -572,7 +572,7 @@ ELFEditor::add_runtime_dep(std::string_view soname,
 // invalidate_signature
 // ---------------------------------------------------------------------------
 
-void ELFEditor::invalidate_signature() noexcept {
+void ELFEditor::invalidate_signature_impl() noexcept {
     // ELF has no binary-level code signature to invalidate.
 }
 
@@ -581,7 +581,7 @@ void ELFEditor::invalidate_signature() noexcept {
 // ---------------------------------------------------------------------------
 
 tl::expected<void, DC>
-ELFEditor::save(const std::string& path,
+ELFEditor::save_impl(const std::string& path,
                 Common::DiagnosticCollector& diag) noexcept {
     if (!impl_->reader.save(path))
         return fail(diag, DC::PatchBinaryWriteFailed, "failed to write ELF: " + path);

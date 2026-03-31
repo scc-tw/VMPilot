@@ -161,23 +161,6 @@ public:
     }
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Forward declarations for variant types (concrete editors defined elsewhere)
-// ─────────────────────────────────────────────────────────────────────────────
-
-// NOTE: These forward declarations are here so that AnyEditor/AnyEmitter
-// can be used as return types.  The actual class definitions are in their
-// respective headers (elf_editor_v2.hpp, etc.).  For now, during the
-// incremental migration, the existing ELFEditor/PEEditor/MachOEditor
-// still use the old virtual BinaryEditor base.  When a concrete editor
-// is ported to CRTP, it will be added to AnyEditor.
-
-// Future:
-// class ELFEditorV2;
-// class PEEditorV2;
-// class MachOEditorV2;
-// using AnyEditor = std::variant<ELFEditorV2, PEEditorV2, MachOEditorV2>;
-
 }  // namespace VMPilot::Loader
 
 #endif  // __LOADER_EDITOR_BASE_HPP__

@@ -71,7 +71,7 @@ PEEditor::open(const std::string& path,
 // text_section
 // ---------------------------------------------------------------------------
 
-TextSectionInfo PEEditor::text_section() const noexcept {
+TextSectionInfo PEEditor::text_section_impl() const noexcept {
     return {impl_->text_va, impl_->text_size};
 }
 
@@ -79,7 +79,7 @@ TextSectionInfo PEEditor::text_section() const noexcept {
 // next_segment_va
 // ---------------------------------------------------------------------------
 
-uint64_t PEEditor::next_segment_va(uint64_t alignment) const noexcept {
+uint64_t PEEditor::next_segment_va_impl(uint64_t alignment) const noexcept {
     // Find the highest VA end across all sections.
     // PE section virtual_address is an RVA; we work in absolute VA space.
     uint64_t highest = 0;
@@ -100,14 +100,14 @@ uint64_t PEEditor::next_segment_va(uint64_t alignment) const noexcept {
 // ---------------------------------------------------------------------------
 
 tl::expected<NewSegmentInfo, DC>
-PEEditor::add_segment(std::string_view name,
+PEEditor::add_segment_impl(std::string_view name,
                       const std::vector<uint8_t>& payload,
                       uint64_t alignment,
                       Common::DiagnosticCollector& /*diag*/) noexcept {
     auto& pe = impl_->pe;
 
     // Compute the next page-aligned VA (as RVA for PE section header)
-    uint64_t seg_va = next_segment_va(alignment);
+    uint64_t seg_va = next_segment_va_impl(alignment);
     uint32_t rva = static_cast<uint32_t>(seg_va - impl_->image_base);
 
     // Add new section via COFFI
@@ -133,7 +133,7 @@ PEEditor::add_segment(std::string_view name,
 /// the PE Optional Header's DllCharacteristics.  If a binary is marked
 /// CET-compatible, the Windows kernel enforces ENDBR at all indirect-call
 /// targets.  Our stubs must carry ENDBR32/64 (they do since af6ca03).
-bool PEEditor::cfi_enforced() const noexcept {
+bool PEEditor::cfi_enforced_impl() const noexcept {
     // IMAGE_DLLCHARACTERISTICS_CET_COMPAT = 0x8000 (undocumented but used
     // by MSVC /cetcompat and link.exe /CETCOMPAT).  COFFI exposes this
     // through get_win_header()->get_dll_flags().
@@ -152,7 +152,7 @@ bool PEEditor::cfi_enforced() const noexcept {
 ///   - NOP (0x90), INT3 (0xCC), zero (0x00) — same as ELF x86
 /// Returns gaps >= min_size, sorted by size descending.
 std::vector<TextGap>
-PEEditor::find_text_gaps(std::size_t min_size) const noexcept {
+PEEditor::find_text_gaps_impl(std::size_t min_size) const noexcept {
     auto* sec = impl_->text_sec;
     if (!sec || sec->get_data_size() == 0) return {};
 
@@ -234,7 +234,7 @@ PEEditor::extend_text(const std::vector<uint8_t>& data,
 // ---------------------------------------------------------------------------
 
 tl::expected<void, DC>
-PEEditor::overwrite_text(uint64_t va, const uint8_t* data, size_t len,
+PEEditor::overwrite_text_impl(uint64_t va, const uint8_t* data, size_t len,
                          Common::DiagnosticCollector& diag) noexcept {
     auto* sec = impl_->text_sec;
     const uint64_t sec_va = impl_->text_va;
@@ -267,7 +267,7 @@ PEEditor::overwrite_text(uint64_t va, const uint8_t* data, size_t len,
 /// section with the correct IDT/ILT/IAT layout, preserving all
 /// existing imports from the original binary.
 tl::expected<void, DC>
-PEEditor::add_runtime_dep(std::string_view install_name,
+PEEditor::add_runtime_dep_impl(std::string_view install_name,
                           Common::DiagnosticCollector& diag) noexcept {
     COFFI::import_section_accessor imports(impl_->pe);
 
@@ -284,7 +284,7 @@ PEEditor::add_runtime_dep(std::string_view install_name,
 // invalidate_signature
 // ---------------------------------------------------------------------------
 
-void PEEditor::invalidate_signature() noexcept {
+void PEEditor::invalidate_signature_impl() noexcept {
     // Zero the Certificate Table data directory entry (index 4) to
     // invalidate any Authenticode signature.
     auto& dirs = impl_->pe.get_directories();
@@ -300,7 +300,7 @@ void PEEditor::invalidate_signature() noexcept {
 // ---------------------------------------------------------------------------
 
 tl::expected<void, DC>
-PEEditor::save(const std::string& path,
+PEEditor::save_impl(const std::string& path,
                Common::DiagnosticCollector& diag) noexcept {
     // COFFI layout() recomputes offsets, alignment, NumberOfSections, etc.
     impl_->pe.layout();

@@ -2,7 +2,7 @@
 #define __LOADER_MACHO_EDITOR_HPP__
 #pragma once
 
-#include <BinaryEditor.hpp>
+#include <editor_base.hpp>
 #include <MachOStructs.hpp>
 
 #include <cstdint>
@@ -12,45 +12,46 @@
 
 namespace VMPilot::Loader {
 
-/// Mach-O 64-bit binary editor. Implements BinaryEditor.
-class MachOEditor : public BinaryEditor {
+/// Mach-O 64-bit binary editor. Implements EditorBase via CRTP.
+class MachOEditor : public EditorBase<MachOEditor> {
+    friend class EditorBase<MachOEditor>;
 public:
     [[nodiscard]] static tl::expected<MachOEditor, Common::DiagnosticCode>
     open(const std::string& path,
          Common::DiagnosticCollector& diag) noexcept;
 
-    // --- BinaryEditor interface ---
-    [[nodiscard]] TextSectionInfo text_section() const noexcept override;
-    [[nodiscard]] uint64_t next_segment_va(uint64_t alignment) const noexcept override;
+    // --- EditorBase CRTP interface ---
+    [[nodiscard]] TextSectionInfo text_section_impl() const noexcept;
+    [[nodiscard]] uint64_t next_segment_va_impl(uint64_t alignment) const noexcept;
 
     [[nodiscard]] tl::expected<NewSegmentInfo, Common::DiagnosticCode>
-    add_segment(std::string_view name, const std::vector<uint8_t>& data,
+    add_segment_impl(std::string_view name, const std::vector<uint8_t>& data,
                 uint64_t alignment,
-                Common::DiagnosticCollector& diag) noexcept override;
+                Common::DiagnosticCollector& diag) noexcept;
 
-    [[nodiscard]] bool cfi_enforced() const noexcept override;
+    [[nodiscard]] bool cfi_enforced_impl() const noexcept;
 
     [[nodiscard]] std::vector<TextGap>
-    find_text_gaps(std::size_t min_size) const noexcept override;
+    find_text_gaps_impl(std::size_t min_size) const noexcept;
 
     [[nodiscard]] tl::expected<NewSegmentInfo, Common::DiagnosticCode>
     extend_text(const std::vector<uint8_t>& data,
                 uint64_t alignment,
-                Common::DiagnosticCollector& diag) noexcept override;
+                Common::DiagnosticCollector& diag) noexcept;
 
     [[nodiscard]] tl::expected<void, Common::DiagnosticCode>
-    overwrite_text(uint64_t va, const uint8_t* data, size_t len,
-                   Common::DiagnosticCollector& diag) noexcept override;
+    overwrite_text_impl(uint64_t va, const uint8_t* data, size_t len,
+                   Common::DiagnosticCollector& diag) noexcept;
 
     [[nodiscard]] tl::expected<void, Common::DiagnosticCode>
-    add_runtime_dep(std::string_view install_name,
-                    Common::DiagnosticCollector& diag) noexcept override;
+    add_runtime_dep_impl(std::string_view install_name,
+                    Common::DiagnosticCollector& diag) noexcept;
 
-    void invalidate_signature() noexcept override;
+    void invalidate_signature_impl() noexcept;
 
     [[nodiscard]] tl::expected<void, Common::DiagnosticCode>
-    save(const std::string& path,
-         Common::DiagnosticCollector& diag) noexcept override;
+    save_impl(const std::string& path,
+         Common::DiagnosticCollector& diag) noexcept;
 
 private:
     MachOEditor() = default;
