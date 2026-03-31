@@ -31,5 +31,6 @@
 !data/*/bin/*.dll
 
 build/
+compile_commands.json
 .vscode/
 .DS_Store

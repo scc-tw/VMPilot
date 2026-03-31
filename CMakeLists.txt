@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.20)
 
 project(VMPilot)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 enable_language(CXX)
 set(CMAKE_CXX_STANDARD 17)
 
