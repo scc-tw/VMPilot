@@ -46,6 +46,14 @@ public:
                 uint64_t alignment,
                 Common::DiagnosticCollector& diag) noexcept = 0;
 
+    /// Extend the .text section/segment to accommodate additional data.
+    /// Returns the VA where data was placed (at the end of .text, aligned).
+    /// The payload becomes indistinguishable from original code in static analysis.
+    [[nodiscard]] virtual tl::expected<NewSegmentInfo, Common::DiagnosticCode>
+    extend_text(const std::vector<uint8_t>& data,
+                uint64_t alignment,
+                Common::DiagnosticCollector& diag) noexcept = 0;
+
     /// Overwrite bytes in .text at the given VA.
     [[nodiscard]] virtual tl::expected<void, Common::DiagnosticCode>
     overwrite_text(uint64_t va, const uint8_t* data, size_t len,

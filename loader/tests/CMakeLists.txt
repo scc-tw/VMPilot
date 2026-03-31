@@ -18,6 +18,14 @@ add_executable(${TEST_NAME} test_handover.cpp)
 target_link_libraries(${TEST_NAME} PRIVATE VMPilot_Loader opcode_table GTest::gtest_main)
 gtest_discover_tests(${TEST_NAME})
 
+# .text extension tests
+set(TEST_NAME test_extend_text)
+add_executable(${TEST_NAME} test_extend_text.cpp)
+target_include_directories(${TEST_NAME} SYSTEM PRIVATE
+    ${CMAKE_BINARY_DIR}/_deps/elfio-src/)
+target_link_libraries(${TEST_NAME} PRIVATE VMPilot_Loader opcode_table GTest::gtest_main)
+gtest_discover_tests(${TEST_NAME})
+
 # End-to-end patch() integration tests
 set(TEST_NAME test_patch_e2e)
 add_executable(${TEST_NAME} test_patch_e2e.cpp)

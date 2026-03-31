@@ -28,6 +28,11 @@ public:
                 uint64_t alignment,
                 Common::DiagnosticCollector& diag) noexcept override;
 
+    [[nodiscard]] tl::expected<NewSegmentInfo, Common::DiagnosticCode>
+    extend_text(const std::vector<uint8_t>& data,
+                uint64_t alignment,
+                Common::DiagnosticCollector& diag) noexcept override;
+
     [[nodiscard]] tl::expected<void, Common::DiagnosticCode>
     overwrite_text(uint64_t va, const uint8_t* data, size_t len,
                    Common::DiagnosticCollector& diag) noexcept override;

@@ -1,0 +1,280 @@
+/// @file test_extend_text.cpp
+/// @brief Tests for BinaryEditor::extend_text() — .text extension.
+///
+/// Verifies:
+///   - ELF: extend_text() grows .text section and PT_LOAD segment
+///   - Payload data appears at the expected VA at the end of .text
+///   - .text section size increases by padding + data size
+///   - PT_LOAD segment sizes updated correctly
+///   - Original .text content is preserved
+///   - Extended region inherits .text permissions (RX)
+
+#include <ELFEditor.hpp>
+#include <LoaderTypes.hpp>
+
+#include <elfio/elfio.hpp>
+
+#include <gtest/gtest.h>
+
+#include <cstdio>
+#include <cstring>
+#include <vector>
+
+using namespace VMPilot;
+using namespace VMPilot::Loader;
+using DC = Common::DiagnosticCode;
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+namespace {
+
+constexpr uint64_t TEXT_VA   = 0x401000;
+constexpr uint64_t TEXT_SIZE = 0x1000;
+
+/// Build a minimal valid ELF64 binary with a .text section.
+std::string build_minimal_elf() {
+    ELFIO::elfio writer;
+    writer.create(ELFIO::ELFCLASS64, ELFIO::ELFDATA2LSB);
+    writer.set_os_abi(ELFIO::ELFOSABI_LINUX);
+    writer.set_type(ELFIO::ET_EXEC);
+    writer.set_machine(ELFIO::EM_X86_64);
+    writer.set_entry(TEXT_VA);
+
+    // .text filled with NOPs
+    auto* text_sec = writer.sections.add(".text");
+    text_sec->set_type(ELFIO::SHT_PROGBITS);
+    text_sec->set_flags(ELFIO::SHF_ALLOC | ELFIO::SHF_EXECINSTR);
+    text_sec->set_addr_align(16);
+    text_sec->set_address(TEXT_VA);
+    std::vector<uint8_t> nops(TEXT_SIZE, 0x90);
+    text_sec->set_data(reinterpret_cast<const char*>(nops.data()), nops.size());
+
+    // PT_LOAD for .text (RX)
+    auto* text_seg = writer.segments.add();
+    text_seg->set_type(ELFIO::PT_LOAD);
+    text_seg->set_flags(ELFIO::PF_R | ELFIO::PF_X);
+    text_seg->set_align(0x1000);
+    text_seg->set_virtual_address(TEXT_VA);
+    text_seg->set_physical_address(TEXT_VA);
+    text_seg->add_section_index(text_sec->get_index(), text_sec->get_addr_align());
+
+    char tmpname[] = "/tmp/vmpilot_ext_XXXXXX";
+    int fd = mkstemp(tmpname);
+    EXPECT_GE(fd, 0);
+    close(fd);
+    writer.save(tmpname);
+    return std::string(tmpname);
+}
+
+/// Build recognizable test payload data.
+std::vector<uint8_t> make_test_payload(size_t size = 256) {
+    std::vector<uint8_t> p(size);
+    for (size_t i = 0; i < size; ++i)
+        p[i] = static_cast<uint8_t>((i * 0x37 + 0x13) & 0xFF);
+    return p;
+}
+
+}  // namespace
+
+// ============================================================================
+// ELF extend_text() Tests
+// ============================================================================
+
+TEST(ExtendText, ELF_BasicExtension) {
+    auto elf_path = build_minimal_elf();
+    Common::DiagnosticCollector diag;
+
+    auto editor = ELFEditor::open(elf_path, diag);
+    ASSERT_TRUE(editor.has_value()) << "Failed to open test ELF";
+
+    auto orig_text = editor->text_section();
+    EXPECT_EQ(orig_text.base_addr, TEXT_VA);
+    EXPECT_EQ(orig_text.size, TEXT_SIZE);
+
+    // Extend .text with 256 bytes, 16-byte aligned
+    auto payload = make_test_payload(256);
+    auto result = editor->extend_text(payload, 16, diag);
+    ASSERT_TRUE(result.has_value()) << "extend_text() failed";
+
+    // The returned VA should be at .text end, aligned to 16
+    const uint64_t expected_va = (TEXT_VA + TEXT_SIZE + 15) & ~uint64_t{15};
+    EXPECT_EQ(result->va, expected_va);
+    EXPECT_EQ(result->size, 256u);
+
+    // .text section should have grown
+    auto new_text = editor->text_section();
+    EXPECT_EQ(new_text.base_addr, TEXT_VA);
+    EXPECT_GT(new_text.size, TEXT_SIZE);
+
+    // Save and verify
+    std::string out_path = elf_path + ".extended";
+    auto sv = editor->save(out_path, diag);
+    ASSERT_TRUE(sv.has_value()) << "save() failed";
+
+    // Reload and verify structure
+    ELFIO::elfio reader;
+    ASSERT_TRUE(reader.load(out_path)) << "Failed to reload extended ELF";
+
+    // Find .text section
+    const ELFIO::section* text_sec = nullptr;
+    for (const auto& sec : reader.sections) {
+        if (sec->get_name() == ".text") {
+            text_sec = sec.get();
+            break;
+        }
+    }
+    ASSERT_NE(text_sec, nullptr) << ".text section not found after extension";
+
+    // .text size should be larger
+    EXPECT_GT(text_sec->get_size(), TEXT_SIZE);
+
+    // Original NOP content should be preserved at the start
+    const auto* data = reinterpret_cast<const uint8_t*>(text_sec->get_data());
+    for (size_t i = 0; i < TEXT_SIZE; ++i) {
+        EXPECT_EQ(data[i], 0x90) << "Original .text content corrupted at offset " << i;
+    }
+
+    // Payload should appear at the end (after padding)
+    const size_t padding = static_cast<size_t>(expected_va - (TEXT_VA + TEXT_SIZE));
+    const size_t payload_start = TEXT_SIZE + padding;
+    ASSERT_LE(payload_start + payload.size(), text_sec->get_size());
+    EXPECT_EQ(std::memcmp(data + payload_start, payload.data(), payload.size()), 0)
+        << "Payload data not found at expected offset in extended .text";
+
+    // Verify PT_LOAD segment was updated
+    bool found_text_seg = false;
+    for (const auto& seg : reader.segments) {
+        if (seg->get_type() != ELFIO::PT_LOAD) continue;
+        if (seg->get_virtual_address() == TEXT_VA) {
+            found_text_seg = true;
+            EXPECT_GE(seg->get_memory_size(), TEXT_SIZE + padding + payload.size())
+                << "PT_LOAD memsz not updated";
+            EXPECT_GE(seg->get_file_size(), TEXT_SIZE + padding + payload.size())
+                << "PT_LOAD filesz not updated";
+            // Permissions should be preserved (original .text is RX)
+            EXPECT_TRUE(seg->get_flags() & ELFIO::PF_R) << "Missing PF_R";
+            EXPECT_TRUE(seg->get_flags() & ELFIO::PF_X) << "Missing PF_X";
+            break;
+        }
+    }
+    EXPECT_TRUE(found_text_seg) << "PT_LOAD containing .text not found";
+
+    std::remove(elf_path.c_str());
+    std::remove(out_path.c_str());
+}
+
+TEST(ExtendText, ELF_PayloadAccessibleAtExpectedVA) {
+    auto elf_path = build_minimal_elf();
+    Common::DiagnosticCollector diag;
+
+    auto editor = ELFEditor::open(elf_path, diag);
+    ASSERT_TRUE(editor.has_value());
+
+    auto payload = make_test_payload(128);
+    auto result = editor->extend_text(payload, 16, diag);
+    ASSERT_TRUE(result.has_value());
+
+    // The VA returned should be usable for overwrite_text (within new .text range)
+    const uint64_t payload_va = result->va;
+
+    // Overwrite a few bytes at the payload VA — should succeed since .text grew
+    std::vector<uint8_t> patch = {0xCC, 0xCC, 0xCC, 0xCC};
+    auto ow = editor->overwrite_text(payload_va, patch.data(), patch.size(), diag);
+    EXPECT_TRUE(ow.has_value())
+        << "overwrite_text() at extend_text VA should succeed";
+
+    std::remove(elf_path.c_str());
+}
+
+TEST(ExtendText, ELF_PageAlignment) {
+    auto elf_path = build_minimal_elf();
+    Common::DiagnosticCollector diag;
+
+    auto editor = ELFEditor::open(elf_path, diag);
+    ASSERT_TRUE(editor.has_value());
+
+    // Use page-level alignment (4096)
+    auto payload = make_test_payload(512);
+    auto result = editor->extend_text(payload, 0x1000, diag);
+    ASSERT_TRUE(result.has_value());
+
+    // VA should be page-aligned
+    EXPECT_EQ(result->va % 0x1000, 0u) << "VA not page-aligned";
+
+    std::remove(elf_path.c_str());
+}
+
+TEST(ExtendText, ELF_MultipleExtensions) {
+    auto elf_path = build_minimal_elf();
+    Common::DiagnosticCollector diag;
+
+    auto editor = ELFEditor::open(elf_path, diag);
+    ASSERT_TRUE(editor.has_value());
+
+    // First extension
+    auto payload1 = make_test_payload(64);
+    auto r1 = editor->extend_text(payload1, 16, diag);
+    ASSERT_TRUE(r1.has_value());
+
+    // Second extension — should follow first
+    std::vector<uint8_t> payload2(128, 0xAB);
+    auto r2 = editor->extend_text(payload2, 16, diag);
+    ASSERT_TRUE(r2.has_value());
+
+    // Second VA must be after first
+    EXPECT_GE(r2->va, r1->va + r1->size)
+        << "Second extension VA overlaps first";
+
+    // Save and verify both payloads are intact
+    std::string out_path = elf_path + ".extended";
+    auto sv = editor->save(out_path, diag);
+    ASSERT_TRUE(sv.has_value());
+
+    ELFIO::elfio reader;
+    ASSERT_TRUE(reader.load(out_path));
+
+    const ELFIO::section* text_sec = nullptr;
+    for (const auto& sec : reader.sections) {
+        if (sec->get_name() == ".text") {
+            text_sec = sec.get();
+            break;
+        }
+    }
+    ASSERT_NE(text_sec, nullptr);
+
+    const auto* data = reinterpret_cast<const uint8_t*>(text_sec->get_data());
+    const size_t sec_size = text_sec->get_size();
+
+    // First payload
+    const size_t off1 = static_cast<size_t>(r1->va - TEXT_VA);
+    ASSERT_LE(off1 + payload1.size(), sec_size);
+    EXPECT_EQ(std::memcmp(data + off1, payload1.data(), payload1.size()), 0)
+        << "First payload corrupted after second extension";
+
+    // Second payload
+    const size_t off2 = static_cast<size_t>(r2->va - TEXT_VA);
+    ASSERT_LE(off2 + payload2.size(), sec_size);
+    EXPECT_EQ(std::memcmp(data + off2, payload2.data(), payload2.size()), 0)
+        << "Second payload not found at expected offset";
+
+    std::remove(elf_path.c_str());
+    std::remove(out_path.c_str());
+}
+
+TEST(ExtendText, ELF_SmallPayload) {
+    auto elf_path = build_minimal_elf();
+    Common::DiagnosticCollector diag;
+
+    auto editor = ELFEditor::open(elf_path, diag);
+    ASSERT_TRUE(editor.has_value());
+
+    // Extend with just 1 byte
+    std::vector<uint8_t> payload = {0xFF};
+    auto result = editor->extend_text(payload, 1, diag);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->size, 1u);
+
+    std::remove(elf_path.c_str());
+}

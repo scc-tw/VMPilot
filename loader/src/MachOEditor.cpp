@@ -223,6 +223,118 @@ MachOEditor::add_segment(std::string_view name,
     return NewSegmentInfo{seg_va, payload.size()};
 }
 
+// ---------------------------------------------------------------------------
+// extend_text
+// ---------------------------------------------------------------------------
+
+tl::expected<NewSegmentInfo, DC>
+MachOEditor::extend_text(const std::vector<uint8_t>& data,
+                         uint64_t alignment,
+                         Common::DiagnosticCollector& diag) noexcept {
+    // Find __TEXT segment and __text section in the load commands.
+    size_t text_seg_off = 0;
+    bool found_seg = false;
+    size_t text_sec_off = 0;
+    bool found_sec = false;
+
+    size_t off = sizeof(MO::mach_header_64);
+    for (uint32_t i = 0; i < header_.ncmds; ++i) {
+        if (off + sizeof(MO::load_command) > buf_.size()) break;
+        MO::load_command lc{};
+        std::memcpy(&lc, buf_.data() + off, sizeof(lc));
+        if (lc.cmd == MO::LC_SEGMENT_64 &&
+            off + sizeof(MO::segment_command_64) <= buf_.size()) {
+            MO::segment_command_64 seg{};
+            std::memcpy(&seg, buf_.data() + off, sizeof(seg));
+            if (std::string_view{seg.segname, strnlen(seg.segname, 16)} == "__TEXT") {
+                text_seg_off = off;
+                found_seg = true;
+
+                size_t sec_off = off + sizeof(MO::segment_command_64);
+                for (uint32_t s = 0; s < seg.nsects; ++s) {
+                    if (sec_off + sizeof(MO::section_64) > buf_.size()) break;
+                    MO::section_64 sec{};
+                    std::memcpy(&sec, buf_.data() + sec_off, sizeof(sec));
+                    if (std::string_view{sec.sectname, strnlen(sec.sectname, 16)} == "__text") {
+                        text_sec_off = sec_off;
+                        found_sec = true;
+                        break;
+                    }
+                    sec_off += sizeof(MO::section_64);
+                }
+                break;
+            }
+        }
+        off += lc.cmdsize;
+    }
+
+    if (!found_seg || !found_sec)
+        return fail(diag, DC::PatchSegmentCreationFailed,
+                    "cannot find __TEXT segment or __text section for extend_text");
+
+    auto seg_cmd = read_at<MO::segment_command_64>(text_seg_off);
+    auto sec_cmd = read_at<MO::section_64>(text_sec_off);
+
+    const uint64_t orig_text_end_va = text_va_ + text_size_;
+    const uint64_t new_data_va = align_up(orig_text_end_va, alignment);
+    const uint64_t padding = new_data_va - orig_text_end_va;
+    const uint64_t growth = padding + data.size();
+
+    // Insert padding + data into the buffer at the end of __text's file data.
+    const size_t orig_text_file_end = text_file_off_ + static_cast<size_t>(text_size_);
+
+    std::vector<uint8_t> insert_data(static_cast<size_t>(growth), 0x00);
+    std::memcpy(insert_data.data() + static_cast<size_t>(padding),
+                data.data(), data.size());
+    buf_.insert(buf_.begin() + static_cast<ptrdiff_t>(orig_text_file_end),
+                insert_data.begin(), insert_data.end());
+
+    // Update __text section and __TEXT segment headers
+    sec_cmd.size += growth;
+    write_at(text_sec_off, sec_cmd);
+
+    seg_cmd.vmsize   = align_up(seg_cmd.vmsize + growth, alignment);
+    seg_cmd.filesize += growth;
+    write_at(text_seg_off, seg_cmd);
+
+    text_size_ += growth;
+
+    for (auto& s : segments_) {
+        if (s.vmaddr == seg_cmd.vmaddr) {
+            s.vmsize = seg_cmd.vmsize;
+            break;
+        }
+    }
+
+    // Fix up file offsets for sections that come after __text in the file.
+    size_t lc_off = sizeof(MO::mach_header_64);
+    for (uint32_t i = 0; i < header_.ncmds; ++i) {
+        if (lc_off + sizeof(MO::load_command) > buf_.size()) break;
+        auto lc = read_at<MO::load_command>(lc_off);
+        if (lc.cmd == MO::LC_SEGMENT_64 &&
+            lc_off + sizeof(MO::segment_command_64) <= buf_.size()) {
+            auto seg = read_at<MO::segment_command_64>(lc_off);
+            if (seg.fileoff > orig_text_file_end) {
+                seg.fileoff += growth;
+                write_at(lc_off, seg);
+            }
+            size_t sec_off = lc_off + sizeof(MO::segment_command_64);
+            for (uint32_t s = 0; s < seg.nsects; ++s) {
+                if (sec_off + sizeof(MO::section_64) > buf_.size()) break;
+                auto sec = read_at<MO::section_64>(sec_off);
+                if (sec.offset > orig_text_file_end && sec_off != text_sec_off) {
+                    sec.offset += static_cast<uint32_t>(growth);
+                    write_at(sec_off, sec);
+                }
+                sec_off += sizeof(MO::section_64);
+            }
+        }
+        lc_off += lc.cmdsize;
+    }
+
+    return NewSegmentInfo{new_data_va, data.size()};
+}
+
 tl::expected<void, DC>
 MachOEditor::add_runtime_dep(std::string_view install_name,
                        Common::DiagnosticCollector& diag) noexcept {

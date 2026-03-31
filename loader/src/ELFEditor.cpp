@@ -100,6 +100,64 @@ ELFEditor::overwrite_text(uint64_t va, const uint8_t* data, size_t len,
 }
 
 // ---------------------------------------------------------------------------
+// extend_text
+// ---------------------------------------------------------------------------
+
+tl::expected<NewSegmentInfo, DC>
+ELFEditor::extend_text(const std::vector<uint8_t>& data,
+                       uint64_t alignment,
+                       Common::DiagnosticCollector& diag) noexcept {
+    auto& reader = impl_->reader;
+    auto* text_sec = impl_->text_sec;
+
+    if (!text_sec)
+        return fail(diag, DC::PatchBinaryReadFailed, "no .text section for extend_text");
+
+    // 1. Find the PT_LOAD segment that contains .text
+    ELFIO::segment* text_seg = nullptr;
+    for (auto& seg : reader.segments) {
+        if (seg->get_type() != PT_LOAD)
+            continue;
+        const uint64_t seg_start = seg->get_virtual_address();
+        const uint64_t seg_end   = seg_start + seg->get_memory_size();
+        if (impl_->text_va >= seg_start && impl_->text_va < seg_end) {
+            text_seg = seg.get();
+            break;
+        }
+    }
+
+    if (!text_seg)
+        return fail(diag, DC::PatchSegmentCreationFailed,
+                    "no PT_LOAD segment contains .text; cannot extend");
+
+    // 2. Compute the new data's VA = .text VA + current size, aligned
+    const uint64_t orig_text_end_va = impl_->text_va + impl_->text_size;
+    const uint64_t new_data_va = (orig_text_end_va + alignment - 1) & ~(alignment - 1);
+    const uint64_t padding = new_data_va - orig_text_end_va;
+
+    // 3. Grow the .text section data: append padding + payload
+    const size_t orig_sec_size = text_sec->get_size();
+    const size_t new_sec_size = orig_sec_size + static_cast<size_t>(padding) + data.size();
+
+    std::vector<uint8_t> buf(new_sec_size, 0x00);
+    std::memcpy(buf.data(), text_sec->get_data(), orig_sec_size);
+    std::memcpy(buf.data() + orig_sec_size + static_cast<size_t>(padding),
+                data.data(), data.size());
+
+    text_sec->set_data(reinterpret_cast<const char*>(buf.data()), buf.size());
+
+    // 4. Update the PT_LOAD segment sizes to cover the growth
+    const uint64_t growth = static_cast<uint64_t>(padding) + data.size();
+    text_seg->set_memory_size(text_seg->get_memory_size() + growth);
+    text_seg->set_file_size(text_seg->get_file_size() + growth);
+
+    // 5. Update cached .text size so overwrite_text() sees the extended range
+    impl_->text_size = new_sec_size;
+
+    return NewSegmentInfo{new_data_va, data.size()};
+}
+
+// ---------------------------------------------------------------------------
 // next_segment_va
 // ---------------------------------------------------------------------------
 

@@ -385,6 +385,12 @@ public:
         return Loader::NewSegmentInfo{cfg.next_va, payload.size()};
     }
 
+    tl::expected<Loader::NewSegmentInfo, DC>
+    extend_text(const std::vector<uint8_t>& data, uint64_t,
+                Common::DiagnosticCollector&) noexcept override {
+        return Loader::NewSegmentInfo{cfg.next_va, data.size()};
+    }
+
     tl::expected<void, DC>
     overwrite_text(uint64_t va, const uint8_t*, size_t,
                    Common::DiagnosticCollector& diag) noexcept override {

@@ -124,6 +124,18 @@ PEEditor::add_segment(std::string_view name,
 }
 
 // ---------------------------------------------------------------------------
+// extend_text
+// ---------------------------------------------------------------------------
+
+tl::expected<NewSegmentInfo, DC>
+PEEditor::extend_text(const std::vector<uint8_t>& /*data*/,
+                      uint64_t /*alignment*/,
+                      Common::DiagnosticCollector& diag) noexcept {
+    return fail(diag, DC::PatchFormatUnsupported,
+                "PE .text extension not yet implemented");
+}
+
+// ---------------------------------------------------------------------------
 // overwrite_text
 // ---------------------------------------------------------------------------
 
