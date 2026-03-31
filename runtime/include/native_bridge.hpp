@@ -71,14 +71,20 @@ call_native(Common::VM::VMContext& ctx,
 /// @param arg_regs     register indices for decoding each argument
 /// @param arg_count    number of arguments (0-8)
 /// @param call_site_ip instruction index of the NATIVE_CALL (for LUT derivation)
-/// @return             plaintext return value, or DiagnosticCode on error
+/// @param fp_mask      bitfield: bit i set ⇒ arg i is FP (double)
+/// @param is_variadic  true for variadic functions (sets AL on x86-64)
+/// @param returns_fp   true if return value is in xmm0/d0
+/// @return             plaintext return value (as uint64_t bit pattern)
 [[nodiscard]] tl::expected<uint64_t, Common::DiagnosticCode>
 call_native_ephemeral(Common::VM::VMContext& ctx,
                       uintptr_t target,
                       const uint64_t* encoded_args,
                       const uint8_t* arg_regs,
                       uint8_t arg_count,
-                      uint32_t call_site_ip) noexcept;
+                      uint32_t call_site_ip,
+                      uint8_t fp_mask = 0,
+                      bool is_variadic = false,
+                      bool returns_fp = false) noexcept;
 
 }  // namespace VMPilot::Runtime
 

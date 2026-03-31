@@ -194,10 +194,11 @@ handle_native_call(VMContext& ctx, const DecodedInsn& insn) noexcept {
     if (target == 0)
         return tl::make_unexpected(DiagnosticCode::NativeCallBridgeFailed);
 
-    // Collect encoded arguments from sequential registers r0..r(n-1).
+    // Extract actual arg count from bit-packed field (bits [3:0]).
+    // Upper bits carry FP/variadic metadata (D13§E2-E4).
     const uint8_t arg_count = static_cast<uint8_t>(
-        entry.arg_count <= NATIVE_CALL_MAX_ARGS
-            ? entry.arg_count : NATIVE_CALL_MAX_ARGS);
+        te_arg_count(entry) <= NATIVE_CALL_MAX_ARGS
+            ? te_arg_count(entry) : NATIVE_CALL_MAX_ARGS);
 
     uint64_t encoded_args[NATIVE_CALL_MAX_ARGS] = {};
     uint8_t  arg_regs[NATIVE_CALL_MAX_ARGS] = {};
@@ -206,11 +207,15 @@ handle_native_call(VMContext& ctx, const DecodedInsn& insn) noexcept {
         encoded_args[i] = ctx.encoded_regs[i];
     }
 
-    // Bridge with ephemeral transition encoding: each invocation generates
-    // a fresh random bijection LUT from stored_seed + nonce.  The attacker
-    // observing this boundary sees a value masked by a one-time permutation.
+    // Extract ABI metadata from the bit-packed arg_count field.
+    const uint8_t fp_mask     = te_fp_mask(entry);
+    const bool    is_variadic = te_is_variadic(entry);
+    const bool    returns_fp  = te_returns_fp(entry);
+
+    // Bridge with ephemeral transition encoding + platform-aware ABI.
     auto result = call_native_ephemeral(
-        ctx, target, encoded_args, arg_regs, arg_count, entry.call_site_ip);
+        ctx, target, encoded_args, arg_regs, arg_count,
+        entry.call_site_ip, fp_mask, is_variadic, returns_fp);
     if (!result)
         return tl::make_unexpected(result.error());
 

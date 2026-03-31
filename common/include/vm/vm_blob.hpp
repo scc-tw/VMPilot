@@ -112,18 +112,50 @@ constexpr uint16_t BB_FLAG_EPOCH_CHANGED = 0x0001;
 // Transition entry (32 bytes, for NATIVE_CALL)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Per-NATIVE_CALL polymorphic stub coefficients.
+/// Per-NATIVE_CALL metadata: target, arg layout, and ephemeral encoding.
 ///
-/// In v1 native_call_count = 0, so this section is empty.
-/// Kept for forward compatibility with Phase 8 (native bridge).
+/// arg_count is bit-packed to carry FP/variadic metadata without growing
+/// the struct (preserves 32-byte blob alignment):
+///
+///   [3:0]   = actual_arg_count (0–8)
+///   [11:4]  = fp_arg_mask (bit i set ⇒ arg i is double/float)
+///   [15:12] = flags:
+///       bit 12: is_variadic (x86-64: sets AL = fp arg count)
+///       bit 13: returns_fp  (result in xmm0/d0 instead of rax/x0)
+///       bit 14: returns_struct (hidden first pointer arg)
+///       bit 15: reserved
+///   [31:16] = struct_return_size (bytes, if returns_struct)
+///
+/// Backward compat: old blobs have arg_count ≤ 8 → upper bits = 0
+/// → no FP, not variadic, int return.  Identical to legacy behavior.
 struct TransitionEntry {
     uint32_t call_site_ip;        ///< instruction index of the NATIVE_CALL
-    uint32_t arg_count;           ///< number of arguments
+    uint32_t arg_count;           ///< bit-packed: see above
     uint64_t target_offset;       ///< native function offset from load base
-    uint64_t coeff_a;             ///< polymorphic transition linear coefficient
-    uint64_t coeff_b;             ///< polymorphic transition constant
+    uint64_t coeff_a;             ///< reserved (was affine coefficient, now unused)
+    uint64_t coeff_b;             ///< reserved
 };
 static_assert(sizeof(TransitionEntry) == 32, "TransitionEntry must be exactly 32 bytes");
+
+/// Helpers for TransitionEntry.arg_count bit-field extraction.
+constexpr uint8_t te_arg_count(const TransitionEntry& e) noexcept {
+    return static_cast<uint8_t>(e.arg_count & 0x0Fu);
+}
+constexpr uint8_t te_fp_mask(const TransitionEntry& e) noexcept {
+    return static_cast<uint8_t>((e.arg_count >> 4) & 0xFFu);
+}
+constexpr bool te_is_variadic(const TransitionEntry& e) noexcept {
+    return (e.arg_count & (1u << 12)) != 0;
+}
+constexpr bool te_returns_fp(const TransitionEntry& e) noexcept {
+    return (e.arg_count & (1u << 13)) != 0;
+}
+constexpr bool te_returns_struct(const TransitionEntry& e) noexcept {
+    return (e.arg_count & (1u << 14)) != 0;
+}
+constexpr uint16_t te_struct_size(const TransitionEntry& e) noexcept {
+    return static_cast<uint16_t>(e.arg_count >> 16);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Section offset helpers
