@@ -3,15 +3,12 @@
 #include <vm/vm_context.hpp>
 #include <vm/vm_config.hpp>
 #include <vm/vm_crypto.hpp>
-#include <vm_loader.hpp>
-#include <handlers.hpp>
 
 #include <gtest/gtest.h>
 
 #include <cstring>
 
 using namespace VMPilot::Common::VM;
-using namespace VMPilot::Runtime;
 
 TEST(VmInsnTest, SizeIs8Bytes) {
     static_assert(sizeof(VmInsn) == 8, "VmInsn must be exactly 8 bytes");
@@ -60,12 +57,8 @@ TEST(VmContextTest, ObliviousWorkspaceAlignment) {
     EXPECT_EQ(addr % 64, 0u);
 }
 
-TEST(VmContextTest, InitContext) {
-    VMContext ctx;
-    // Set some non-zero values to verify init clears them
-    ctx.vm_ip = 42;
-    ctx.halted = true;
-    init_context(ctx);
+TEST(VmContextTest, DefaultInit) {
+    VMContext ctx{};
     EXPECT_EQ(ctx.vm_ip, 0u);
     EXPECT_FALSE(ctx.halted);
 }
@@ -123,9 +116,5 @@ TEST(SipHashTest, ExpandProduces8Words) {
     EXPECT_FALSE(all_zero);
 }
 
-TEST(HandlerTableTest, InitReturnsFullTable) {
-    auto table = init_handler_table();
-    for (size_t i = 0; i < VM_OPCODE_COUNT; ++i) {
-        EXPECT_NE(table[i], nullptr);
-    }
-}
+// HandlerTableTest moved to test_phase3_handlers.cpp (EngineTable.AllOpcodesCovered)
+// and test_engine_comprehensive.cpp (EngineTable.AllOpcodesCovered)
