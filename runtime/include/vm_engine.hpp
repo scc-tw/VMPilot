@@ -27,15 +27,19 @@
 #include "vm_state.hpp"
 #include "vm_policy.hpp"
 #include "oram_strategy.hpp"
+#include "pipeline.hpp"
+#include "handler_impls.hpp"
 
 #include <vm/encoded_value.hpp>
 #include <vm/blob_view.hpp>
 #include <vm/vm_config.hpp>
+#include <vm/vm_crypto.hpp>
 #include <diagnostic.hpp>
 
 #include <tl/expected.hpp>
 
 #include <cstdint>
+#include <cstring>
 #include <memory>
 
 namespace VMPilot::Runtime {
@@ -168,30 +172,6 @@ private:
         , oram_(std::move(oram))
     {}
 
-    // ── 12-step pipeline (doc 15 §5.2) ─────────────────────────────────
-    // Implementation in vm_engine.cpp (explicit instantiation per policy).
-
-    // Steps 1-3: Fetch encrypted insn, decrypt via SipHash, decode opcode
-    // tl::expected<DecodedInsn, DiagnosticCode> fetch_decrypt_decode() noexcept;
-
-    // Step 4: Resolve operands (always both, even if unused — D3 uniformity)
-    // void resolve_operands(DecodedInsn& insn) noexcept;
-
-    // Step 5-8: Dispatch to handler, select result, write, memory
-    // tl::expected<void, DiagnosticCode> dispatch(const DecodedInsn& insn) noexcept;
-
-    // Step 9: Update enc_state (SipHash chain advance)
-    // void advance_enc_state(const DecodedInsn& insn) noexcept;
-
-    // Step 10: Advance IP (branchless for branches)
-    // void advance_ip() noexcept;
-
-    // Step 11: Check BB MAC at boundary
-    // tl::expected<void, DiagnosticCode> check_bb_boundary() noexcept;
-
-    // Step 12: Anti-debug guard (amortised)
-    // void guard_check() noexcept;
-
     // ── State ───────────────────────────────────────────────────────────
 
     /// Shared immutable state (blob, keys, BB metadata).
@@ -211,6 +191,264 @@ private:
     std::unique_ptr<VmOramState> oram_;
 };
 
+// ═════════════════════════════════════════════════════════════════════════════
+// Template method implementations (must be in header for template classes)
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ── VmEngine::create() ──────────────────────────────────────────────────────
+
+template<typename Policy, typename Oram>
+tl::expected<VmEngine<Policy, Oram>, DiagnosticCode>
+VmEngine<Policy, Oram>::create(
+    const uint8_t* blob_data, size_t blob_size,
+    const uint8_t stored_seed[32],
+    int64_t load_base_delta,
+    const uint64_t* initial_regs, uint8_t num_regs) noexcept
+{
+    using namespace Common::VM;
+    using namespace Common::VM::Crypto;
+    using namespace Common::VM::Encoding;
+
+    // 1. Validate blob via BlobView
+    auto blob_or = BlobView::create(blob_data, blob_size);
+    if (!blob_or) return tl::make_unexpected(blob_or.error());
+
+    auto imm = std::make_shared<VmImmutable>();
+    auto* m = const_cast<VmImmutable*>(imm.get());  // mutable during construction only
+
+    m->blob = *blob_or;
+    std::memcpy(m->stored_seed, stored_seed, 32);
+
+    // 2. Key derivation
+    blake3_kdf(stored_seed, "fast", 4, m->fast_key, 16);
+    blake3_kdf(stored_seed, "oram", 4, m->oram_key, 16);
+    blake3_kdf(stored_seed, "integrity", 9, m->integrity_key, 32);
+
+    uint8_t meta_key[16], pool_key[16];
+    blake3_kdf(stored_seed, "meta", 4, meta_key, 16);
+    blake3_kdf(stored_seed, "pool", 4, pool_key, 16);
+
+    // 3. Decrypt BB metadata
+    auto raw_meta = m->blob.bb_metadata_raw();
+    m->bb_metadata.resize(raw_meta.size());
+
+    for (size_t bb = 0; bb < raw_meta.size(); ++bb) {
+        uint64_t words[8];
+        std::memcpy(words, &raw_meta[bb], 64);
+        for (uint32_t w = 0; w < 8; ++w) {
+            uint64_t nonce = static_cast<uint64_t>(bb) * 8 + w;
+            uint8_t nonce_bytes[8];
+            std::memcpy(nonce_bytes, &nonce, 8);
+            words[w] ^= siphash_2_4(meta_key, nonce_bytes, 8);
+        }
+        SerializedBBMeta smeta;
+        std::memcpy(&smeta, words, 64);
+
+        auto& md = m->bb_metadata[bb];
+        md.bb_id = smeta.bb_id;
+        md.epoch = smeta.epoch;
+        md.entry_ip = smeta.entry_ip;
+        md.insn_count_in_bb = smeta.insn_count_in_bb;
+        md.live_regs_bitmap = smeta.live_regs_bitmap;
+        std::memcpy(md.epoch_seed, smeta.epoch_seed, 32);
+
+        // Derive bb_enc_seed = BLAKE3_keyed(stored_seed, "enc" || bb_id)[0:8]
+        uint8_t enc_msg[7];
+        std::memcpy(enc_msg, "enc", 3);
+        std::memcpy(enc_msg + 3, &md.bb_id, 4);
+        blake3_keyed_hash(stored_seed, enc_msg, 7, md.bb_enc_seed, 8);
+    }
+
+    // 4. Decrypt constant pool
+    auto raw_pool = m->blob.constant_pool();
+    m->decrypted_pool.resize(raw_pool.size() * 8);
+    if (!raw_pool.empty()) {
+        std::memcpy(m->decrypted_pool.data(), raw_pool.data(), raw_pool.size() * 8);
+        auto* pool_words = reinterpret_cast<uint64_t*>(m->decrypted_pool.data());
+        for (size_t i = 0; i < raw_pool.size(); ++i) {
+            uint64_t idx = static_cast<uint64_t>(i);
+            uint8_t idx_bytes[8];
+            std::memcpy(idx_bytes, &idx, 8);
+            pool_words[i] ^= siphash_2_4(pool_key, idx_bytes, 8);
+        }
+    }
+
+    // 5. Copy native call entries
+    auto raw_trans = m->blob.native_calls();
+    m->native_calls.assign(raw_trans.begin(), raw_trans.end());
+
+    // 6. Derive global memory encoding
+    derive_memory_tables(stored_seed, m->mem.encode, m->mem.decode);
+
+    // 7. Copy alias LUT
+    std::memcpy(m->alias_lut, m->blob.alias_lut(), 256);
+
+    // 8. Blob integrity hash
+    blake3_keyed_hash(m->integrity_key, blob_data, blob_size,
+                      m->blob_integrity_hash, 32);
+
+    // ── Initialize mutable state ────────────────────────────────────────
+
+    VmExecution exec{};
+    exec.load_base_delta = load_base_delta;
+
+    // Enter first BB
+    const auto& first = m->bb_metadata[0];
+    exec.current_bb_id = first.bb_id;
+    exec.current_bb_index = 0;
+    exec.current_epoch = first.epoch;
+    exec.vm_ip = first.entry_ip;
+    exec.insn_index_in_bb = 0;
+
+    uint64_t enc_seed_u64 = 0;
+    std::memcpy(&enc_seed_u64, first.bb_enc_seed, 8);
+    exec.enc_state = enc_seed_u64;
+
+    // Derive epoch tables for first BB
+    auto epoch = std::make_unique<VmEpoch>();
+    epoch->enter_bb(first, *imm);
+
+    // Encode initial register values into register domain
+    if (initial_regs && num_regs > 0) {
+        for (uint8_t i = 0; i < num_regs && i < VM_REG_COUNT; ++i) {
+            exec.regs[i] = encode_register(epoch->reg.encode_lut(i),
+                                            PlainVal(initial_regs[i]));
+        }
+    }
+
+    // Initialize ORAM workspace
+    auto oram = std::make_unique<VmOramState>();
+    oram->init(*imm);
+
+    return VmEngine(std::move(imm), std::move(exec),
+                    std::move(epoch), std::move(oram));
+}
+
+// ── VmEngine::create_reentrant() ────────────────────────────────────────────
+
+template<typename Policy, typename Oram>
+tl::expected<VmEngine<Policy, Oram>, DiagnosticCode>
+VmEngine<Policy, Oram>::create_reentrant(
+    std::shared_ptr<const VmImmutable> imm,
+    int64_t load_base_delta,
+    const uint64_t* initial_regs, uint8_t num_regs) noexcept
+{
+    using namespace Common::VM;
+
+    if (!imm || imm->bb_metadata.empty())
+        return tl::make_unexpected(DiagnosticCode::BlobHeaderInvalid);
+
+    VmExecution exec{};
+    exec.load_base_delta = load_base_delta;
+
+    const auto& first = imm->bb_metadata[0];
+    exec.current_bb_id = first.bb_id;
+    exec.current_bb_index = 0;
+    exec.current_epoch = first.epoch;
+    exec.vm_ip = first.entry_ip;
+    exec.insn_index_in_bb = 0;
+
+    uint64_t enc_seed_u64 = 0;
+    std::memcpy(&enc_seed_u64, first.bb_enc_seed, 8);
+    exec.enc_state = enc_seed_u64;
+
+    auto epoch = std::make_unique<VmEpoch>();
+    epoch->enter_bb(first, *imm);
+
+    if (initial_regs && num_regs > 0) {
+        for (uint8_t i = 0; i < num_regs && i < VM_REG_COUNT; ++i) {
+            exec.regs[i] = encode_register(epoch->reg.encode_lut(i),
+                                            PlainVal(initial_regs[i]));
+        }
+    }
+
+    auto oram = std::make_unique<VmOramState>();
+    oram->init(*imm);
+
+    return VmEngine(std::move(imm), std::move(exec),
+                    std::move(epoch), std::move(oram));
+}
+
+// ── VmEngine::step() — 12-step uniform pipeline ────────────────────────────
+
+template<typename Policy, typename Oram>
+tl::expected<VmResult, DiagnosticCode>
+VmEngine<Policy, Oram>::step() noexcept
+{
+    // Steps 1-3: FETCH + DECRYPT + DECODE
+    auto insn_or = pipeline::fetch_decrypt_decode(*imm_, exec_, *epoch_);
+    if (!insn_or) return tl::make_unexpected(insn_or.error());
+    auto insn = *insn_or;
+
+    // Step 4: RESOLVE operands (always both — D3 uniformity)
+    pipeline::resolve_operands(*imm_, exec_, *epoch_, insn);
+
+    // Steps 5-8: COMPUTE + SELECT + WRITE + MEMORY (handler dispatch)
+    static const auto table = build_handler_table<Policy, Oram>();
+    auto r = table[static_cast<uint8_t>(insn.opcode)](
+        exec_, *epoch_, *oram_, *imm_, insn);
+    if (!r) return tl::make_unexpected(r.error());
+
+    // Step 9: UPDATE enc_state
+    pipeline::advance_enc_state(exec_, insn.plaintext_opcode, insn.aux);
+
+    // Step 10: ADVANCE IP
+    if (exec_.branch_taken) {
+        exec_.branch_taken = false;
+
+        // Step 11 (early): verify MAC of BB we're leaving
+        auto mac_r = pipeline::verify_bb_mac(*imm_, exec_, *epoch_);
+        if (!mac_r) return tl::make_unexpected(mac_r.error());
+
+        auto enter_r = pipeline::enter_basic_block(
+            exec_, *epoch_, *imm_, exec_.branch_target_bb);
+        if (!enter_r) return tl::make_unexpected(enter_r.error());
+
+    } else {
+        exec_.vm_ip++;
+
+        // Check if we've reached end of current BB
+        uint32_t bb_end = imm_->bb_metadata[exec_.current_bb_index].entry_ip
+                        + pipeline::current_bb_insn_count(*imm_, exec_);
+
+        if (exec_.vm_ip >= bb_end) {
+            // Step 11: verify MAC at BB boundary
+            auto mac_r = pipeline::verify_bb_mac(*imm_, exec_, *epoch_);
+            if (!mac_r) return tl::make_unexpected(mac_r.error());
+
+            // Fallthrough to next sequential BB
+            if (exec_.current_bb_index + 1 < imm_->bb_metadata.size()) {
+                uint32_t next_id = imm_->bb_metadata[exec_.current_bb_index + 1].bb_id;
+                auto enter_r = pipeline::enter_basic_block(
+                    exec_, *epoch_, *imm_, next_id);
+                if (!enter_r) return tl::make_unexpected(enter_r.error());
+            }
+        }
+    }
+
+    // Step 12: GUARD (anti-debug, amortised — future Phase 9)
+
+    return exec_.halted ? VmResult::Halted : VmResult::Stepped;
+}
+
+// ── VmEngine::execute() — main loop ────────────────────────────────────────
+
+template<typename Policy, typename Oram>
+tl::expected<VmExecResult, DiagnosticCode>
+VmEngine<Policy, Oram>::execute() noexcept
+{
+    while (true) {
+        auto r = step();
+        if (!r) return tl::make_unexpected(r.error());
+        if (*r == VmResult::Halted) {
+            PlainVal ret = decode_register(
+                epoch_->reg.decode_lut(0), exec_.regs[0]);
+            return VmExecResult{VmResult::Halted, ret.bits};
+        }
+    }
+}
+
 }  // namespace VMPilot::Runtime
 
 #endif  // __RUNTIME_VM_ENGINE_HPP__
+

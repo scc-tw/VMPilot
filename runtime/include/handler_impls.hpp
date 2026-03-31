@@ -88,7 +88,39 @@ VMPILOT_HANDLER_STUB(LOAD, A);
 VMPILOT_HANDLER_STUB(STORE, A);
 VMPILOT_HANDLER_ORAM_STUB(PUSH, A);
 VMPILOT_HANDLER_ORAM_STUB(POP, A);
-VMPILOT_HANDLER_STUB(LOAD_CONST, A);
+/// LOAD_CONST: load pre-encoded constant from pool into register.
+///
+/// Security: Class A (zero plaintext).  The constant pool is pre-encoded
+/// by the compiler in the target BB's register domain (doc 15 §1.1).
+/// At runtime, the decoder resolves the pool operand to a RegVal via
+/// resolve_operands (step 4), so resolved_a already holds the encoded
+/// constant.  This handler just stores it.
+template<typename Policy>
+struct HandlerTraits<VmOpcode::LOAD_CONST, Policy> {
+    static constexpr auto security_class = SecurityClass::A;
+    using oram_tag = NoOramTag;
+
+    static HandlerResult exec(
+        VmExecution& exec, VmEpoch&, VmOramState&,
+        const VmImmutable& imm, const DecodedInsn& insn) noexcept
+    {
+        // The constant pool value has been resolved as resolved_a by the
+        // dispatcher's resolve_operands step (OPERAND_POOL → RegVal).
+        // If the operand type is POOL, use resolved_a directly.
+        // Otherwise fall back to direct pool access.
+        if (insn.operand_a_type == VM_OPERAND_POOL) {
+            exec.regs[insn.reg_a] = insn.resolved_a;
+        } else {
+            // Direct pool access: aux = pool index
+            if (imm.decrypted_pool.empty() || insn.aux * 8 >= imm.decrypted_pool.size())
+                return {};  // out-of-bounds → leave register unchanged
+            uint64_t val = 0;
+            std::memcpy(&val, imm.decrypted_pool.data() + insn.aux * 8, 8);
+            exec.regs[insn.reg_a] = RegVal(val);
+        }
+        return {};
+    }
+};
 VMPILOT_HANDLER_STUB(LOAD_CTX, C);
 VMPILOT_HANDLER_STUB(STORE_CTX, C);
 

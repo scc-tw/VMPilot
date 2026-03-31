@@ -44,6 +44,8 @@ set(RUNTIME_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tls_helpers.cpp
     # Phase 2+: new state model
     ${CMAKE_CURRENT_SOURCE_DIR}/src/vm_state.cpp
+    # Phase 4: pipeline functions for new state types
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/pipeline.cpp
 )
 
 # ---------------------------------------------------------------------------
@@ -339,4 +341,16 @@ if(ENABLE_TESTS)
                 GTest::gtest_main
     )
     gtest_discover_tests(test_phase3_handlers)
+
+    add_executable(test_phase4_engine
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_phase4_engine.cpp
+    )
+    target_include_directories(test_phase4_engine
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(test_phase4_engine
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+    gtest_discover_tests(test_phase4_engine)
 endif()
