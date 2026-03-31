@@ -75,6 +75,13 @@ struct NewSegmentInfo {
     size_t size = 0;
 };
 
+/// A usable gap (NOP sled, INT3 padding, alignment fill) within .text.
+/// Stubs can be placed in these gaps for maximum stealth (D15§13.2).
+struct TextGap {
+    uint64_t va   = 0;   ///< Virtual address of the gap start
+    size_t   size = 0;   ///< Gap size in bytes
+};
+
 }  // namespace VMPilot::Loader
 
 #endif  // __LOADER_TYPES_HPP__

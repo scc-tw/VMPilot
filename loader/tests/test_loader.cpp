@@ -385,6 +385,9 @@ public:
         return Loader::NewSegmentInfo{cfg.next_va, payload.size()};
     }
 
+    std::vector<Loader::TextGap>
+    find_text_gaps(std::size_t) const noexcept override { return {}; }
+
     tl::expected<Loader::NewSegmentInfo, DC>
     extend_text(const std::vector<uint8_t>& data, uint64_t,
                 Common::DiagnosticCollector&) noexcept override {

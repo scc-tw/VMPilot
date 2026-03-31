@@ -2,6 +2,7 @@
 
 #include <elfio/elfio.hpp>
 
+#include <algorithm>
 #include <cstring>
 #include <vector>
 
@@ -97,6 +98,55 @@ ELFEditor::overwrite_text(uint64_t va, const uint8_t* data, size_t len,
     std::memcpy(buf.data() + offset, data, len);
     sec->set_data(reinterpret_cast<const char*>(buf.data()), buf.size());
     return {};
+}
+
+// ---------------------------------------------------------------------------
+// find_text_gaps
+// ---------------------------------------------------------------------------
+
+/// Scan .text for consecutive filler bytes that can be repurposed as
+/// code caves.  Detects:
+///   - x86 NOP sleds (0x90)
+///   - INT3 padding (0xCC) — compiler/linker alignment fill
+///   - Zero padding (0x00) — linker alignment fill
+/// Returns gaps >= min_size, sorted by size descending.
+std::vector<TextGap>
+ELFEditor::find_text_gaps(std::size_t min_size) const noexcept {
+    auto* sec = impl_->text_sec;
+    if (!sec || sec->get_size() == 0) return {};
+
+    const auto* data = reinterpret_cast<const uint8_t*>(sec->get_data());
+    const size_t text_len = sec->get_size();
+    const uint64_t base_va = impl_->text_va;
+
+    // Helper: is this byte a filler?
+    // x86: 0x90 (NOP), 0xCC (INT3), 0x00 (zero padding)
+    auto is_filler = [](uint8_t b) -> bool {
+        return b == 0x90 || b == 0xCC || b == 0x00;
+    };
+
+    std::vector<TextGap> gaps;
+    size_t i = 0;
+    while (i < text_len) {
+        if (!is_filler(data[i])) { ++i; continue; }
+
+        // Found start of a filler run — measure its length.
+        // All bytes in the run must be the SAME filler type
+        // (don't merge a NOP sled with an INT3 pad).
+        const uint8_t filler = data[i];
+        const size_t start = i;
+        while (i < text_len && data[i] == filler) ++i;
+        const size_t run_len = i - start;
+
+        if (run_len >= min_size)
+            gaps.push_back({base_va + start, run_len});
+    }
+
+    // Sort by size descending (largest caves first)
+    std::sort(gaps.begin(), gaps.end(),
+              [](const TextGap& a, const TextGap& b) { return a.size > b.size; });
+
+    return gaps;
 }
 
 // ---------------------------------------------------------------------------

@@ -224,6 +224,59 @@ MachOEditor::add_segment(std::string_view name,
 }
 
 // ---------------------------------------------------------------------------
+// find_text_gaps
+// ---------------------------------------------------------------------------
+
+/// Scan __text for consecutive filler instructions that can be
+/// repurposed as code caves.  Detects:
+///   - ARM64 NOP (0xD503201F) — alignment padding
+///   - ARM64 BRK #0 (0xD4200000) — unreachable code marker
+///   - Zero words (0x00000000) — linker fill
+/// Returns gaps >= min_size, sorted by size descending.
+std::vector<TextGap>
+MachOEditor::find_text_gaps(std::size_t min_size) const noexcept {
+    if (text_size_ == 0 || text_file_off_ + text_size_ > buf_.size())
+        return {};
+
+    const uint8_t* data = buf_.data() + text_file_off_;
+    const size_t text_len = static_cast<size_t>(text_size_);
+
+    // ARM64 filler detection (4-byte aligned)
+    constexpr uint32_t ARM64_NOP = 0xD503201F;
+    constexpr uint32_t ARM64_BRK = 0xD4200000;
+
+    auto is_filler_word = [](uint32_t w) -> bool {
+        return w == ARM64_NOP || w == ARM64_BRK || w == 0;
+    };
+
+    std::vector<TextGap> gaps;
+    size_t i = 0;
+    while (i + 3 < text_len) {
+        uint32_t word;
+        std::memcpy(&word, data + i, 4);
+        if (!is_filler_word(word)) { i += 4; continue; }
+
+        // Found start of a filler run — measure length
+        const uint32_t filler = word;
+        const size_t start = i;
+        while (i + 3 < text_len) {
+            std::memcpy(&word, data + i, 4);
+            if (word != filler) break;
+            i += 4;
+        }
+        const size_t run_len = i - start;
+
+        if (run_len >= min_size)
+            gaps.push_back({text_va_ + start, run_len});
+    }
+
+    std::sort(gaps.begin(), gaps.end(),
+              [](const TextGap& a, const TextGap& b) { return a.size > b.size; });
+
+    return gaps;
+}
+
+// ---------------------------------------------------------------------------
 // extend_text
 // ---------------------------------------------------------------------------
 

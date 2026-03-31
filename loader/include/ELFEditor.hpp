@@ -28,6 +28,9 @@ public:
                 uint64_t alignment,
                 Common::DiagnosticCollector& diag) noexcept override;
 
+    [[nodiscard]] std::vector<TextGap>
+    find_text_gaps(std::size_t min_size) const noexcept override;
+
     [[nodiscard]] tl::expected<NewSegmentInfo, Common::DiagnosticCode>
     extend_text(const std::vector<uint8_t>& data,
                 uint64_t alignment,

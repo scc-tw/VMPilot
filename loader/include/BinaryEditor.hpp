@@ -38,6 +38,12 @@ public:
     [[nodiscard]] virtual uint64_t
     next_segment_va(uint64_t alignment) const noexcept = 0;
 
+    /// Find usable gaps (NOP sleds, INT3/BRK padding, alignment fill)
+    /// in .text that are at least `min_size` bytes.
+    /// Returned sorted by size descending (largest first).
+    [[nodiscard]] virtual std::vector<TextGap>
+    find_text_gaps(std::size_t min_size) const noexcept = 0;
+
     // --- Mutate ---
 
     /// Create a new loadable segment/section with the given data.

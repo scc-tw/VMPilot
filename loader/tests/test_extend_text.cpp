@@ -278,3 +278,114 @@ TEST(ExtendText, ELF_SmallPayload) {
 
     std::remove(elf_path.c_str());
 }
+
+// ============================================================================
+// ELF find_text_gaps() Tests
+// ============================================================================
+
+namespace {
+
+/// Build an ELF with a .text section containing known gap patterns.
+std::string build_elf_with_gaps() {
+    ELFIO::elfio writer;
+    writer.create(ELFIO::ELFCLASS64, ELFIO::ELFDATA2LSB);
+    writer.set_os_abi(ELFIO::ELFOSABI_LINUX);
+    writer.set_type(ELFIO::ET_EXEC);
+    writer.set_machine(ELFIO::EM_X86_64);
+    writer.set_entry(TEXT_VA);
+
+    // .text layout (256 bytes total):
+    //   [0..31]    real code (0x55 = push rbp)
+    //   [32..63]   NOP sled (32 × 0x90)
+    //   [64..79]   real code (0x48)
+    //   [80..95]   INT3 padding (16 × 0xCC)
+    //   [96..111]  real code (0xC3)
+    //   [112..119] zero pad (8 × 0x00)
+    //   [120..127] real code (0x48)
+    //   [128..135] NOP sled (8 × 0x90)
+    //   [136..255] real code (0x48)
+    std::vector<uint8_t> text(256, 0x48);  // fill with 0x48
+
+    std::memset(text.data() + 32, 0x90, 32);   // NOP sled
+    std::memset(text.data() + 80, 0xCC, 16);   // INT3 pad
+    std::memset(text.data() + 112, 0x00, 8);   // zero pad
+    std::memset(text.data() + 128, 0x90, 8);   // small NOP sled
+
+    auto* text_sec = writer.sections.add(".text");
+    text_sec->set_type(ELFIO::SHT_PROGBITS);
+    text_sec->set_flags(ELFIO::SHF_ALLOC | ELFIO::SHF_EXECINSTR);
+    text_sec->set_addr_align(16);
+    text_sec->set_address(TEXT_VA);
+    text_sec->set_data(reinterpret_cast<const char*>(text.data()), text.size());
+
+    auto* seg = writer.segments.add();
+    seg->set_type(ELFIO::PT_LOAD);
+    seg->set_flags(ELFIO::PF_R | ELFIO::PF_X);
+    seg->set_align(0x1000);
+    seg->set_virtual_address(TEXT_VA);
+    seg->set_physical_address(TEXT_VA);
+    seg->add_section_index(text_sec->get_index(), text_sec->get_addr_align());
+
+    char tmpname[] = "/tmp/vmpilot_gaps_XXXXXX";
+    int fd = mkstemp(tmpname);
+    EXPECT_GE(fd, 0);
+    close(fd);
+    writer.save(tmpname);
+    return std::string(tmpname);
+}
+
+}  // namespace
+
+TEST(FindTextGaps, ELF_DetectsNopAndInt3Gaps) {
+    auto elf_path = build_elf_with_gaps();
+    Common::DiagnosticCollector diag;
+
+    auto editor = ELFEditor::open(elf_path, diag);
+    ASSERT_TRUE(editor.has_value());
+
+    // min_size=8: should find all 4 gaps (NOP32, INT3_16, ZERO8, NOP8)
+    auto gaps = editor->find_text_gaps(8);
+    ASSERT_GE(gaps.size(), 4u);
+
+    // Sorted by size descending
+    EXPECT_GE(gaps[0].size, gaps[1].size);
+
+    // Verify the 32-byte NOP sled
+    bool found_nop32 = false;
+    for (const auto& g : gaps) {
+        if (g.va == TEXT_VA + 32 && g.size == 32) found_nop32 = true;
+    }
+    EXPECT_TRUE(found_nop32) << "32-byte NOP sled not found";
+
+    // Verify the 16-byte INT3 pad
+    bool found_int3 = false;
+    for (const auto& g : gaps) {
+        if (g.va == TEXT_VA + 80 && g.size == 16) found_int3 = true;
+    }
+    EXPECT_TRUE(found_int3) << "16-byte INT3 pad not found";
+
+    std::remove(elf_path.c_str());
+}
+
+TEST(FindTextGaps, ELF_MinSizeFilters) {
+    auto elf_path = build_elf_with_gaps();
+    Common::DiagnosticCollector diag;
+
+    auto editor = ELFEditor::open(elf_path, diag);
+    ASSERT_TRUE(editor.has_value());
+
+    // min_size=16: excludes the 8-byte gaps
+    auto gaps16 = editor->find_text_gaps(16);
+    for (const auto& g : gaps16)
+        EXPECT_GE(g.size, 16u);
+
+    // min_size=32: only the 32-byte NOP sled
+    auto gaps32 = editor->find_text_gaps(32);
+    ASSERT_EQ(gaps32.size(), 1u);
+    EXPECT_EQ(gaps32[0].size, 32u);
+
+    // min_size=64: nothing
+    EXPECT_TRUE(editor->find_text_gaps(64).empty());
+
+    std::remove(elf_path.c_str());
+}
