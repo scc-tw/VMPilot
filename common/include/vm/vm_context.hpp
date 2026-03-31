@@ -166,6 +166,21 @@ struct alignas(64) VMContext {
     /// lower address than the static base.
     int64_t load_base_delta;
 
+    /// Monotonic nonce for ephemeral transition encoding (NATIVE_CALL).
+    /// Each invocation generates a fresh random bijection LUT from
+    /// BLAKE3(stored_seed, call_site, nonce).  The nonce never repeats
+    /// within a vm_execute() invocation, so each LUT is used exactly
+    /// once — achieving one-time-pad semantics for the transition
+    /// encoding.  An attacker observing (plain, masked) at invocation i
+    /// learns nothing about invocation i+1 (independent PRF evaluations).
+    /// Security reduces to stored_seed (D15§11.8).
+    uint64_t native_call_nonce;
+
+    /// Monotonic nonce for ephemeral transition encoding (Class C ops).
+    /// Separate from native_call_nonce because NATIVE_CALL and Class C
+    /// may interleave — independent counters prevent cross-contamination.
+    uint64_t class_c_nonce;
+
     // Flags set by handlers
     bool halted;
     uint32_t branch_target_bb;  ///< set by JMP/JCC/CALL, read by dispatcher

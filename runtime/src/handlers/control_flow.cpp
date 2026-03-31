@@ -206,8 +206,11 @@ handle_native_call(VMContext& ctx, const DecodedInsn& insn) noexcept {
         encoded_args[i] = ctx.encoded_regs[i];
     }
 
-    // Bridge: decode args → native call → plaintext result
-    auto result = call_native(ctx, target, encoded_args, arg_regs, arg_count);
+    // Bridge with ephemeral transition encoding: each invocation generates
+    // a fresh random bijection LUT from stored_seed + nonce.  The attacker
+    // observing this boundary sees a value masked by a one-time permutation.
+    auto result = call_native_ephemeral(
+        ctx, target, encoded_args, arg_regs, arg_count, entry.call_site_ip);
     if (!result)
         return tl::make_unexpected(result.error());
 

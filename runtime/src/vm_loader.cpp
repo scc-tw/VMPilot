@@ -209,6 +209,8 @@ load_blob(const uint8_t* blob_data, size_t blob_size,
     ctx.shadow_depth  = 0;
     ctx.vm_flags      = 0;
     ctx.load_base_delta = 0;  // default: no relocation (non-PIE or testing)
+    ctx.native_call_nonce = 0;
+    ctx.class_c_nonce     = 0;
     ctx.halted        = false;
     ctx.branch_taken  = false;
     ctx.branch_target_bb = 0;

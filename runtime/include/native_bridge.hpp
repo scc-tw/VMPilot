@@ -31,16 +31,8 @@ namespace VMPilot::Runtime {
 /// AAPCS64 supports 8. We use 8 as the upper bound.
 constexpr uint8_t NATIVE_CALL_MAX_ARGS = 8;
 
-/// Execute a native function call through the bridge.
-///
-/// Decodes encoded arguments to plaintext (register-transient),
-/// calls the native function via function pointer, and returns
-/// the plaintext result. The caller is responsible for re-encoding
-/// the result into the register domain.
-///
-/// Plaintext exists transiently in CPU registers during the call.
-/// Future v2 will add polymorphic stripper stubs to disguise the
-/// decode-call-encode pattern (spec S6.1-6.4).
+/// Execute a native function call through the legacy bridge (no transition
+/// encoding).  Used when coeff_a == 0 (backward compat with old blobs).
 ///
 /// @param ctx          VMContext for operand decoding
 /// @param target       native function address
@@ -54,6 +46,39 @@ call_native(Common::VM::VMContext& ctx,
             const uint64_t* encoded_args,
             const uint8_t* arg_regs,
             uint8_t arg_count) noexcept;
+
+/// Execute a native function call with ephemeral transition encoding.
+///
+/// Security property (D15§6.1, strengthened):
+///   Each invocation generates a fresh random bijective LUT from
+///   BLAKE3(stored_seed, call_site_ip, nonce).  The nonce is monotonic
+///   and never repeats.  Therefore:
+///
+///   - Without stored_seed: each invocation's LUT is computationally
+///     indistinguishable from a random permutation (PRF assumption on
+///     BLAKE3).  Observing (plain, masked) at invocation i reveals one
+///     entry of π_i, which is never reused.  I(π_i; π_{i+1}) = 0.
+///
+///   - With stored_seed: all LUTs are derivable → game over.  But this
+///     is D15§11.8 (stored_seed compromise collapses ALL protections).
+///
+///   The transition encoding adds NO additional weakness beyond the
+///   stored_seed dependency shared by D1/D2/D3/D4.
+///
+/// @param ctx          VMContext (provides stored_seed + nonce)
+/// @param target       native function address
+/// @param encoded_args encoded argument values (in register domain)
+/// @param arg_regs     register indices for decoding each argument
+/// @param arg_count    number of arguments (0-8)
+/// @param call_site_ip instruction index of the NATIVE_CALL (for LUT derivation)
+/// @return             plaintext return value, or DiagnosticCode on error
+[[nodiscard]] tl::expected<uint64_t, Common::DiagnosticCode>
+call_native_ephemeral(Common::VM::VMContext& ctx,
+                      uintptr_t target,
+                      const uint64_t* encoded_args,
+                      const uint8_t* arg_regs,
+                      uint8_t arg_count,
+                      uint32_t call_site_ip) noexcept;
 
 }  // namespace VMPilot::Runtime
 
