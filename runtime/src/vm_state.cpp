@@ -6,7 +6,7 @@
 /// and CompositionCache is forward-declared in vm_state.hpp.
 
 #include "vm_state.hpp"
-#include "composition_cache.hpp"
+#include "composition_cache_v2.hpp"
 
 namespace VMPilot::Runtime {
 

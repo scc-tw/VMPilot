@@ -258,7 +258,7 @@ TEST(Phase3DecodedInsn, CarriesPhantomTypedOperands) {
 // 7. Stub handlers return NotImplemented
 // ============================================================================
 
-TEST(Phase3Stubs, UnimplementedReturnError) {
+TEST(Phase3Stubs, NativeCallReturnsNotImplemented) {
     VmExecution exec{};
     VmEpoch epoch;
     VmOramState oram{};
@@ -267,8 +267,8 @@ TEST(Phase3Stubs, UnimplementedReturnError) {
 
     auto table = build_handler_table<DebugPolicy, DirectOram>();
 
-    // ADD is stubbed
-    auto result = table[uint8_t(VmOpcode::ADD)](exec, epoch, oram, imm, insn);
+    // NATIVE_CALL bridge is not yet ported (returns NativeCallBridgeFailed)
+    auto result = table[uint8_t(VmOpcode::NATIVE_CALL)](exec, epoch, oram, imm, insn);
     ASSERT_FALSE(result.has_value());
-    EXPECT_EQ(result.error(), DiagnosticCode::NotImplemented);
+    EXPECT_EQ(result.error(), DiagnosticCode::NativeCallBridgeFailed);
 }

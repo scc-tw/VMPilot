@@ -46,6 +46,8 @@ set(RUNTIME_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/vm_state.cpp
     # Phase 4: pipeline functions for new state types
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pipeline.cpp
+    # Phase 6: ORAM strategy implementations
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/oram_strategies.cpp
 )
 
 # ---------------------------------------------------------------------------
