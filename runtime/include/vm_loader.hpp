@@ -28,6 +28,10 @@ struct LoadedVM {
 
     /// Parsed BB metadata (deserialized from encrypted SerializedBBMeta).
     std::vector<Common::VM::BBMetadata> bb_meta_storage;
+
+    /// Native call transition entries (copied from blob section 5).
+    /// ctx.native_call_entries points into this vector.
+    std::vector<Common::VM::TransitionEntry> native_call_storage;
 };
 
 /// Load, validate, and decrypt a VM blob, producing a ready-to-execute VM.

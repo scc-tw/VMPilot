@@ -4,17 +4,25 @@
 /// Security properties:
 ///   JMP/JCC: No data operand exposure. Branch target is an integer
 ///     BB ID (not an address), so the only observable is which BB
-///     executes next -- inherent in any control flow.
+///     executes next — inherent in any control flow.
 ///
 ///   CALL_VM/RET_VM: Shadow stack saves/restores epoch state.
 ///     Register snapshots are stored in their encoded-domain form
 ///     (no plaintext exposure).
 ///
-///   NATIVE_CALL: Stub for Phase 8 (native bridge).
+///   NATIVE_CALL: Transitions to native code via call_native() bridge.
+///     Plaintext args exist only in CPU registers during the native
+///     call (register-transient, same security model as Class C).
+///     Reentrant: the native function may call vm_execute() to re-enter
+///     the VM, because each vm_execute() creates an independent VMContext.
+///
 ///   HALT: Sets halted flag for dispatcher.
 
 #include <handlers.hpp>
 #include <decoder.hpp>
+#include <encoding.hpp>
+#include <native_bridge.hpp>
+#include <vm/vm_blob.hpp>
 
 #include <cstring>
 
@@ -117,12 +125,57 @@ handle_ret_vm(VMContext& ctx, const DecodedInsn& insn) noexcept {
 }
 
 // ---------------------------------------------------------------------------
-// NATIVE_CALL: Phase 8 stub
+// NATIVE_CALL (D13§E1, D15§6)
+//
+// Why reentrant-safe: each vm_execute() creates an independent VMContext
+// on the C stack. A native function called here may itself call
+// vm_execute() with a different blob/seed, forming arbitrarily deep
+// vm→native→vm→... chains bounded only by stack depth.
+// No global mutable state is shared between VM instances.
+//
+// Arg convention: registers r0..r(arg_count-1) are passed sequentially.
+// This matches AAPCS64 (x0-x7) and is close to System V (rdi..r9 mapped
+// to r0-r5). The compiler encodes this mapping at blob build time.
 // ---------------------------------------------------------------------------
 
 tl::expected<void, DiagnosticCode>
-handle_native_call(VMContext& /*ctx*/, const DecodedInsn& /*insn*/) noexcept {
-    return tl::make_unexpected(DiagnosticCode::NativeCallBridgeFailed);
+handle_native_call(VMContext& ctx, const DecodedInsn& insn) noexcept {
+    const uint32_t call_idx = insn.aux;
+
+    if (call_idx >= ctx.native_call_count)
+        return tl::make_unexpected(DiagnosticCode::NativeCallBridgeFailed);
+
+    const auto& entry = ctx.native_call_entries[call_idx];
+
+    // Resolve target address: blob stores offset from binary base,
+    // load_base_delta adjusts for ASLR.  In tests where functions are
+    // passed as absolute pointers, load_base_delta is 0.
+    const auto target = static_cast<uintptr_t>(
+        entry.target_offset + static_cast<uint64_t>(ctx.load_base_delta));
+
+    if (target == 0)
+        return tl::make_unexpected(DiagnosticCode::NativeCallBridgeFailed);
+
+    // Collect encoded arguments from sequential registers r0..r(n-1).
+    const uint8_t arg_count = static_cast<uint8_t>(
+        entry.arg_count <= NATIVE_CALL_MAX_ARGS
+            ? entry.arg_count : NATIVE_CALL_MAX_ARGS);
+
+    uint64_t encoded_args[NATIVE_CALL_MAX_ARGS] = {};
+    uint8_t  arg_regs[NATIVE_CALL_MAX_ARGS] = {};
+    for (uint8_t i = 0; i < arg_count; ++i) {
+        arg_regs[i] = i;
+        encoded_args[i] = ctx.encoded_regs[i];
+    }
+
+    // Bridge: decode args → native call → plaintext result
+    auto result = call_native(ctx, target, encoded_args, arg_regs, arg_count);
+    if (!result)
+        return tl::make_unexpected(result.error());
+
+    // Re-encode the return value into r0 (dst register).
+    ctx.encoded_regs[0] = encode_register(ctx, 0, result.value());
+    return {};
 }
 
 // ---------------------------------------------------------------------------

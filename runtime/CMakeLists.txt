@@ -156,6 +156,17 @@ if(ENABLE_TESTS)
                 GTest::gtest_main
     )
 
+    add_executable(test_native_call_e2e
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_native_call_e2e.cpp
+    )
+    target_include_directories(test_native_call_e2e
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(test_native_call_e2e
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+
     add_executable(test_vm_entry
         ${CMAKE_CURRENT_SOURCE_DIR}/test/test_vm_entry.cpp
     )
@@ -242,6 +253,7 @@ if(ENABLE_TESTS)
     gtest_discover_tests(test_handlers)
     gtest_discover_tests(test_dispatcher)
     gtest_discover_tests(test_native_bridge)
+    gtest_discover_tests(test_native_call_e2e)
     gtest_discover_tests(test_vm_entry)
     gtest_discover_tests(test_vm_stub_entry)
     gtest_discover_tests(test_anti_tamper)

@@ -28,6 +28,9 @@ constexpr uint8_t VM_MAX_NESTING = 8;
 /// Forward declaration for platform-specific native context.
 struct NativeContext;
 
+/// Forward declaration (defined in vm_blob.hpp).
+struct TransitionEntry;
+
 /// Coefficients for BB transition encoding (D2 domain).
 struct TransitionData {
     uint64_t a;  ///< linear coefficient
@@ -117,6 +120,13 @@ struct alignas(64) VMContext {
     // Native context
     NativeContext* native_ctx;
     const TransitionData* transition_table;
+
+    // NATIVE_CALL transition entries (from blob section 5).
+    // Each entry maps a call-site instruction index to a native function
+    // target offset + argument count.  The handler uses insn.aux as
+    // an index into this array.
+    const TransitionEntry* native_call_entries;
+    uint32_t native_call_count;
 
     // Exception: shadow stack
     EpochCheckpoint shadow_stack[VM_MAX_NESTING];

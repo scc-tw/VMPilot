@@ -170,6 +170,20 @@ load_blob(const uint8_t* blob_data, size_t blob_size,
     ctx.bb_metadata = vm.bb_meta_storage.data();
     ctx.bb_count    = header.bb_count;
 
+    // Native call transition entries (blob section 5).
+    // These are stored unencrypted — they contain offsets and arg counts,
+    // not secrets.  The actual function addresses are computed at runtime
+    // by adding load_base_delta.
+    if (header.native_call_count > 0) {
+        const uint32_t trans_off = blob_section_trans(header);
+        vm.native_call_storage.resize(header.native_call_count);
+        std::memcpy(vm.native_call_storage.data(),
+                    blob_data + trans_off,
+                    header.native_call_count * sizeof(TransitionEntry));
+    }
+    ctx.native_call_entries = vm.native_call_storage.data();
+    ctx.native_call_count   = header.native_call_count;
+
     // Copy config (serialised as 8 raw bytes in the blob).
     // For v1 we trust the caller-provided config rather than the
     // blob-embedded one, so just store what was passed in.

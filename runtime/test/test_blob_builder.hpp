@@ -46,6 +46,15 @@ struct TestBB {
     std::vector<TestInstruction> instructions;
 };
 
+/// Native call site descriptor for test blobs.
+/// target_addr is stored as-is into TransitionEntry.target_offset.
+/// In tests (load_base_delta=0), this is the absolute function pointer.
+struct TestNativeCall {
+    uint32_t call_site_ip;   ///< instruction index of the NATIVE_CALL
+    uint32_t arg_count;      ///< number of arguments (r0..rN-1)
+    uint64_t target_addr;    ///< absolute function pointer (or offset if PIE)
+};
+
 /// Pool entry with target register info for correct per-register encoding.
 ///
 /// The compiler pre-encodes each constant using the target BB's register
@@ -124,7 +133,8 @@ inline std::vector<uint8_t> build_test_blob(
     const uint8_t stored_seed[32],
     const std::vector<TestBB>& bbs,
     const std::vector<uint64_t>& constant_pool_plaintext = {},
-    bool debug_mode = false) {
+    bool debug_mode = false,
+    const std::vector<TestNativeCall>& native_calls = {}) {
 
     // ── Compute total instruction count across all BBs ───────────────────
     uint32_t total_insns = 0;
@@ -133,6 +143,7 @@ inline std::vector<uint8_t> build_test_blob(
 
     const uint32_t bb_count   = static_cast<uint32_t>(bbs.size());
     const uint32_t pool_count = static_cast<uint32_t>(constant_pool_plaintext.size());
+    const uint32_t nc_count   = static_cast<uint32_t>(native_calls.size());
 
     // ── Build header ─────────────────────────────────────────────────────
     BlobHeader header{};
@@ -142,7 +153,7 @@ inline std::vector<uint8_t> build_test_blob(
     header.insn_count        = total_insns;
     header.bb_count          = bb_count;
     header.pool_entry_count  = pool_count;
-    header.native_call_count = 0;
+    header.native_call_count = nc_count;
     header.reserved          = 0;
     header.total_size        = blob_expected_size(header);
 
@@ -359,6 +370,21 @@ inline std::vector<uint8_t> build_test_blob(
     }
 
     // ── Alias LUT ────────────────────────────────────────────────────────
+    // ── Transition entries (native call targets) ─────────────────────────
+    if (!native_calls.empty()) {
+        const uint32_t trans_off = blob_section_trans(header);
+        for (uint32_t i = 0; i < nc_count; ++i) {
+            TransitionEntry te{};
+            te.call_site_ip  = native_calls[i].call_site_ip;
+            te.arg_count     = native_calls[i].arg_count;
+            te.target_offset = native_calls[i].target_addr;
+            te.coeff_a       = 0;  // v1: no polymorphic coefficients
+            te.coeff_b       = 0;
+            std::memcpy(blob.data() + trans_off + i * sizeof(TransitionEntry),
+                        &te, sizeof(te));
+        }
+    }
+
     // Copy the alias_lut (built above) into the blob.
     // Same table: alias[i] = i % VM_OPCODE_COUNT.
 
