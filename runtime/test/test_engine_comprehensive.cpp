@@ -633,6 +633,48 @@ TEST(EngineReentrant, SharedImmutableRefCount) {
 // 8. Handler Table Completeness
 // ============================================================================
 
+// ============================================================================
+// 16. NATIVE_CALL: call native function and verify result
+// ============================================================================
+
+static uint64_t native_add_two(uint64_t a, uint64_t b,
+                                uint64_t, uint64_t, uint64_t, uint64_t,
+                                uint64_t, uint64_t) {
+    return a + b;
+}
+
+TEST(EngineNativeCall, BasicTwoArgCall) {
+    uint8_t seed[32]; fill_seed(seed);
+
+    TestBB bb{}; bb.bb_id = 1; bb.epoch = 0;
+    bb.live_regs_bitmap = 0xFFFF; bb.flags = 0;
+    fill_epoch(bb.epoch_seed, 0xF8);
+
+    // r0=10, r1=20, NATIVE_CALL[0] (add), HALT
+    bb.instructions = {
+        {VmOpcode::NATIVE_CALL, none(), 0, 0, 0},  // call transition entry 0
+        {VmOpcode::HALT, none(), 0, 0, 0},
+    };
+
+    TestNativeCall tc{};
+    tc.call_site_ip = 0;
+    tc.arg_count = 2;
+    tc.target_addr = reinterpret_cast<uint64_t>(&native_add_two);
+
+    auto blob = build_test_blob(seed, {bb}, {}, false, {tc});
+
+    // Set initial regs: r0=10, r1=20
+    uint64_t regs[16] = {};
+    regs[0] = 10; regs[1] = 20;
+
+    auto engine = VmEngine<DebugPolicy, DirectOram>::create(
+        blob.data(), blob.size(), seed, 0, regs, 2);
+    ASSERT_TRUE(engine.has_value());
+    auto r = engine->execute();
+    ASSERT_TRUE(r.has_value());
+    EXPECT_EQ(r->return_value, 30u);
+}
+
 TEST(EngineTable, AllOpcodesCovered) {
     auto t1 = build_handler_table<HighSecPolicy, RollingKeyOram>();
     auto t2 = build_handler_table<StandardPolicy, RollingKeyOram>();

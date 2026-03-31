@@ -662,15 +662,49 @@ struct HandlerTraits<VmOpcode::RET_VM, P> {
     }
 };
 
-/// NATIVE_CALL: stub (real implementation needs the full native bridge)
+/// NATIVE_CALL: decode args, call native function, re-encode result.
+///
+/// Security: Class C — full plaintext operands exist in CPU registers
+/// for the duration of the native call (acknowledged D15§11.8 limitation).
+/// Defense: ephemeral per-call encoding (future v2), uniform pipeline (D3).
 template<typename P>
 struct HandlerTraits<VmOpcode::NATIVE_CALL, P> {
     static constexpr auto security_class = SecurityClass::C;
     using oram_tag = NoOramTag;
-    static HandlerResult exec(VmExecution&, VmEpoch&, VmOramState&,
-                               const VmImmutable&, const DecodedInsn&) noexcept {
-        // TODO(phase6c): port native call bridge to new state types
-        return tl::make_unexpected(DiagnosticCode::NativeCallBridgeFailed);
+    static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
+                               const VmImmutable& im, const DecodedInsn& insn) noexcept {
+        // Look up transition entry
+        if (insn.aux >= im.native_calls.size())
+            return tl::make_unexpected(DiagnosticCode::NativeCallBridgeFailed);
+
+        const auto& te = im.native_calls[insn.aux];
+        uint8_t argc = Common::VM::te_arg_count(te);
+
+        // Resolve target function address
+        auto target = reinterpret_cast<uint64_t(*)(
+            uint64_t,uint64_t,uint64_t,uint64_t,
+            uint64_t,uint64_t,uint64_t,uint64_t)>(
+                static_cast<uintptr_t>(te.target_offset + e.load_base_delta));
+
+        if (!target)
+            return tl::make_unexpected(DiagnosticCode::NativeCallBridgeFailed);
+
+        // Decode arguments from register domain to plaintext
+        uint64_t args[8] = {};
+        for (uint8_t i = 0; i < argc && i < 8; ++i)
+            args[i] = detail::decode_reg(ep, i, e.regs[i].bits);
+
+        // Call native function (all 8 args passed, unused ones are 0)
+        uint64_t result = target(args[0], args[1], args[2], args[3],
+                                  args[4], args[5], args[6], args[7]);
+
+        // Re-encode result into register 0
+        e.regs[0] = RegVal(detail::encode_reg(ep, 0, result));
+
+        // Advance nonce for ephemeral encoding (future use)
+        e.native_call_nonce++;
+
+        return {};
     }
 };
 
