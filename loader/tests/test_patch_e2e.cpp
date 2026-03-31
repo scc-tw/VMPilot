@@ -16,6 +16,7 @@
 #include <LoaderTypes.hpp>
 #include <PlatformTraits.hpp>
 
+#include <coffi/coffi.hpp>
 #include <elfio/elfio.hpp>
 
 #include <gtest/gtest.h>
@@ -339,4 +340,144 @@ TEST(PatchE2E, ELF_X86_64_RegionTooSmall) {
     EXPECT_FALSE(result.has_value()) << "patch should fail for region < 5 bytes";
 
     std::remove(elf_path.c_str());
+}
+
+// ============================================================================
+// PE E2E Tests
+// ============================================================================
+
+namespace {
+
+constexpr uint32_t PE_IMAGE_BASE = 0x00400000;
+constexpr uint32_t PE_TEXT_RVA   = 0x1000;
+constexpr uint64_t PE_TEXT_VA    = PE_IMAGE_BASE + PE_TEXT_RVA;
+constexpr size_t   PE_TEXT_SIZE  = 0x1000;
+
+std::string build_test_pe() {
+    COFFI::coffi writer;
+    writer.create(COFFI::COFFI_ARCHITECTURE_PE);
+    writer.create_optional_header();
+
+    auto* text_sec = writer.add_section(".text");
+    std::vector<uint8_t> nops(PE_TEXT_SIZE, 0x90);
+    text_sec->set_data(reinterpret_cast<const char*>(nops.data()),
+                       static_cast<uint32_t>(nops.size()));
+    text_sec->set_virtual_address(PE_TEXT_RVA);
+    text_sec->set_virtual_size(static_cast<uint32_t>(PE_TEXT_SIZE));
+    text_sec->set_flags(IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ |
+                        IMAGE_SCN_CNT_CODE);
+
+    writer.get_header()->set_flags(IMAGE_FILE_EXECUTABLE_IMAGE |
+                                   IMAGE_FILE_32BIT_MACHINE);
+    writer.get_optional_header()->set_entry_point_address(PE_TEXT_RVA);
+    writer.get_optional_header()->set_code_base(PE_TEXT_RVA);
+    writer.get_win_header()->set_image_base(PE_IMAGE_BASE);
+    writer.get_win_header()->set_section_alignment(0x1000);
+    writer.get_win_header()->set_file_alignment(0x200);
+    writer.get_win_header()->set_subsystem(3);
+
+    for (int i = 0; i < 16; ++i)
+        writer.add_directory(COFFI::image_data_directory{0, 0});
+
+    writer.layout();
+
+    char tmpname[] = "/tmp/vmpilot_e2e_pe_XXXXXX";
+    int fd = mkstemp(tmpname);
+    EXPECT_GE(fd, 0);
+    close(fd);
+    writer.save(tmpname);
+    return std::string(tmpname);
+}
+
+}  // namespace
+
+TEST(PatchE2E, PE_X86_32_SingleRegion) {
+    auto pe_path = build_test_pe();
+    std::string out_path = pe_path + ".patched";
+    auto blob = make_fake_blob(256);
+    Common::DiagnosticCollector diag;
+
+    PatchRequest req;
+    req.input_path  = pe_path;
+    req.output_path = out_path;
+    req.regions     = {{"test_fn", PE_TEXT_VA, 32}};
+    req.blob_data   = blob;
+    req.stored_seed = TEST_SEED;
+    req.arch        = Common::FileArch::X86;
+    req.mode        = Common::FileMode::MODE_32;
+    req.format      = Common::FileFormat::PE;
+
+    auto result = patch(req, diag);
+    ASSERT_TRUE(result.has_value())
+        << "PE patch() failed";
+    EXPECT_EQ(result->regions_patched, 1u);
+    EXPECT_EQ(result->blob_bytes_injected, 256u);
+
+    // Reload and verify .vmpltt section exists with payload
+    COFFI::coffi reader;
+    ASSERT_TRUE(reader.load(out_path));
+
+    bool found_vmpltt = false;
+    for (const auto& sec : reader.get_sections()) {
+        if (sec.get_name() == ".vmpltt") {
+            found_vmpltt = true;
+            const auto* data = reinterpret_cast<const uint8_t*>(sec.get_data());
+            const size_t sz = sec.get_data_size();
+
+            // call_slot at offset 0 must be zero
+            ASSERT_GE(sz, 8u + blob.size() + SEED_SIZE);
+            uint64_t call_slot = read64_le(data);
+            EXPECT_EQ(call_slot, 0u) << "call_slot must be zero-initialized";
+
+            // Blob at offset 8
+            EXPECT_EQ(std::memcmp(data + 8, blob.data(), blob.size()), 0)
+                << "Blob data not preserved";
+
+            // Seed after blob
+            EXPECT_EQ(std::memcmp(data + 8 + blob.size(),
+                                  TEST_SEED.data(), SEED_SIZE), 0)
+                << "Seed not preserved";
+
+            // W^X: section should be RW, not RWX
+            auto flags = sec.get_flags();
+            EXPECT_TRUE(flags & IMAGE_SCN_MEM_READ);
+            EXPECT_TRUE(flags & IMAGE_SCN_MEM_WRITE);
+            EXPECT_FALSE(flags & IMAGE_SCN_MEM_EXECUTE)
+                << ".vmpltt must be RW, not RWX (W^X)";
+            break;
+        }
+    }
+    EXPECT_TRUE(found_vmpltt) << ".vmpltt section not found in patched PE";
+
+    // Verify .text region overwritten with JMP (0xE9)
+    for (const auto& sec : reader.get_sections()) {
+        if (sec.get_name() != ".text") continue;
+        const auto* data = reinterpret_cast<const uint8_t*>(sec.get_data());
+        EXPECT_EQ(data[0], 0xE9) << "Region not overwritten with JMP";
+        break;
+    }
+
+    std::remove(pe_path.c_str());
+    std::remove(out_path.c_str());
+}
+
+TEST(PatchE2E, PE_X86_32_RegionOutsideText) {
+    auto pe_path = build_test_pe();
+    std::string out_path = pe_path + ".patched";
+    Common::DiagnosticCollector diag;
+
+    PatchRequest req;
+    req.input_path  = pe_path;
+    req.output_path = out_path;
+    req.regions     = {{"bad_fn", 0x900000, 32}};
+    req.blob_data   = make_fake_blob(64);
+    req.stored_seed = TEST_SEED;
+    req.arch        = Common::FileArch::X86;
+    req.mode        = Common::FileMode::MODE_32;
+    req.format      = Common::FileFormat::PE;
+
+    auto result = patch(req, diag);
+    EXPECT_FALSE(result.has_value()) << "patch should fail for region outside .text";
+
+    std::remove(pe_path.c_str());
 }

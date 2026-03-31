@@ -30,7 +30,8 @@ gtest_discover_tests(${TEST_NAME})
 set(TEST_NAME test_patch_e2e)
 add_executable(${TEST_NAME} test_patch_e2e.cpp)
 target_include_directories(${TEST_NAME} SYSTEM PRIVATE
-    ${CMAKE_BINARY_DIR}/_deps/elfio-src/)
+    ${CMAKE_BINARY_DIR}/_deps/elfio-src/
+    ${CMAKE_BINARY_DIR}/_deps/coffi-src/)
 target_link_libraries(${TEST_NAME} PRIVATE VMPilot_Loader opcode_table GTest::gtest_main)
 gtest_discover_tests(${TEST_NAME})
 
