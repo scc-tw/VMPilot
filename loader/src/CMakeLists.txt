@@ -26,6 +26,8 @@ set(SRC_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/PEEditor.cpp
     # Phase 5: FallbackChain strategies
     ${CMAKE_CURRENT_SOURCE_DIR}/strategies/elf_dep_strategies.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/strategies/pe_dep_strategies.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/strategies/macho_dep_strategies.cpp
 )
 
 include_directories(${INCLUDE_DIRS})
