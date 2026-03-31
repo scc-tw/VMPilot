@@ -41,12 +41,17 @@ public:
     /// Find usable gaps (NOP sleds, INT3/BRK padding, alignment fill)
     /// in .text that are at least `min_size` bytes.
     /// Returned sorted by size descending (largest first).
+    ///
+    /// @note RESERVED — not wired to patch(). Current implementations have
+    ///       known limitations (false positives on embedded data, no cross-
+    ///       reference checks). See GitHub issue #9 for the rewrite plan.
     [[nodiscard]] virtual std::vector<TextGap>
     find_text_gaps(std::size_t min_size) const noexcept = 0;
 
     // --- Mutate ---
 
     /// Create a new loadable segment/section with the given data.
+    /// This is the ONLY injection method currently used by patch().
     [[nodiscard]] virtual tl::expected<NewSegmentInfo, Common::DiagnosticCode>
     add_segment(std::string_view name, const std::vector<uint8_t>& data,
                 uint64_t alignment,
@@ -54,7 +59,12 @@ public:
 
     /// Extend the .text section/segment to accommodate additional data.
     /// Returns the VA where data was placed (at the end of .text, aligned).
-    /// The payload becomes indistinguishable from original code in static analysis.
+    ///
+    /// @warning RESERVED — not wired to patch(). All three platform
+    ///          implementations currently perform binary shifting, which
+    ///          corrupts metadata (linkedit offsets, PE headers, section VAs).
+    ///          Must be rewritten as slack-space-only before use.
+    ///          See GitHub issue #9.
     [[nodiscard]] virtual tl::expected<NewSegmentInfo, Common::DiagnosticCode>
     extend_text(const std::vector<uint8_t>& data,
                 uint64_t alignment,
