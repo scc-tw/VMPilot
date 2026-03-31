@@ -44,3 +44,11 @@ target_include_directories(${TEST_NAME} SYSTEM PRIVATE
     ${CMAKE_BINARY_DIR}/_deps/coffi-src/)
 target_link_libraries(${TEST_NAME} PRIVATE VMPilot_Loader opcode_table GTest::gtest_main)
 gtest_discover_tests(${TEST_NAME})
+
+# Phase 5: FallbackChain + CRTP framework tests
+set(TEST_NAME test_phase5_framework)
+add_executable(${TEST_NAME} test_phase5_framework.cpp)
+target_include_directories(${TEST_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/strategies)
+target_link_libraries(${TEST_NAME} PRIVATE VMPilot_Loader opcode_table GTest::gtest_main)
+gtest_discover_tests(${TEST_NAME})

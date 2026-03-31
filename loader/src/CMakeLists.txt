@@ -1,5 +1,6 @@
 set(INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/strategies
     ${CMAKE_SOURCE_DIR}/common/include
     ${CMAKE_SOURCE_DIR}/third_party/expected/include
 )
@@ -23,6 +24,8 @@ set(SRC_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/ELFEditor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/MachOEditor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/PEEditor.cpp
+    # Phase 5: FallbackChain strategies
+    ${CMAKE_CURRENT_SOURCE_DIR}/strategies/elf_dep_strategies.cpp
 )
 
 include_directories(${INCLUDE_DIRS})
