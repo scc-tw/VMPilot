@@ -39,6 +39,7 @@ set(RUNTIME_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/vm_entry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/vm_stub_entry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/vm_runtime_init.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ephemeral_encoding.cpp
 )
 
 # ---------------------------------------------------------------------------

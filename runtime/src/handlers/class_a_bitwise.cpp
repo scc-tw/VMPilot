@@ -16,6 +16,7 @@
 #include <decoder.hpp>
 #include <encoding.hpp>
 #include <composition_cache.hpp>
+#include <ephemeral_encoding.hpp>
 
 #include <cstring>
 
@@ -116,66 +117,81 @@ handle_not(VMContext& ctx, const DecodedInsn& insn) noexcept {
 }
 
 // ---------------------------------------------------------------------------
-// Shift / Rotate helpers
+// Shift / Rotate — ephemeral transition encoding.
 //
-// v1: Class C security level. Cross-lane bit movement makes pure-LUT
-// infeasible for shifts >= 8.  Full 64-bit plaintext exposure
-// (register-transient).
+// Cross-lane bit movement prevents pure-LUT composition (shifts ≥ 8 bits
+// move data between byte lanes).  Each decode→shift→encode now uses a
+// per-invocation ephemeral LUT so an attacker observing the decode point
+// sees a one-time random permutation (same security model as NATIVE_CALL).
 // ---------------------------------------------------------------------------
+
+/// Helper: decode two operands through ephemeral LUT for shift/rotate ops.
+static void decode_shift_pair(VMContext& ctx, const DecodedInsn& insn,
+                               uint64_t& val, uint64_t& amt,
+                               EphemeralTables& et) noexcept {
+    uint8_t extra[3] = {insn.reg_a, insn.reg_b,
+                         static_cast<uint8_t>(insn.opcode)};
+    generate_ephemeral_tables(ctx, "sh", 2, extra, sizeof(extra), et);
+    uint64_t masked_v = ephemeral_decode(ctx, insn.reg_a,
+                                          ctx.encoded_regs[insn.reg_a], et);
+    uint64_t masked_a = ephemeral_decode(ctx, insn.reg_b,
+                                          ctx.encoded_regs[insn.reg_b], et);
+    val = apply_byte_lane_lut(et.dec, masked_v);
+    amt = apply_byte_lane_lut(et.dec, masked_a) & 63;
+}
 
 tl::expected<void, DiagnosticCode>
 handle_shl(VMContext& ctx, const DecodedInsn& insn) noexcept {
-    uint64_t plain_val = decode_register(ctx, insn.reg_a,
-                                          ctx.encoded_regs[insn.reg_a]);
-    uint64_t shift_amt = decode_register(ctx, insn.reg_b,
-                                          ctx.encoded_regs[insn.reg_b]);
-    plain_val <<= (shift_amt & 63);
-    ctx.encoded_regs[insn.reg_a] = encode_register(ctx, insn.reg_a, plain_val);
+    EphemeralTables et;
+    uint64_t val, amt;
+    decode_shift_pair(ctx, insn, val, amt, et);
+    ctx.encoded_regs[insn.reg_a] = encode_register(ctx, insn.reg_a, val << amt);
+    ephemeral_zero(et);
     return {};
 }
 
 tl::expected<void, DiagnosticCode>
 handle_shr(VMContext& ctx, const DecodedInsn& insn) noexcept {
-    uint64_t plain_val = decode_register(ctx, insn.reg_a,
-                                          ctx.encoded_regs[insn.reg_a]);
-    uint64_t shift_amt = decode_register(ctx, insn.reg_b,
-                                          ctx.encoded_regs[insn.reg_b]);
-    plain_val >>= (shift_amt & 63);
-    ctx.encoded_regs[insn.reg_a] = encode_register(ctx, insn.reg_a, plain_val);
+    EphemeralTables et;
+    uint64_t val, amt;
+    decode_shift_pair(ctx, insn, val, amt, et);
+    ctx.encoded_regs[insn.reg_a] = encode_register(ctx, insn.reg_a, val >> amt);
+    ephemeral_zero(et);
     return {};
 }
 
 tl::expected<void, DiagnosticCode>
 handle_sar(VMContext& ctx, const DecodedInsn& insn) noexcept {
-    auto plain_val = static_cast<int64_t>(
-        decode_register(ctx, insn.reg_a, ctx.encoded_regs[insn.reg_a]));
-    uint64_t shift_amt = decode_register(ctx, insn.reg_b,
-                                          ctx.encoded_regs[insn.reg_b]);
-    plain_val >>= (shift_amt & 63);
+    EphemeralTables et;
+    uint64_t val, amt;
+    decode_shift_pair(ctx, insn, val, amt, et);
+    auto sval = static_cast<int64_t>(val);
+    sval >>= amt;
     ctx.encoded_regs[insn.reg_a] = encode_register(
-        ctx, insn.reg_a, static_cast<uint64_t>(plain_val));
+        ctx, insn.reg_a, static_cast<uint64_t>(sval));
+    ephemeral_zero(et);
     return {};
 }
 
 tl::expected<void, DiagnosticCode>
 handle_rol(VMContext& ctx, const DecodedInsn& insn) noexcept {
-    uint64_t val = decode_register(ctx, insn.reg_a,
-                                    ctx.encoded_regs[insn.reg_a]);
-    uint64_t amt = decode_register(ctx, insn.reg_b,
-                                    ctx.encoded_regs[insn.reg_b]) & 63;
+    EphemeralTables et;
+    uint64_t val, amt;
+    decode_shift_pair(ctx, insn, val, amt, et);
     uint64_t result = (amt == 0) ? val : ((val << amt) | (val >> (64 - amt)));
     ctx.encoded_regs[insn.reg_a] = encode_register(ctx, insn.reg_a, result);
+    ephemeral_zero(et);
     return {};
 }
 
 tl::expected<void, DiagnosticCode>
 handle_ror(VMContext& ctx, const DecodedInsn& insn) noexcept {
-    uint64_t val = decode_register(ctx, insn.reg_a,
-                                    ctx.encoded_regs[insn.reg_a]);
-    uint64_t amt = decode_register(ctx, insn.reg_b,
-                                    ctx.encoded_regs[insn.reg_b]) & 63;
+    EphemeralTables et;
+    uint64_t val, amt;
+    decode_shift_pair(ctx, insn, val, amt, et);
     uint64_t result = (amt == 0) ? val : ((val >> amt) | (val << (64 - amt)));
     ctx.encoded_regs[insn.reg_a] = encode_register(ctx, insn.reg_a, result);
+    ephemeral_zero(et);
     return {};
 }
 

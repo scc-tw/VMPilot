@@ -8,12 +8,18 @@
 ///   comparison result. The 1-bit flag itself reveals nothing beyond
 ///   what the branch outcome already exposes.
 ///
-///   CMP and TEST decode operands (register-transient, Class C level).
-///   SET_FLAG and GET_FLAG manipulate plaintext flag bits directly.
+///   CMP and TEST now use ephemeral transition encoding (per-invocation
+///   random bijection LUT) — same security model as Class C bridge and
+///   NATIVE_CALL.  An attacker observing the decode point sees a one-time
+///   permutation, not plaintext.
+///
+///   SET_FLAG and GET_FLAG manipulate plaintext flag bits directly (1-bit
+///   predicates gain nothing from MCSP encoding).
 
 #include <handlers.hpp>
 #include <decoder.hpp>
 #include <encoding.hpp>
+#include <ephemeral_encoding.hpp>
 
 namespace VMPilot::Runtime::handlers {
 
@@ -21,45 +27,60 @@ using Common::DiagnosticCode;
 using Common::VM::VMContext;
 
 // ---------------------------------------------------------------------------
-// CMP: Compare two registers, set flags
+// CMP: Compare two registers, set flags (ephemeral transition)
 // ---------------------------------------------------------------------------
 
 tl::expected<void, DiagnosticCode>
 handle_cmp(VMContext& ctx, const DecodedInsn& insn) noexcept {
-    auto sa = static_cast<int64_t>(
-        decode_register(ctx, insn.reg_a, ctx.encoded_regs[insn.reg_a]));
-    auto sb = static_cast<int64_t>(
-        decode_register(ctx, insn.reg_b, ctx.encoded_regs[insn.reg_b]));
+    EphemeralTables et;
+    uint8_t extra[3] = {insn.reg_a, insn.reg_b,
+                         static_cast<uint8_t>(insn.opcode)};
+    generate_ephemeral_tables(ctx, "cm", 2, extra, sizeof(extra), et);
+
+    uint64_t masked_a = ephemeral_decode(ctx, insn.reg_a,
+                                          ctx.encoded_regs[insn.reg_a], et);
+    uint64_t masked_b = ephemeral_decode(ctx, insn.reg_b,
+                                          ctx.encoded_regs[insn.reg_b], et);
+    auto sa = static_cast<int64_t>(apply_byte_lane_lut(et.dec, masked_a));
+    auto sb = static_cast<int64_t>(apply_byte_lane_lut(et.dec, masked_b));
+    ephemeral_zero(et);
+
     auto ua = static_cast<uint64_t>(sa);
     auto ub = static_cast<uint64_t>(sb);
     int64_t diff = sa - sb;
 
     ctx.vm_flags = 0;
-    if (diff == 0)  ctx.vm_flags |= 0x01;  // ZF (zero)
-    if (diff < 0)   ctx.vm_flags |= 0x02;  // SF (sign)
-    if (ua < ub)    ctx.vm_flags |= 0x04;  // CF (unsigned borrow)
-    // OF: signed overflow when signs of operands differ and
-    // result sign differs from first operand
+    if (diff == 0)  ctx.vm_flags |= 0x01;  // ZF
+    if (diff < 0)   ctx.vm_flags |= 0x02;  // SF
+    if (ua < ub)    ctx.vm_flags |= 0x04;  // CF
     if (((sa ^ sb) & (sa ^ diff)) < 0)
-        ctx.vm_flags |= 0x08;  // OF (overflow)
+        ctx.vm_flags |= 0x08;              // OF
 
     return {};
 }
 
 // ---------------------------------------------------------------------------
-// TEST: Bitwise AND of two registers, set flags (no result stored)
+// TEST: Bitwise AND, set flags (ephemeral transition)
 // ---------------------------------------------------------------------------
 
 tl::expected<void, DiagnosticCode>
 handle_test(VMContext& ctx, const DecodedInsn& insn) noexcept {
-    uint64_t a = decode_register(ctx, insn.reg_a,
-                                  ctx.encoded_regs[insn.reg_a]);
-    uint64_t b = decode_register(ctx, insn.reg_b,
-                                  ctx.encoded_regs[insn.reg_b]);
-    uint64_t result = a & b;
+    EphemeralTables et;
+    uint8_t extra[3] = {insn.reg_a, insn.reg_b,
+                         static_cast<uint8_t>(insn.opcode)};
+    generate_ephemeral_tables(ctx, "ts", 2, extra, sizeof(extra), et);
 
+    uint64_t masked_a = ephemeral_decode(ctx, insn.reg_a,
+                                          ctx.encoded_regs[insn.reg_a], et);
+    uint64_t masked_b = ephemeral_decode(ctx, insn.reg_b,
+                                          ctx.encoded_regs[insn.reg_b], et);
+    uint64_t a = apply_byte_lane_lut(et.dec, masked_a);
+    uint64_t b = apply_byte_lane_lut(et.dec, masked_b);
+    ephemeral_zero(et);
+
+    uint64_t result = a & b;
     ctx.vm_flags = 0;
-    if (result == 0) ctx.vm_flags |= 0x01;                    // ZF
+    if (result == 0) ctx.vm_flags |= 0x01;                       // ZF
     if (static_cast<int64_t>(result) < 0) ctx.vm_flags |= 0x02;  // SF
 
     return {};
