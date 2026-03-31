@@ -245,6 +245,17 @@ if(ENABLE_TESTS)
                 GTest::gtest_main
     )
 
+    add_executable(test_native_fp
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_native_fp.cpp
+    )
+    target_include_directories(test_native_fp
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(test_native_fp
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+
     add_executable(test_rekey
         ${CMAKE_CURRENT_SOURCE_DIR}/test/test_rekey.cpp
     )
@@ -284,6 +295,7 @@ if(ENABLE_TESTS)
     gtest_discover_tests(test_cross_bb)
     gtest_discover_tests(test_full_prp)
     gtest_discover_tests(test_cfg_patterns)
+    gtest_discover_tests(test_native_fp)
     gtest_discover_tests(test_rekey)
     gtest_discover_tests(test_ephemeral_encoding)
 endif()
