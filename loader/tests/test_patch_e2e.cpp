@@ -14,10 +14,13 @@
 
 #include <Loader.hpp>
 #include <LoaderTypes.hpp>
+#include <MachOStructs.hpp>
 #include <PlatformTraits.hpp>
 
 #include <coffi/coffi.hpp>
 #include <elfio/elfio.hpp>
+
+#include <fstream>
 
 #include <gtest/gtest.h>
 
@@ -480,4 +483,170 @@ TEST(PatchE2E, PE_X86_32_RegionOutsideText) {
     EXPECT_FALSE(result.has_value()) << "patch should fail for region outside .text";
 
     std::remove(pe_path.c_str());
+}
+
+// ============================================================================
+// Mach-O E2E Tests
+// ============================================================================
+
+namespace {
+
+namespace MO = VMPilot::Loader::MachO;
+
+constexpr uint64_t MACHO_TEXT_VA   = 0x100001000;
+constexpr size_t   MACHO_TEXT_SIZE = 0x1000;
+
+/// Build a minimal valid Mach-O ARM64 binary from raw bytes.
+/// Layout: mach_header_64 + LC_SEGMENT_64(__TEXT with __text) + header padding + .text data
+std::string build_test_macho() {
+    // ARM64 NOP = 0xD503201F (4 bytes, little-endian)
+    std::vector<uint8_t> nops(MACHO_TEXT_SIZE);
+    for (size_t i = 0; i + 3 < nops.size(); i += 4) {
+        nops[i]     = 0x1F;
+        nops[i + 1] = 0x20;
+        nops[i + 2] = 0x03;
+        nops[i + 3] = 0xD5;
+    }
+
+    // Build __TEXT segment with one __text section
+    MO::segment_command_64 text_seg{};
+    text_seg.cmd      = MO::LC_SEGMENT_64;
+    text_seg.cmdsize  = sizeof(MO::segment_command_64) + sizeof(MO::section_64);
+    std::memcpy(text_seg.segname, "__TEXT\0\0\0\0\0\0\0\0\0\0", 16);
+    text_seg.vmaddr   = 0x100000000;
+    text_seg.vmsize   = 0x2000;  // header page + text page
+    text_seg.fileoff  = 0;
+    text_seg.filesize = 0;  // set below
+    text_seg.maxprot  = MO::VM_PROT_READ | MO::VM_PROT_EXECUTE;
+    text_seg.initprot = MO::VM_PROT_READ | MO::VM_PROT_EXECUTE;
+    text_seg.nsects   = 1;
+
+    MO::section_64 text_sec{};
+    std::memcpy(text_sec.sectname, "__text\0\0\0\0\0\0\0\0\0", 16);
+    std::memcpy(text_sec.segname,  "__TEXT\0\0\0\0\0\0\0\0\0\0", 16);
+    text_sec.addr   = MACHO_TEXT_VA;
+    text_sec.size   = MACHO_TEXT_SIZE;
+    text_sec.align  = 4;  // 2^4 = 16
+
+    // Compute layout
+    const size_t lc_size = sizeof(MO::segment_command_64) + sizeof(MO::section_64);
+    // Pad headers to page boundary (0x1000) so .text data starts at 0x1000
+    const size_t text_file_off = 0x1000;
+    const size_t total_size = text_file_off + MACHO_TEXT_SIZE;
+
+    text_sec.offset = static_cast<uint32_t>(text_file_off);
+    text_seg.filesize = total_size;
+
+    // Build header
+    MO::mach_header_64 hdr{};
+    hdr.magic      = MO::MH_MAGIC_64;
+    hdr.cputype    = 0x0100000C;  // CPU_TYPE_ARM64
+    hdr.cpusubtype = 0;
+    hdr.filetype   = 2;           // MH_EXECUTE
+    hdr.ncmds      = 1;
+    hdr.sizeofcmds = static_cast<uint32_t>(lc_size);
+    hdr.flags      = 0;
+
+    // Assemble the binary
+    std::vector<uint8_t> buf(total_size, 0);
+    std::memcpy(buf.data(), &hdr, sizeof(hdr));
+    std::memcpy(buf.data() + sizeof(hdr), &text_seg, sizeof(text_seg));
+    std::memcpy(buf.data() + sizeof(hdr) + sizeof(text_seg), &text_sec, sizeof(text_sec));
+    std::memcpy(buf.data() + text_file_off, nops.data(), nops.size());
+
+    char tmpname[] = "/tmp/vmpilot_e2e_macho_XXXXXX";
+    int fd = mkstemp(tmpname);
+    EXPECT_GE(fd, 0);
+    close(fd);
+
+    std::ofstream ofs(tmpname, std::ios::binary | std::ios::trunc);
+    ofs.write(reinterpret_cast<const char*>(buf.data()),
+              static_cast<std::streamsize>(buf.size()));
+    ofs.close();
+    return std::string(tmpname);
+}
+
+}  // namespace
+
+TEST(PatchE2E, MachO_ARM64_SingleRegion) {
+    auto macho_path = build_test_macho();
+    std::string out_path = macho_path + ".patched";
+    auto blob = make_fake_blob(256);
+    Common::DiagnosticCollector diag;
+
+    PatchRequest req;
+    req.input_path  = macho_path;
+    req.output_path = out_path;
+    req.regions     = {{"test_fn", MACHO_TEXT_VA, 32}};
+    req.blob_data   = blob;
+    req.stored_seed = TEST_SEED;
+    req.arch        = Common::FileArch::ARM64;
+    req.mode        = Common::FileMode::MODE_LITTLE_ENDIAN;
+    req.format      = Common::FileFormat::MachO;
+
+    auto result = patch(req, diag);
+    ASSERT_TRUE(result.has_value()) << "MachO patch() failed";
+    EXPECT_EQ(result->regions_patched, 1u);
+    EXPECT_EQ(result->blob_bytes_injected, 256u);
+
+    // Reload and verify __VMPILOT segment exists
+    std::ifstream ifs(out_path, std::ios::binary | std::ios::ate);
+    ASSERT_TRUE(ifs.good());
+    std::vector<uint8_t> buf(static_cast<size_t>(ifs.tellg()));
+    ifs.seekg(0);
+    ifs.read(reinterpret_cast<char*>(buf.data()),
+             static_cast<std::streamsize>(buf.size()));
+
+    auto hdr = *reinterpret_cast<const MO::mach_header_64*>(buf.data());
+    ASSERT_EQ(hdr.magic, MO::MH_MAGIC_64);
+
+    // Find __VMPILOT segment
+    bool found_vmpilot = false;
+    size_t off = sizeof(MO::mach_header_64);
+    for (uint32_t i = 0; i < hdr.ncmds; ++i) {
+        if (off + sizeof(MO::load_command) > buf.size()) break;
+        MO::load_command lc{};
+        std::memcpy(&lc, buf.data() + off, sizeof(lc));
+        if (lc.cmd == MO::LC_SEGMENT_64) {
+            MO::segment_command_64 seg{};
+            std::memcpy(&seg, buf.data() + off, sizeof(seg));
+            if (std::string_view{seg.segname, strnlen(seg.segname, 16)} == "__VMPILOT") {
+                found_vmpilot = true;
+
+                // Verify payload at fileoff
+                ASSERT_LE(seg.fileoff + 8 + blob.size() + SEED_SIZE, buf.size());
+                const uint8_t* payload = buf.data() + seg.fileoff;
+
+                // call_slot zero
+                uint64_t call_slot = read64_le(payload);
+                EXPECT_EQ(call_slot, 0u);
+
+                // Blob at offset 8
+                EXPECT_EQ(std::memcmp(payload + 8, blob.data(), blob.size()), 0);
+
+                // Seed after blob
+                EXPECT_EQ(std::memcmp(payload + 8 + blob.size(),
+                                      TEST_SEED.data(), SEED_SIZE), 0);
+
+                // W^X: initprot should be RW (not RX)
+                EXPECT_EQ(seg.initprot, MO::VM_PROT_READ | MO::VM_PROT_WRITE);
+                EXPECT_FALSE(seg.initprot & MO::VM_PROT_EXECUTE)
+                    << "__VMPILOT initprot must not include EXECUTE (W^X)";
+                break;
+            }
+        }
+        off += lc.cmdsize;
+    }
+    EXPECT_TRUE(found_vmpilot) << "__VMPILOT segment not found";
+
+    // Verify __text region overwritten (first insn should be B, not NOP)
+    // ARM64 B encoding: bits [31:26] = 000101
+    const uint8_t* text_data = buf.data() + 0x1000;
+    uint32_t first_insn;
+    std::memcpy(&first_insn, text_data, 4);
+    EXPECT_EQ(first_insn >> 26, 0x05u)
+        << "Region not overwritten with ARM64 B instruction";
+
+    std::remove(macho_path.c_str());
+    std::remove(out_path.c_str());
 }
