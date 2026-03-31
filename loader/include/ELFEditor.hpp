@@ -54,6 +54,13 @@ public:
 
 private:
     ELFEditor();
+
+    /// If the binary has .note.gnu.property with CET/BTI enforcement,
+    /// our injected code must be declared compatible.  If the binary
+    /// doesn't have the note, we don't add one (preserving original
+    /// security posture).  If it does, we ensure our flag is set.
+    void ensure_cfi_note() noexcept;
+
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

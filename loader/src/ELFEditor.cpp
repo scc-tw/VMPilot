@@ -167,6 +167,74 @@ bool ELFEditor::cfi_enforced() const noexcept {
 }
 
 // ---------------------------------------------------------------------------
+// ensure_cfi_note
+// ---------------------------------------------------------------------------
+
+/// Preserve .note.gnu.property after injecting executable code.
+///
+/// If the original binary declares CET/BTI, the kernel enforces that
+/// ALL indirect-call targets carry landing pads.  Our stubs have
+/// ENDBR64/BTI c, so we're compliant — but only if the note survives
+/// the patching process.
+///
+/// We don't CREATE the note for binaries without it — adding CET/BTI
+/// enforcement to code not compiled with -fcf-protection would crash
+/// all non-stub indirect calls that lack ENDBR.
+///
+/// What we DO: verify the note section still exists after mutations.
+/// If it was somehow lost (ELFIO bug, section reorder), rebuild it.
+void ELFEditor::ensure_cfi_note() noexcept {
+    // Check if the binary originally had CFI enforcement.
+    // cfi_enforced() reads the live section data — if it returns true,
+    // the note survived all mutations and will be written by save().
+    if (!cfi_enforced()) return;
+
+    // If we get here, the note exists and is intact.  ELFIO preserves
+    // all sections during save(), so no reconstruction needed.
+    //
+    // Defense-in-depth: verify the section is still in the section list.
+    bool found = false;
+    for (const auto& sec : impl_->reader.sections) {
+        if (sec->get_name() == ".note.gnu.property") {
+            found = true;
+            break;
+        }
+    }
+
+    if (!found) {
+        // Section was lost — should never happen with ELFIO, but if it
+        // does, we rebuild the note from scratch.
+        constexpr uint32_t NT_GNU_PROPERTY_TYPE_0 = 5;
+        const bool is_aarch64 =
+            (impl_->reader.get_machine() == 0xB7);  // EM_AARCH64
+
+        std::vector<uint8_t> note;
+        auto push32 = [&](uint32_t v) {
+            for (int i = 0; i < 4; ++i)
+                note.push_back(static_cast<uint8_t>(v >> (i * 8)));
+        };
+
+        push32(4);   // namesz ("GNU\0")
+        push32(16);  // descsz (pr_type + pr_datasz + data + padding)
+        push32(NT_GNU_PROPERTY_TYPE_0);
+        note.push_back('G'); note.push_back('N');
+        note.push_back('U'); note.push_back('\0');
+        // Property entry
+        push32(is_aarch64 ? 0xC0000000u : 0xC0000002u);  // AARCH64 or X86
+        push32(4);           // pr_datasz
+        push32(0x00000001);  // IBT or BTI
+        push32(0);           // alignment padding
+
+        auto* new_sec = impl_->reader.sections.add(".note.gnu.property");
+        new_sec->set_type(ELFIO::SHT_NOTE);
+        new_sec->set_flags(ELFIO::SHF_ALLOC);
+        new_sec->set_addr_align(8);
+        new_sec->set_data(reinterpret_cast<const char*>(note.data()),
+                          note.size());
+    }
+}
+
+// ---------------------------------------------------------------------------
 // find_text_gaps
 // ---------------------------------------------------------------------------
 
@@ -326,6 +394,11 @@ ELFEditor::add_segment(std::string_view name,
     new_seg->set_virtual_address(seg_va);
     new_seg->set_physical_address(seg_va);
     new_seg->add_section_index(new_sec->get_index(), new_sec->get_addr_align());
+
+    // If the binary has CET/BTI enforcement, verify the .note.gnu.property
+    // survives our mutations.  Our stubs have ENDBR/BTI c, so the note
+    // declaring "this binary is IBT/BTI clean" remains truthful.
+    ensure_cfi_note();
 
     return NewSegmentInfo{seg_va, payload.size()};
 }

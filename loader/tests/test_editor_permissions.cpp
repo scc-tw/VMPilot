@@ -824,6 +824,86 @@ TEST(CfiDetection, PE_WithCetCompat) {
     std::remove(tmpname);
 }
 
+TEST(CfiDetection, ELF_NotePreservedAfterAddSegment) {
+    // A CET-enforced ELF must keep its .note.gnu.property intact after
+    // add_segment() + save().  If the note is lost, the kernel might
+    // stop enforcing CET (making our ENDBR instructions pointless) or
+    // worse, reject the binary outright.
+    ELFIO::elfio writer;
+    writer.create(ELFIO::ELFCLASS64, ELFIO::ELFDATA2LSB);
+    writer.set_os_abi(ELFIO::ELFOSABI_LINUX);
+    writer.set_type(ELFIO::ET_EXEC);
+    writer.set_machine(ELFIO::EM_X86_64);
+    writer.set_entry(0x401000);
+
+    auto* text_sec = writer.sections.add(".text");
+    text_sec->set_type(ELFIO::SHT_PROGBITS);
+    text_sec->set_flags(ELFIO::SHF_ALLOC | ELFIO::SHF_EXECINSTR);
+    text_sec->set_addr_align(16);
+    text_sec->set_address(0x401000);
+    std::vector<uint8_t> nops(0x100, 0x90);
+    text_sec->set_data(reinterpret_cast<const char*>(nops.data()), nops.size());
+
+    auto* text_seg = writer.segments.add();
+    text_seg->set_type(ELFIO::PT_LOAD);
+    text_seg->set_flags(ELFIO::PF_R | ELFIO::PF_X);
+    text_seg->set_align(0x1000);
+    text_seg->set_virtual_address(0x401000);
+    text_seg->set_physical_address(0x401000);
+    text_seg->add_section_index(text_sec->get_index(), text_sec->get_addr_align());
+
+    // .note.gnu.property with IBT flag
+    std::vector<uint8_t> note_data;
+    auto push32 = [&](uint32_t v) {
+        for (int i = 0; i < 4; ++i)
+            note_data.push_back(static_cast<uint8_t>(v >> (i * 8)));
+    };
+    push32(4);            // namesz
+    push32(16);           // descsz
+    push32(5);            // NT_GNU_PROPERTY_TYPE_0
+    note_data.push_back('G'); note_data.push_back('N');
+    note_data.push_back('U'); note_data.push_back('\0');
+    push32(0xC0000002);   // GNU_PROPERTY_X86_FEATURE_1_AND
+    push32(4);
+    push32(0x00000001);   // IBT
+    push32(0);
+
+    auto* note_sec = writer.sections.add(".note.gnu.property");
+    note_sec->set_type(ELFIO::SHT_NOTE);
+    note_sec->set_flags(ELFIO::SHF_ALLOC);
+    note_sec->set_addr_align(8);
+    note_sec->set_data(reinterpret_cast<const char*>(note_data.data()),
+                       note_data.size());
+
+    char tmpname[] = "/tmp/vmpilot_cfi_pres_XXXXXX";
+    int fd = mkstemp(tmpname);
+    ASSERT_GE(fd, 0);
+    close(fd);
+    writer.save(tmpname);
+
+    // Open, add a segment (triggers ensure_cfi_note), save
+    Common::DiagnosticCollector diag;
+    auto editor = Loader::ELFEditor::open(tmpname, diag);
+    ASSERT_TRUE(editor.has_value());
+    EXPECT_TRUE(editor->cfi_enforced()) << "Pre-patch: IBT flag must be set";
+
+    std::vector<uint8_t> payload(128, 0xCC);
+    auto seg = editor->add_segment(".vmpilot", payload, 0x1000, diag);
+    ASSERT_TRUE(seg.has_value());
+
+    std::string out_path = std::string(tmpname) + ".patched";
+    ASSERT_TRUE(editor->save(out_path, diag).has_value());
+
+    // Reload and verify the note survived
+    auto editor2 = Loader::ELFEditor::open(out_path, diag);
+    ASSERT_TRUE(editor2.has_value());
+    EXPECT_TRUE(editor2->cfi_enforced())
+        << "Post-patch: .note.gnu.property IBT flag must survive add_segment + save";
+
+    std::remove(tmpname);
+    std::remove(out_path.c_str());
+}
+
 TEST(EditorPermissions, PECallSlotZeroAtSegmentStart) {
     std::string pe_path = build_minimal_pe();
     Common::DiagnosticCollector diag;
