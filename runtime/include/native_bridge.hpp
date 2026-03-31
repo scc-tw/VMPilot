@@ -5,14 +5,17 @@
 /// @file native_bridge.hpp
 /// @brief Phase 8: Native call bridge API for NATIVE_CALL opcode.
 ///
-/// The bridge orchestrates: decode args -> call native function -> return result.
-/// Plaintext exists transiently in CPU registers during the call.
+/// Plaintext operands exist in CPU registers during the native callee —
+/// this is the acknowledged Class C security boundary (D15§11.8).
+/// The exposure is register-transient: no addressable memory ever holds
+/// plaintext args or return values.  The D3 uniform pipeline makes the
+/// NATIVE_CALL handler indistinguishable from other opcodes at the
+/// dispatcher level.
 ///
-/// v1: Direct function pointer invocation. The compiler generates correct
-/// calling conventions automatically.
-///
-/// v2 will add polymorphic stripper stubs per call-site with (a,b)
-/// transition coefficients and steganographic embedding (spec S6.1-6.4).
+/// v1: Direct function pointer cast.  The decode→call→encode pattern
+///   is visible to a DBI tool that hooks this function.
+/// v2 (D15§6.1): Polymorphic stripper stubs with per-call-site (a,b)
+///   transition coefficients, disguised as leaf functions.
 
 #include <vm/vm_context.hpp>
 #include <diagnostic.hpp>

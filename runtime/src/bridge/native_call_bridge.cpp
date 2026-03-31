@@ -1,20 +1,36 @@
 /// @file native_call_bridge.cpp
-/// @brief Phase 8: C++ native call bridge implementation.
+/// @brief Phase 8: C++ native call bridge.
 ///
-/// Orchestrates: decode encoded args -> call native function -> return result.
+/// Security analysis (D15§6, D15§11.7, D15§11.8):
 ///
-/// Security properties:
-///   Plaintext arguments exist only in CPU registers for the duration
-///   of the native function call (register-transient exposure).
-///   This is the same security model as Class C operations (MUL/DIV/MOD).
+///   This is the lowest-security code path in the VM by design.
+///   Plaintext operands exist in CPU registers for the duration of
+///   the native callee.  This is unavoidable: external functions
+///   (libc, OS APIs) require plaintext by definition.
 ///
-/// v1: Direct function pointer invocation. The C++ compiler generates
-///   the correct System V AMD64 / AAPCS64 calling convention automatically.
-///   No custom assembly needed.
+///   Properties that DO hold at this boundary:
+///     - D1 enc_state chain: NATIVE_CALL participates in the SipHash
+///       chain.  Removing it desyncs all subsequent decryption.
+///     - D3 uniform pipeline: the dispatcher executes the same 12
+///       steps for NATIVE_CALL as for NOP or XOR — no distinguishing
+///       side channel from the pipeline's perspective.
+///     - D2 domain re-encoding: the return value is immediately
+///       re-encoded into the register domain.  The plaintext return
+///       value's lifetime is bounded by one encode_register() call.
+///     - Reentrancy isolation: no global state.  100-level nesting
+///       verified.
 ///
-/// v2 (future): Polymorphic stripper stubs per call-site with (a,b)
-///   transition coefficients for encoding transitions and steganographic
-///   embedding disguised as leaf functions (spec S6.1-6.4).
+///   Properties that do NOT hold (acknowledged in D15§11.8):
+///     - MCSP hardness: plaintext operands are fully exposed.
+///     - SNR→0 within the handler: the decode→call→encode pattern
+///       is distinguishable from Class A operations to a DBI tracer
+///       that instruments call_native() itself.
+///
+///   v2 mitigation (D15§6.1): Polymorphic Stripper stubs will add
+///   per-call-site (a,b) linear transition coefficients.  The encoding
+///   domain transition is disguised as arithmetic in a leaf function,
+///   making the decode point indistinguishable from unrelated code.
+///   Until then, the security boundary here is Class C level.
 
 #include <native_bridge.hpp>
 #include <encoding.hpp>

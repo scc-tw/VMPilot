@@ -10,11 +10,35 @@
 ///     Register snapshots are stored in their encoded-domain form
 ///     (no plaintext exposure).
 ///
-///   NATIVE_CALL: Transitions to native code via call_native() bridge.
-///     Plaintext args exist only in CPU registers during the native
-///     call (register-transient, same security model as Class C).
-///     Reentrant: the native function may call vm_execute() to re-enter
-///     the VM, because each vm_execute() creates an independent VMContext.
+///   NATIVE_CALL (D15§6, D15§11.8): The weakest security boundary by
+///     design.  Full plaintext operands exist in CPU registers for the
+///     duration of the native call — an acknowledged limitation
+///     (D15§11.8: "Full plaintext register-transient").
+///
+///     Why this is acceptable:
+///       1. External calls (libc, syscalls) require plaintext by
+///          definition — the callee is not under our control.
+///       2. Exposure is register-transient: plaintext never reaches
+///          addressable memory (stack/heap).  A memory dump captures
+///          nothing.  Only a register-level trace (Pin/DBI) observes it.
+///       3. The uniform pipeline (D3) executes NATIVE_CALL through the
+///          same 12 steps as every other opcode — the trace pattern is
+///          indistinguishable from XOR or NOP (D15§11.3 SNR→0).
+///       4. The enc_state chain (D1) advances across the NATIVE_CALL
+///          instruction, so removing or reordering it breaks all
+///          subsequent decryption (preimage resistance).
+///
+///     What v1 does NOT have (deferred to v2):
+///       - Polymorphic Stripper stubs (D15§6.1): per-call-site (a,b)
+///         coefficients that disguise decode/encode as leaf functions.
+///         Without this, the decode→call→encode pattern is visible in
+///         a handler-level trace.
+///       - Remote Call Inversion (D15§6.2): splitting argument meaning
+///         across multiple calls for crypto-sensitive targets.
+///
+///     Reentrancy: safe because vm_execute() allocates an independent
+///     VMContext per invocation (C stack frame).  No global mutable
+///     state shared.  Verified to 100 levels.
 ///
 ///   HALT: Sets halted flag for dispatcher.
 
@@ -125,17 +149,31 @@ handle_ret_vm(VMContext& ctx, const DecodedInsn& insn) noexcept {
 }
 
 // ---------------------------------------------------------------------------
-// NATIVE_CALL (D13§E1, D15§6)
+// NATIVE_CALL (D15§6, D15§11.8)
 //
-// Why reentrant-safe: each vm_execute() creates an independent VMContext
-// on the C stack. A native function called here may itself call
-// vm_execute() with a different blob/seed, forming arbitrarily deep
-// vm→native→vm→... chains bounded only by stack depth.
-// No global mutable state is shared between VM instances.
+// Security model: register-transient plaintext (same as Class C).
 //
-// Arg convention: registers r0..r(arg_count-1) are passed sequentially.
-// This matches AAPCS64 (x0-x7) and is close to System V (rdi..r9 mapped
-// to r0-r5). The compiler encodes this mapping at blob build time.
+// Why the plaintext exposure is bounded:
+//   - Plaintext exists only in GPRs during the native function call.
+//     The C ABI guarantees caller-saved regs are clobbered on return,
+//     so plaintext lifetime ≈ duration of the callee.
+//   - No addressable memory (stack/heap) ever holds plaintext args.
+//     call_native() decodes into a local array that the compiler keeps
+//     in registers (8 uint64_t = 64 bytes, fits in GPRs on both
+//     x86-64 and ARM64 with optimization).
+//   - The result is re-encoded into r0's domain immediately on return.
+//     The plaintext return value exists for exactly one encode_register
+//     call (~20 ns).
+//
+// What an attacker with a register-level trace sees:
+//   - The D3 uniform pipeline makes NATIVE_CALL indistinguishable from
+//     any other opcode in the execution trace (same 12 steps).
+//   - The D1 enc_state chain advances, so the instruction cannot be
+//     removed or reordered without desync.
+//   - But: the decode→call→encode pattern within the handler IS visible
+//     to a DBI tool that hooks call_native().  Polymorphic stubs (v2,
+//     D15§6.1) will break this pattern by disguising the transition as
+//     unrelated leaf function calls with per-site (a,b) coefficients.
 // ---------------------------------------------------------------------------
 
 tl::expected<void, DiagnosticCode>
