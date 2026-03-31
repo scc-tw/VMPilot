@@ -17,6 +17,7 @@
 #include <diagnostic_collector.hpp>
 
 #include <coffi/coffi.hpp>
+#include <coffi/coffi_import.hpp>
 #include <elfio/elfio.hpp>
 
 #include <gtest/gtest.h>
@@ -650,9 +651,7 @@ TEST(EditorPermissions, PEInvalidateSignature) {
     std::remove(out_path.c_str());
 }
 
-TEST(EditorPermissions, PEAddRuntimeDepReturnsError) {
-    // PE import injection is not implemented yet.  add_runtime_dep must
-    // return an error — not silent success — so patch() can abort.
+TEST(EditorPermissions, PEAddRuntimeDepInjectsImport) {
     std::string pe_path = build_minimal_pe();
     Common::DiagnosticCollector diag;
 
@@ -660,8 +659,29 @@ TEST(EditorPermissions, PEAddRuntimeDepReturnsError) {
     ASSERT_TRUE(editor.has_value());
 
     auto result = editor->add_runtime_dep("vmpilot_runtime.dll", diag);
-    EXPECT_FALSE(result.has_value())
-        << "PE add_runtime_dep must fail until import injection is implemented";
+    ASSERT_TRUE(result.has_value()) << "PE import injection failed";
+
+    // Save and verify the import exists
+    std::string out_path = pe_path + ".imported";
+    ASSERT_TRUE(editor->save(out_path, diag).has_value());
+
+    COFFI::coffi reader;
+    ASSERT_TRUE(reader.load(out_path));
+    COFFI::import_section_accessor imports(reader);
+
+    bool found = false;
+    for (uint32_t i = 0; i < imports.get_import_count(); ++i) {
+        if (imports.get_dll_name(i) == "vmpilot_runtime.dll") {
+            found = true;
+            std::string sym;
+            uint16_t hint;
+            EXPECT_TRUE(imports.get_symbol(i, 0, sym, hint));
+            EXPECT_EQ(sym, "vm_stub_entry");
+        }
+    }
+    EXPECT_TRUE(found) << "vmpilot_runtime.dll import not found";
+
+    std::remove(out_path.c_str());
 
     std::remove(pe_path.c_str());
 }

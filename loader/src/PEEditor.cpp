@@ -1,6 +1,7 @@
 #include <PEEditor.hpp>
 
 #include <coffi/coffi.hpp>
+#include <coffi/coffi_import.hpp>
 
 #include <algorithm>
 #include <cstring>
@@ -258,18 +259,25 @@ PEEditor::overwrite_text(uint64_t va, const uint8_t* data, size_t len,
 // add_runtime_dep
 // ---------------------------------------------------------------------------
 
-/// PE import injection is not yet implemented (IDT/ILT/IAT manipulation
-/// requires raw byte construction — COFFI has no import table API).
-/// Without the import entry, the Windows loader won't load the DLL,
-/// the runtime constructor won't run, and call_slot stays null.
-/// This is a hard error — the patched binary will crash at the first stub.
+/// Inject an import entry so the Windows loader loads the runtime DLL
+/// at process startup.  Without this, the runtime constructor never
+/// runs and call_slot stays null — stubs crash on first invocation.
+///
+/// Uses COFFI's import_section_accessor which builds a new .idata
+/// section with the correct IDT/ILT/IAT layout, preserving all
+/// existing imports from the original binary.
 tl::expected<void, DC>
 PEEditor::add_runtime_dep(std::string_view install_name,
                           Common::DiagnosticCollector& diag) noexcept {
-    return fail(diag, DC::PatchRuntimeDepFailed,
-                "PE import injection not yet implemented for '"
-                + std::string(install_name)
-                + "' — patched binary will not auto-load the runtime DLL");
+    COFFI::import_section_accessor imports(impl_->pe);
+
+    if (!imports.add_import(std::string(install_name), "vm_stub_entry")) {
+        return fail(diag, DC::PatchRuntimeDepFailed,
+                    "failed to inject PE import for '"
+                    + std::string(install_name) + "'");
+    }
+
+    return {};
 }
 
 // ---------------------------------------------------------------------------
