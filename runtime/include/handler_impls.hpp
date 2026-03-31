@@ -627,7 +627,7 @@ struct HandlerTraits<VmOpcode::CALL_VM, P> {
         cp.vm_ip = e.vm_ip;
         cp.bb_id = e.current_bb_id;
         std::memcpy(cp.epoch_seed, ep.reg.encode[0], 32);
-        cp.salt = static_cast<uint64_t>(e.insn_index_in_bb);  // save insn index for resume
+        cp.saved_insn_index = e.insn_index_in_bb;
         for (int r = 0; r < VM_REG_COUNT; ++r)
             cp.encoded_regs_snapshot[r] = e.regs[r].bits;
         e.shadow_depth++;
@@ -653,11 +653,11 @@ struct HandlerTraits<VmOpcode::RET_VM, P> {
         e.branch_target_bb = cp.bb_id;
         e.branch_taken = true;
         // Resume AFTER the CALL_VM instruction (cp.vm_ip is CALL's ip,
-        // cp.salt stores the insn_index_in_bb at CALL time).
+        // cp.saved_insn_index stores the insn_index_in_bb at CALL time).
         // The dispatcher will use these to override enter_basic_block's
         // default vm_ip = entry_ip.
         e.return_resume_ip = cp.vm_ip + 1;
-        e.return_resume_insn_idx = static_cast<uint32_t>(cp.salt) + 1;
+        e.return_resume_insn_idx = cp.saved_insn_index + 1;
         return {};
     }
 };

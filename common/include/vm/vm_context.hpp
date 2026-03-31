@@ -53,7 +53,8 @@ struct EpochCheckpoint {
     uint64_t vm_ip;
     uint32_t bb_id;
     uint8_t  epoch_seed[32];
-    uint64_t salt;
+    uint64_t salt;                ///< TRNG salt for epoch derivation
+    uint32_t saved_insn_index;    ///< insn_index_in_bb at CALL_VM time (for resume after RET_VM)
     uint64_t encoded_regs_snapshot[16];
 };
 

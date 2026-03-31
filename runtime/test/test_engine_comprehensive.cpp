@@ -33,6 +33,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cassert>
 #include <cstring>
 #include <cstdint>
 #include <vector>
@@ -673,6 +674,309 @@ TEST(EngineNativeCall, BasicTwoArgCall) {
     auto r = engine->execute();
     ASSERT_TRUE(r.has_value());
     EXPECT_EQ(r->return_value, 30u);
+}
+
+// ============================================================================
+// Atomic Handler Tests (direct handler invocation, not via VmEngine)
+//
+// These handlers dereference raw memory addresses (guest memory), so we:
+//   1. Allocate a uint64_t on the stack as the target
+//   2. Set load_base_delta = address of target, aux = 0
+//   3. Call the handler directly through the handler table
+// ============================================================================
+
+namespace {
+
+/// Helper: set up state for direct atomic handler invocation.
+///
+/// Creates a minimal VmEngine to derive encoding tables, then extracts
+/// a mutable VmEpoch and VmExecution for direct handler calls.
+struct AtomicTestFixture {
+    uint8_t seed[32];
+    std::shared_ptr<const VmImmutable> imm;
+    VmEpoch epoch;
+    VmExecution exec{};
+    VmOramState oram{};
+    HandlerTable table;
+
+    AtomicTestFixture() {
+        fill_seed(seed);
+        // Create a throwaway engine to get a valid VmImmutable with derived
+        // memory tables, keys, etc.
+        auto engine = single_bb_engine(seed, 0xF7,
+            {{VmOpcode::HALT, none(), 0, 0, 0}});
+        assert(engine.has_value());
+        imm = engine->shared_immutable();
+
+        // Build a BBMetadata and derive epoch tables manually.
+        BBMetadata bb{};
+        bb.bb_id = 1;
+        bb.epoch = 0;
+        bb.live_regs_bitmap = 0xFFFF;
+        fill_epoch(bb.epoch_seed, 0xF7);
+        epoch.enter_bb(bb, *imm);
+
+        // Initialize ORAM state (unused by atomic handlers, but needed
+        // for the handler signature).
+        oram.init(*imm);
+
+        // Build handler dispatch table.
+        table = build_handler_table<DebugPolicy, DirectOram>();
+    }
+
+    /// Encode a plaintext value into register `reg` using the epoch tables.
+    RegVal encode(uint8_t reg, uint64_t plain) const {
+        return RegVal(VMPilot::Runtime::detail::encode_reg(epoch, reg, plain));
+    }
+
+    /// Decode an encoded register value back to plaintext.
+    uint64_t decode(uint8_t reg, RegVal encoded) const {
+        return VMPilot::Runtime::detail::decode_reg(epoch, reg, encoded.bits);
+    }
+
+    /// Build a DecodedInsn for an atomic operation.
+    /// aux = 0, load_base_delta carries the full address.
+    DecodedInsn make_insn(VmOpcode op, uint8_t ra, uint8_t rb = 0) const {
+        DecodedInsn insn{};
+        insn.opcode = op;
+        insn.reg_a = ra;
+        insn.reg_b = rb;
+        insn.aux = 0;
+        insn.operand_a_type = 0;
+        insn.operand_b_type = 0;
+        insn.condition = 0;
+        insn.plaintext_opcode = 0;
+        return insn;
+    }
+
+    /// Call a handler directly through the dispatch table.
+    HandlerResult call(const DecodedInsn& insn) {
+        return table[static_cast<uint8_t>(insn.opcode)](
+            exec, epoch, oram, *imm, insn);
+    }
+};
+
+}  // anonymous namespace
+
+TEST(EngineAtomic, LockAdd) {
+    AtomicTestFixture f;
+
+    // Target memory: initial value 100
+    alignas(8) uint64_t target = 100;
+    f.exec.load_base_delta = static_cast<int64_t>(
+        reinterpret_cast<uintptr_t>(&target));
+
+    // r0 = encode(50)  — the addend
+    f.exec.regs[0] = f.encode(0, 50);
+
+    auto insn = f.make_insn(VmOpcode::LOCK_ADD, /*reg_a=*/0);
+    auto r = f.call(insn);
+    ASSERT_TRUE(r.has_value());
+
+    // Guest memory should be 100 + 50 = 150
+    EXPECT_EQ(target, 150u);
+
+    // r0 should hold the OLD value (100), encoded in r0's domain
+    EXPECT_EQ(f.decode(0, f.exec.regs[0]), 100u);
+}
+
+TEST(EngineAtomic, LockAddZero) {
+    AtomicTestFixture f;
+
+    alignas(8) uint64_t target = 42;
+    f.exec.load_base_delta = static_cast<int64_t>(
+        reinterpret_cast<uintptr_t>(&target));
+
+    // Adding zero should return the current value and leave memory unchanged.
+    f.exec.regs[0] = f.encode(0, 0);
+
+    auto insn = f.make_insn(VmOpcode::LOCK_ADD, 0);
+    auto r = f.call(insn);
+    ASSERT_TRUE(r.has_value());
+
+    EXPECT_EQ(target, 42u);
+    EXPECT_EQ(f.decode(0, f.exec.regs[0]), 42u);
+}
+
+TEST(EngineAtomic, Xchg) {
+    AtomicTestFixture f;
+
+    alignas(8) uint64_t target = 0xDEADBEEF;
+    f.exec.load_base_delta = static_cast<int64_t>(
+        reinterpret_cast<uintptr_t>(&target));
+
+    // r0 = new value to exchange in
+    f.exec.regs[0] = f.encode(0, 0xCAFEBABE);
+
+    auto insn = f.make_insn(VmOpcode::XCHG, /*reg_a=*/0);
+    auto r = f.call(insn);
+    ASSERT_TRUE(r.has_value());
+
+    // Memory should now hold the new value
+    EXPECT_EQ(target, 0xCAFEBABEu);
+
+    // r0 should hold the OLD value from memory
+    EXPECT_EQ(f.decode(0, f.exec.regs[0]), 0xDEADBEEFu);
+}
+
+TEST(EngineAtomic, XchgSameValue) {
+    AtomicTestFixture f;
+
+    alignas(8) uint64_t target = 77;
+    f.exec.load_base_delta = static_cast<int64_t>(
+        reinterpret_cast<uintptr_t>(&target));
+
+    // Exchange with the same value — idempotent
+    f.exec.regs[0] = f.encode(0, 77);
+
+    auto insn = f.make_insn(VmOpcode::XCHG, 0);
+    auto r = f.call(insn);
+    ASSERT_TRUE(r.has_value());
+
+    EXPECT_EQ(target, 77u);
+    EXPECT_EQ(f.decode(0, f.exec.regs[0]), 77u);
+}
+
+TEST(EngineAtomic, CmpxchgSuccess) {
+    AtomicTestFixture f;
+
+    // Memory holds 100.  We expect 100 and want to swap in 200.
+    alignas(8) uint64_t target = 100;
+    f.exec.load_base_delta = static_cast<int64_t>(
+        reinterpret_cast<uintptr_t>(&target));
+
+    // reg_a (r0) = expected value, reg_b (r1) = desired value
+    f.exec.regs[0] = f.encode(0, 100);  // expected
+    f.exec.regs[1] = f.encode(1, 200);  // desired
+
+    auto insn = f.make_insn(VmOpcode::CMPXCHG, /*reg_a=*/0, /*reg_b=*/1);
+    auto r = f.call(insn);
+    ASSERT_TRUE(r.has_value());
+
+    // Success: memory updated to desired value
+    EXPECT_EQ(target, 200u);
+
+    // r0 should hold the old memory value (== expected, since success)
+    EXPECT_EQ(f.decode(0, f.exec.regs[0]), 100u);
+
+    // ZF set on success (vm_flags bit 0 = 1)
+    EXPECT_EQ(f.exec.vm_flags & 0x01, 0x01u);
+}
+
+TEST(EngineAtomic, CmpxchgFailure) {
+    AtomicTestFixture f;
+
+    // Memory holds 100.  We expect 999 (mismatch) and want 200.
+    alignas(8) uint64_t target = 100;
+    f.exec.load_base_delta = static_cast<int64_t>(
+        reinterpret_cast<uintptr_t>(&target));
+
+    f.exec.regs[0] = f.encode(0, 999);  // wrong expected
+    f.exec.regs[1] = f.encode(1, 200);  // desired (should NOT be written)
+
+    auto insn = f.make_insn(VmOpcode::CMPXCHG, 0, 1);
+    auto r = f.call(insn);
+    ASSERT_TRUE(r.has_value());
+
+    // Failure: memory NOT updated
+    EXPECT_EQ(target, 100u);
+
+    // r0 should hold the ACTUAL memory value (100), not the expected (999).
+    // compare_exchange_strong writes the actual value into `expected` on failure.
+    EXPECT_EQ(f.decode(0, f.exec.regs[0]), 100u);
+
+    // ZF cleared on failure (vm_flags bit 0 = 0)
+    EXPECT_EQ(f.exec.vm_flags & 0x01, 0x00u);
+}
+
+TEST(EngineAtomic, CmpxchgSuccessThenFailure) {
+    AtomicTestFixture f;
+
+    alignas(8) uint64_t target = 10;
+    f.exec.load_base_delta = static_cast<int64_t>(
+        reinterpret_cast<uintptr_t>(&target));
+
+    // First: succeed (expect 10, swap in 20)
+    f.exec.regs[0] = f.encode(0, 10);
+    f.exec.regs[1] = f.encode(1, 20);
+
+    auto insn = f.make_insn(VmOpcode::CMPXCHG, 0, 1);
+    auto r1 = f.call(insn);
+    ASSERT_TRUE(r1.has_value());
+    EXPECT_EQ(target, 20u);
+    EXPECT_EQ(f.exec.vm_flags & 0x01, 0x01u);
+
+    // Second: fail (expect 10, but memory is now 20)
+    f.exec.regs[0] = f.encode(0, 10);  // stale expected
+    f.exec.regs[1] = f.encode(1, 30);
+
+    auto r2 = f.call(insn);
+    ASSERT_TRUE(r2.has_value());
+    EXPECT_EQ(target, 20u);  // unchanged
+    EXPECT_EQ(f.decode(0, f.exec.regs[0]), 20u);  // actual value loaded
+    EXPECT_EQ(f.exec.vm_flags & 0x01, 0x00u);
+}
+
+TEST(EngineAtomic, AtomicLoad) {
+    AtomicTestFixture f;
+
+    alignas(8) uint64_t target = 0x123456789ABCDEF0ull;
+    f.exec.load_base_delta = static_cast<int64_t>(
+        reinterpret_cast<uintptr_t>(&target));
+
+    auto insn = f.make_insn(VmOpcode::ATOMIC_LOAD, /*reg_a=*/0);
+    auto r = f.call(insn);
+    ASSERT_TRUE(r.has_value());
+
+    // r0 should hold the memory value, encoded in r0's domain
+    EXPECT_EQ(f.decode(0, f.exec.regs[0]), 0x123456789ABCDEF0ull);
+}
+
+TEST(EngineAtomic, AtomicLoadZero) {
+    AtomicTestFixture f;
+
+    alignas(8) uint64_t target = 0;
+    f.exec.load_base_delta = static_cast<int64_t>(
+        reinterpret_cast<uintptr_t>(&target));
+
+    auto insn = f.make_insn(VmOpcode::ATOMIC_LOAD, 0);
+    auto r = f.call(insn);
+    ASSERT_TRUE(r.has_value());
+
+    EXPECT_EQ(f.decode(0, f.exec.regs[0]), 0u);
+}
+
+TEST(EngineAtomic, AtomicLoadDifferentRegisters) {
+    AtomicTestFixture f;
+
+    alignas(8) uint64_t target = 42;
+    f.exec.load_base_delta = static_cast<int64_t>(
+        reinterpret_cast<uintptr_t>(&target));
+
+    // Load into r3 instead of r0
+    auto insn = f.make_insn(VmOpcode::ATOMIC_LOAD, /*reg_a=*/3);
+    auto r = f.call(insn);
+    ASSERT_TRUE(r.has_value());
+
+    EXPECT_EQ(f.decode(3, f.exec.regs[3]), 42u);
+}
+
+TEST(EngineAtomic, LockAddOverflow) {
+    AtomicTestFixture f;
+
+    // Test unsigned overflow wrapping
+    alignas(8) uint64_t target = UINT64_MAX;
+    f.exec.load_base_delta = static_cast<int64_t>(
+        reinterpret_cast<uintptr_t>(&target));
+
+    f.exec.regs[0] = f.encode(0, 1);
+
+    auto insn = f.make_insn(VmOpcode::LOCK_ADD, 0);
+    auto r = f.call(insn);
+    ASSERT_TRUE(r.has_value());
+
+    EXPECT_EQ(target, 0u);  // wraps around
+    EXPECT_EQ(f.decode(0, f.exec.regs[0]), UINT64_MAX);  // old value
 }
 
 TEST(EngineTable, AllOpcodesCovered) {

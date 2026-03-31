@@ -80,6 +80,11 @@ verify_bb_mac(const VmImmutable& imm,
               const VmExecution& exec,
               const VmEpoch& epoch) noexcept;
 
+/// Replay enc_state SipHash chain from BB entry to a specific instruction index.
+/// Used by RET_VM to resume execution after CALL_VM.
+void replay_enc_state(VmExecution& exec, const VmEpoch& epoch,
+                      const VmImmutable& imm, uint32_t target_insn_idx) noexcept;
+
 /// Get the current BB's instruction count (for boundary detection).
 [[nodiscard]] uint32_t current_bb_insn_count(
     const VmImmutable& imm,

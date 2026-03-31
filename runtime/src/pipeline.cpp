@@ -293,6 +293,61 @@ verify_bb_mac(const VmImmutable& imm,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// replay_enc_state (RET_VM resume)
+// ─────────────────────────────────────────────────────────────────────────────
+
+void replay_enc_state(VmExecution& exec, const VmEpoch& epoch,
+                      const VmImmutable& imm,
+                      uint32_t target_insn_idx) noexcept {
+
+    const auto& bb = imm.bb_metadata[exec.current_bb_index];
+
+    // Derive bb_enc_seed from scratch (enter_basic_block already set enc_state,
+    // but we need the seed for the keystream replay).
+    uint8_t enc_seed_bytes[8];
+    derive_bb_enc_seed(imm.stored_seed, bb.bb_id, enc_seed_bytes);
+
+    uint64_t es = 0;
+    std::memcpy(&es, enc_seed_bytes, 8);
+
+    // Replay SipHash chain: decrypt each instruction [0..target_insn_idx) and
+    // advance enc_state, handling REKEY mutations along the way.
+    auto insns = imm.blob.instructions();
+    for (uint32_t j = 0; j < target_insn_idx; ++j) {
+        uint64_t encrypted = 0;
+        std::memcpy(&encrypted, &insns[bb.entry_ip + j], 8);
+
+        uint64_t ks = siphash_keystream(imm.fast_key, es, j);
+        uint64_t plain_u64 = encrypted ^ ks;
+
+        VmInsn vi{};
+        std::memcpy(&vi, &plain_u64, 8);
+
+        // Check for REKEY — must replay its enc_state mutation
+        uint8_t enc_alias = static_cast<uint8_t>(vi.opcode & 0xFF);
+        uint8_t alias = epoch.opcode_perm_inv[enc_alias];
+        uint8_t sem = imm.alias_lut[alias];
+        if (sem == static_cast<uint8_t>(VmOpcode::REKEY)) {
+            uint32_t cnt = vi.aux;
+            uint8_t rk_ctx[9];
+            std::memcpy(rk_ctx, "rekey", 5);
+            std::memcpy(rk_ctx + 5, &cnt, 4);
+            uint8_t rk_mat[16];
+            blake3_kdf(imm.stored_seed,
+                       reinterpret_cast<const char*>(rk_ctx), 9,
+                       rk_mat, 16);
+            uint8_t esb[8];
+            std::memcpy(esb, &es, 8);
+            es = siphash_2_4(rk_mat, esb, 8);
+        }
+
+        es = update_enc_state_impl(es, vi.opcode, vi.aux);
+    }
+
+    exec.enc_state = es;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // current_bb_insn_count
 // ─────────────────────────────────────────────────────────────────────────────
 

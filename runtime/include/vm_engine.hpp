@@ -412,53 +412,7 @@ VmEngine<Policy, Oram>::step() noexcept
         if (exec_.return_resume_ip != 0) {
             exec_.vm_ip = exec_.return_resume_ip;
             exec_.insn_index_in_bb = exec_.return_resume_insn_idx;
-            // Re-derive enc_state to match the resume position:
-            // We need to replay the SipHash chain from entry_ip to resume_ip.
-            // The enc_state was reset by enter_basic_block to bb_enc_seed.
-            // We replay by re-decrypting instructions [entry..resume) to
-            // advance enc_state.  This is expensive but correct (Performance Never).
-            uint8_t enc_seed[8];
-            const auto& bb = imm_->bb_metadata[exec_.current_bb_index];
-            uint8_t msg[7];
-            std::memcpy(msg, "enc", 3);
-            std::memcpy(msg + 3, &bb.bb_id, 4);
-            Common::VM::Crypto::blake3_keyed_hash(imm_->stored_seed, msg, 7, enc_seed, 8);
-            uint64_t es = 0;
-            std::memcpy(&es, enc_seed, 8);
-
-            auto insns = imm_->blob.instructions();
-            for (uint32_t j = 0; j < exec_.return_resume_insn_idx; ++j) {
-                uint64_t encrypted = 0;
-                std::memcpy(&encrypted, &insns[bb.entry_ip + j], 8);
-                uint64_t ks = Common::VM::Crypto::siphash_keystream(
-                    imm_->fast_key, es, j);
-                uint64_t plain_u64 = encrypted ^ ks;
-                Common::VM::VmInsn vi{};
-                std::memcpy(&vi, &plain_u64, 8);
-
-                // Check for REKEY
-                uint8_t enc_alias = static_cast<uint8_t>(vi.opcode & 0xFF);
-                uint8_t alias = epoch_->opcode_perm_inv[enc_alias];
-                uint8_t sem = imm_->alias_lut[alias];
-                if (sem == static_cast<uint8_t>(Common::VM::VmOpcode::REKEY)) {
-                    uint32_t cnt = vi.aux;
-                    uint8_t rk[9]; std::memcpy(rk, "rekey", 5);
-                    std::memcpy(rk+5, &cnt, 4);
-                    uint8_t mat[16];
-                    Common::VM::Crypto::blake3_kdf(imm_->stored_seed,
-                        reinterpret_cast<const char*>(rk), 9, mat, 16);
-                    uint8_t esb[8]; std::memcpy(esb, &es, 8);
-                    es = Common::VM::Crypto::siphash_2_4(mat, esb, 8);
-                }
-
-                uint8_t key16[16] = {};
-                std::memcpy(key16, &es, 8);
-                uint8_t msg6[6];
-                std::memcpy(msg6, &vi.opcode, 2);
-                std::memcpy(msg6+2, &vi.aux, 4);
-                es = Common::VM::Crypto::siphash_2_4(key16, msg6, 6);
-            }
-            exec_.enc_state = es;
+            pipeline::replay_enc_state(exec_, *epoch_, *imm_, exec_.return_resume_insn_idx);
             exec_.return_resume_ip = 0;
             exec_.return_resume_insn_idx = 0;
         }

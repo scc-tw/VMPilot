@@ -46,8 +46,10 @@
 #include <cstdint>
 #include <cstring>
 
-// The section name the loader uses (must match PlatformTraits).
-// TODO: make this configurable or discover via a magic marker.
+// The section name the loader uses — must match FormatConfig::section_name
+// in PlatformTraits.hpp.  Hardcoded because the runtime is compiled once
+// per platform while FormatConfig is a loader-side constexpr; keeping them
+// in sync is enforced by integration tests (test_loader + test_extend_text).
 #if defined(__APPLE__)
 static constexpr const char* VMPILOT_SEGMENT = "__VMPILOT";
 #elif defined(_WIN32)
