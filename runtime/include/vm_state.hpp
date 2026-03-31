@@ -38,6 +38,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
+#include <memory>
 #include <vector>
 
 namespace VMPilot::Runtime {
@@ -204,14 +205,27 @@ static_assert(offsetof(VmExecution, regs) == 0,
 // VmEpoch — per-BB derived state, heap-allocated, rebuilt on BB transitions
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Forward declaration (defined in composition_cache.hpp or here for now).
+// Forward declaration — full definition in composition_cache.hpp.
+// CompositionCache is ~8MB worst case (16 × 512KB binary entries +
+// 8 × 2KB unary + 8 × 8KB MBA).  It lives behind a unique_ptr in
+// VmEpoch so that (a) VmEpoch itself stays ~131KB and (b) cache memory
+// is only allocated when handlers first need it.
 struct CompositionCache;
 
 /// Per-BB encoding tables and composition cache.
 ///
-/// Heap-allocated (unique_ptr) because encoding tables are ~131KB total.
-/// Rebuilt on every BB transition via enter_bb().
+/// Heap-allocated (unique_ptr from VmEngine) because encoding tables are
+/// ~131KB total.  Rebuilt on every BB transition via enter_bb().
 struct VmEpoch {
+    VmEpoch() noexcept;
+    ~VmEpoch();
+    VmEpoch(VmEpoch&&) noexcept;
+    VmEpoch& operator=(VmEpoch&&) noexcept;
+
+    // Non-copyable (owns unique_ptr)
+    VmEpoch(const VmEpoch&) = delete;
+    VmEpoch& operator=(const VmEpoch&) = delete;
+
     /// Per-register encoding/decoding bijections.
     RegTables reg;
 
@@ -226,6 +240,14 @@ struct VmEpoch {
     uint32_t bb_id    = 0;
     uint32_t epoch    = 0;
     uint16_t live_regs_bitmap = 0;
+
+    /// Lazily-built composition tables for Class A (bitwise) and Class B
+    /// (MBA) operations.  Allocated on first handler use, cleared on every
+    /// BB transition.  nullptr until first Class A/B handler executes.
+    ///
+    /// Owned by VmEpoch but heap-allocated separately because the cache
+    /// can grow to ~8MB while VmEpoch itself is ~131KB.
+    std::unique_ptr<CompositionCache> cache;
 
     /// Derive all tables from BB metadata + immutable state.
     ///

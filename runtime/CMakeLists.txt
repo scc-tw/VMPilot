@@ -42,6 +42,8 @@ set(RUNTIME_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ephemeral_encoding.cpp
     # TLS helpers (L6)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tls_helpers.cpp
+    # Phase 2+: new state model
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/vm_state.cpp
 )
 
 # ---------------------------------------------------------------------------
@@ -328,4 +330,13 @@ if(ENABLE_TESTS)
                 GTest::gtest_main
     )
     gtest_discover_tests(test_phase2_state)
+
+    add_executable(test_phase3_handlers
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_phase3_handlers.cpp
+    )
+    target_link_libraries(test_phase3_handlers
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+    gtest_discover_tests(test_phase3_handlers)
 endif()
