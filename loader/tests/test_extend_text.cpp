@@ -10,8 +10,10 @@
 ///   - Extended region inherits .text permissions (RX)
 
 #include <ELFEditor.hpp>
+#include <PEEditor.hpp>
 #include <LoaderTypes.hpp>
 
+#include <coffi/coffi.hpp>
 #include <elfio/elfio.hpp>
 
 #include <gtest/gtest.h>
@@ -374,18 +376,200 @@ TEST(FindTextGaps, ELF_MinSizeFilters) {
     auto editor = ELFEditor::open(elf_path, diag);
     ASSERT_TRUE(editor.has_value());
 
-    // min_size=16: excludes the 8-byte gaps
     auto gaps16 = editor->find_text_gaps(16);
     for (const auto& g : gaps16)
         EXPECT_GE(g.size, 16u);
 
-    // min_size=32: only the 32-byte NOP sled
     auto gaps32 = editor->find_text_gaps(32);
     ASSERT_EQ(gaps32.size(), 1u);
     EXPECT_EQ(gaps32[0].size, 32u);
 
-    // min_size=64: nothing
     EXPECT_TRUE(editor->find_text_gaps(64).empty());
 
     std::remove(elf_path.c_str());
+}
+
+// ============================================================================
+// PE extend_text() + find_text_gaps() Tests
+// ============================================================================
+
+namespace {
+
+constexpr uint32_t PE_IMAGE_BASE = 0x00400000;
+constexpr uint32_t PE_TEXT_RVA   = 0x1000;
+constexpr uint64_t PE_TEXT_VA    = PE_IMAGE_BASE + PE_TEXT_RVA;
+constexpr size_t   PE_TEXT_SIZE  = 0x200;
+
+std::string build_pe_for_extend() {
+    COFFI::coffi writer;
+    writer.create(COFFI::COFFI_ARCHITECTURE_PE);
+    writer.create_optional_header();
+
+    auto* text_sec = writer.add_section(".text");
+    std::vector<uint8_t> nops(PE_TEXT_SIZE, 0x90);
+    text_sec->set_data(reinterpret_cast<const char*>(nops.data()),
+                       static_cast<uint32_t>(nops.size()));
+    text_sec->set_virtual_address(PE_TEXT_RVA);
+    text_sec->set_virtual_size(static_cast<uint32_t>(PE_TEXT_SIZE));
+    text_sec->set_flags(IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ |
+                        IMAGE_SCN_CNT_CODE);
+
+    writer.get_header()->set_flags(IMAGE_FILE_EXECUTABLE_IMAGE |
+                                   IMAGE_FILE_32BIT_MACHINE);
+    writer.get_optional_header()->set_entry_point_address(PE_TEXT_RVA);
+    writer.get_optional_header()->set_code_base(PE_TEXT_RVA);
+    writer.get_win_header()->set_image_base(PE_IMAGE_BASE);
+    writer.get_win_header()->set_section_alignment(0x1000);
+    writer.get_win_header()->set_file_alignment(0x200);
+    writer.get_win_header()->set_subsystem(3);
+    for (int i = 0; i < 16; ++i)
+        writer.add_directory(COFFI::image_data_directory{0, 0});
+    writer.layout();
+
+    char tmpname[] = "/tmp/vmpilot_pe_ext_XXXXXX";
+    int fd = mkstemp(tmpname);
+    EXPECT_GE(fd, 0);
+    close(fd);
+    writer.save(tmpname);
+    return std::string(tmpname);
+}
+
+std::string build_pe_with_gaps() {
+    COFFI::coffi writer;
+    writer.create(COFFI::COFFI_ARCHITECTURE_PE);
+    writer.create_optional_header();
+
+    // .text with known gap pattern:
+    //   [0..31]    code (0x55)
+    //   [32..63]   NOP sled (0x90)
+    //   [64..79]   code (0x48)
+    //   [80..95]   INT3 pad (0xCC)
+    //   [96..255]  code (0xC3)
+    std::vector<uint8_t> text(256, 0xC3);
+    std::memset(text.data(), 0x55, 32);
+    std::memset(text.data() + 32, 0x90, 32);
+    std::memset(text.data() + 64, 0x48, 16);
+    std::memset(text.data() + 80, 0xCC, 16);
+
+    auto* text_sec = writer.add_section(".text");
+    text_sec->set_data(reinterpret_cast<const char*>(text.data()),
+                       static_cast<uint32_t>(text.size()));
+    text_sec->set_virtual_address(PE_TEXT_RVA);
+    text_sec->set_virtual_size(static_cast<uint32_t>(text.size()));
+    text_sec->set_flags(IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ |
+                        IMAGE_SCN_CNT_CODE);
+
+    writer.get_header()->set_flags(IMAGE_FILE_EXECUTABLE_IMAGE |
+                                   IMAGE_FILE_32BIT_MACHINE);
+    writer.get_optional_header()->set_entry_point_address(PE_TEXT_RVA);
+    writer.get_optional_header()->set_code_base(PE_TEXT_RVA);
+    writer.get_win_header()->set_image_base(PE_IMAGE_BASE);
+    writer.get_win_header()->set_section_alignment(0x1000);
+    writer.get_win_header()->set_file_alignment(0x200);
+    writer.get_win_header()->set_subsystem(3);
+    for (int i = 0; i < 16; ++i)
+        writer.add_directory(COFFI::image_data_directory{0, 0});
+    writer.layout();
+
+    char tmpname[] = "/tmp/vmpilot_pe_gaps_XXXXXX";
+    int fd = mkstemp(tmpname);
+    EXPECT_GE(fd, 0);
+    close(fd);
+    writer.save(tmpname);
+    return std::string(tmpname);
+}
+
+}  // namespace
+
+TEST(ExtendText, PE_BasicExtension) {
+    auto pe_path = build_pe_for_extend();
+    Common::DiagnosticCollector diag;
+
+    auto editor = PEEditor::open(pe_path, diag);
+    ASSERT_TRUE(editor.has_value());
+
+    auto orig_text = editor->text_section();
+    EXPECT_EQ(orig_text.base_addr, PE_TEXT_VA);
+
+    auto payload = make_test_payload(128);
+    auto result = editor->extend_text(payload, 16, diag);
+    ASSERT_TRUE(result.has_value());
+
+    // VA should be at .text end, aligned
+    EXPECT_GE(result->va, PE_TEXT_VA + PE_TEXT_SIZE);
+    EXPECT_EQ(result->va % 16, 0u);
+    EXPECT_EQ(result->size, 128u);
+
+    // .text should have grown
+    auto new_text = editor->text_section();
+    EXPECT_GT(new_text.size, PE_TEXT_SIZE);
+
+    // overwrite_text at the new VA should succeed
+    std::vector<uint8_t> patch = {0xCC, 0xCC};
+    auto ow = editor->overwrite_text(result->va, patch.data(), patch.size(), diag);
+    EXPECT_TRUE(ow.has_value());
+
+    // Save and reload
+    std::string out_path = pe_path + ".extended";
+    ASSERT_TRUE(editor->save(out_path, diag).has_value());
+
+    COFFI::coffi reader;
+    ASSERT_TRUE(reader.load(out_path));
+    for (const auto& sec : reader.get_sections()) {
+        if (sec.get_name() != ".text") continue;
+        EXPECT_GT(sec.get_data_size(), PE_TEXT_SIZE);
+        // Original NOPs preserved at start
+        const auto* d = reinterpret_cast<const uint8_t*>(sec.get_data());
+        EXPECT_EQ(d[0], 0x90);
+        break;
+    }
+
+    std::remove(pe_path.c_str());
+    std::remove(out_path.c_str());
+}
+
+TEST(FindTextGaps, PE_DetectsNopAndInt3) {
+    auto pe_path = build_pe_with_gaps();
+    Common::DiagnosticCollector diag;
+
+    auto editor = PEEditor::open(pe_path, diag);
+    ASSERT_TRUE(editor.has_value());
+
+    auto gaps = editor->find_text_gaps(8);
+    ASSERT_GE(gaps.size(), 2u) << "Expected NOP sled + INT3 pad";
+
+    // Sorted descending
+    EXPECT_GE(gaps[0].size, gaps[1].size);
+
+    // 32-byte NOP sled
+    bool found_nop = false;
+    for (const auto& g : gaps) {
+        if (g.va == PE_TEXT_VA + 32 && g.size == 32) found_nop = true;
+    }
+    EXPECT_TRUE(found_nop) << "32-byte NOP sled not found";
+
+    // 16-byte INT3 pad
+    bool found_int3 = false;
+    for (const auto& g : gaps) {
+        if (g.va == PE_TEXT_VA + 80 && g.size == 16) found_int3 = true;
+    }
+    EXPECT_TRUE(found_int3) << "16-byte INT3 pad not found";
+
+    std::remove(pe_path.c_str());
+}
+
+TEST(FindTextGaps, PE_MinSizeFilters) {
+    auto pe_path = build_pe_with_gaps();
+    Common::DiagnosticCollector diag;
+
+    auto editor = PEEditor::open(pe_path, diag);
+    ASSERT_TRUE(editor.has_value());
+
+    auto gaps32 = editor->find_text_gaps(32);
+    ASSERT_EQ(gaps32.size(), 1u);
+    EXPECT_EQ(gaps32[0].size, 32u);
+
+    EXPECT_TRUE(editor->find_text_gaps(64).empty());
+
+    std::remove(pe_path.c_str());
 }

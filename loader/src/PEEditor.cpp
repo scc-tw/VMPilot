@@ -2,6 +2,7 @@
 
 #include <coffi/coffi.hpp>
 
+#include <algorithm>
 #include <cstring>
 #include <vector>
 
@@ -127,22 +128,86 @@ PEEditor::add_segment(std::string_view name,
 // find_text_gaps
 // ---------------------------------------------------------------------------
 
+/// Scan .text for consecutive filler bytes usable as code caves.
+/// PE targets are x86/x86_64, so detects:
+///   - NOP (0x90), INT3 (0xCC), zero (0x00) — same as ELF x86
+/// Returns gaps >= min_size, sorted by size descending.
 std::vector<TextGap>
-PEEditor::find_text_gaps(std::size_t /*min_size*/) const noexcept {
-    // PE gap scanning not yet implemented.
-    return {};
+PEEditor::find_text_gaps(std::size_t min_size) const noexcept {
+    auto* sec = impl_->text_sec;
+    if (!sec || sec->get_data_size() == 0) return {};
+
+    const auto* data = reinterpret_cast<const uint8_t*>(sec->get_data());
+    const size_t text_len = sec->get_data_size();
+    const uint64_t base_va = impl_->text_va;
+
+    auto is_filler = [](uint8_t b) -> bool {
+        return b == 0x90 || b == 0xCC || b == 0x00;
+    };
+
+    std::vector<TextGap> gaps;
+    size_t i = 0;
+    while (i < text_len) {
+        if (!is_filler(data[i])) { ++i; continue; }
+
+        const uint8_t filler = data[i];
+        const size_t start = i;
+        while (i < text_len && data[i] == filler) ++i;
+        const size_t run_len = i - start;
+
+        if (run_len >= min_size)
+            gaps.push_back({base_va + start, run_len});
+    }
+
+    std::sort(gaps.begin(), gaps.end(),
+              [](const TextGap& a, const TextGap& b) { return a.size > b.size; });
+
+    return gaps;
 }
 
 // ---------------------------------------------------------------------------
 // extend_text
 // ---------------------------------------------------------------------------
 
+/// Extend .text by appending padding + payload to the section data.
+/// Updates virtual_size and data_size so the payload is accessible
+/// at the returned VA.  The section keeps its original flags (RX).
 tl::expected<NewSegmentInfo, DC>
-PEEditor::extend_text(const std::vector<uint8_t>& /*data*/,
-                      uint64_t /*alignment*/,
+PEEditor::extend_text(const std::vector<uint8_t>& data,
+                      uint64_t alignment,
                       Common::DiagnosticCollector& diag) noexcept {
-    return fail(diag, DC::PatchFormatUnsupported,
-                "PE .text extension not yet implemented");
+    auto* sec = impl_->text_sec;
+    if (!sec)
+        return fail(diag, DC::PatchBinaryReadFailed,
+                    "no .text section for extend_text");
+
+    const uint64_t orig_end_va = impl_->text_va + impl_->text_size;
+    const uint64_t new_data_va = (orig_end_va + alignment - 1) & ~(alignment - 1);
+    const uint64_t padding = new_data_va - orig_end_va;
+
+    // Copy existing data, append padding + payload
+    const size_t orig_data_len = sec->get_data_size();
+    const size_t new_data_len = orig_data_len + static_cast<size_t>(padding) + data.size();
+
+    std::vector<uint8_t> buf(new_data_len, 0xCC);  // fill padding with INT3
+    std::memcpy(buf.data(), sec->get_data(), orig_data_len);
+    // Zero the padding region (between old data and new payload)
+    std::memset(buf.data() + orig_data_len, 0xCC, static_cast<size_t>(padding));
+    std::memcpy(buf.data() + orig_data_len + static_cast<size_t>(padding),
+                data.data(), data.size());
+
+    sec->set_data(reinterpret_cast<const char*>(buf.data()),
+                  static_cast<uint32_t>(buf.size()));
+
+    // Update virtual size to cover the extended data
+    const uint32_t new_vsize = static_cast<uint32_t>(
+        impl_->text_size + padding + data.size());
+    sec->set_virtual_size(new_vsize);
+
+    // Update cached text_size so overwrite_text() sees the extended range
+    impl_->text_size = new_vsize;
+
+    return NewSegmentInfo{new_data_va, data.size()};
 }
 
 // ---------------------------------------------------------------------------
