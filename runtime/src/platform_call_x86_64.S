@@ -1,14 +1,21 @@
 // platform_call_x86_64.S — System V x86-64 ABI native call trampoline.
 //
-// Loads integer args into rdi/rsi/rdx/rcx/r8/r9 and FP args into xmm0-7,
-// sets AL for variadic, calls the target, and returns integer or FP result.
+// Reads PlatformCallDesc struct by offset, loads int/FP regs + stack args,
+// calls target, returns integer or FP result.
 //
-// extern "C" uint64_t platform_call(
-//     void* target,           // rdi
-//     const uint64_t* int_regs, // rsi — 8 integer arg values
-//     const uint64_t* fp_regs,  // rdx — 8 FP bit-patterns for xmm0-7
-//     uint8_t flags             // cl  — [5:0]=fp_count, [6]=returns_fp
-// );
+// extern "C" uint64_t platform_call(const PlatformCallDesc* desc);
+//   desc in rdi (first SysV arg)
+//
+// PlatformCallDesc layout (offsets — verified via offsetof()):
+//   0:   target (void*)
+//   8:   int_regs[8]  (64 bytes)
+//   72:  fp_regs[8]   (64 bytes)
+//   144: stack_buf[128] (128 bytes, alignas(16) adds 8B padding after fp_regs)
+//   272: stack_size (uint16_t)
+//   274: total_args (uint8_t)
+//   275: reg_int_count (uint8_t)
+//   276: fp_count (uint8_t)
+//   277: flags (uint8_t) — [5:0]=fp_count for AL, [6]=returns_fp
 
 #if defined(__x86_64__) && !defined(_WIN32)
 
@@ -18,61 +25,93 @@
     .p2align 4
 
 platform_call:
-    // Prologue: save callee-saved r12, align stack for inner call.
-    // Entry: rsp is 8-misaligned (return addr pushed by caller).
-    // pushq rbp + pushq r12 = -16 → aligned.
     pushq   %rbp
     movq    %rsp, %rbp
     pushq   %r12
+    pushq   %r13
 
-    // Save arguments that will be clobbered by register loading.
-    movq    %rdi, %r10          // r10 = target
-    movq    %rsi, %r11          // r11 = int_regs
-    movzbl  %cl, %r12d          // r12 = flags (zero-extend byte)
+    movq    %rdi, %r12          // r12 = desc
 
-    // ── Load 8 FP args from fp_regs (rdx) into xmm0-7 ──
-    movq     0(%rdx), %xmm0
-    movq     8(%rdx), %xmm1
-    movq    16(%rdx), %xmm2
-    movq    24(%rdx), %xmm3
-    movq    32(%rdx), %xmm4
-    movq    40(%rdx), %xmm5
-    movq    48(%rdx), %xmm6
-    movq    56(%rdx), %xmm7
+    // ── 1. Allocate and copy stack args ──────────────────────────────
+    movzwl  272(%r12), %eax     // eax = stack_size
+    testl   %eax, %eax
+    jz      .Lno_stack_sysv
 
-    // ── Set AL = fp_count (lower 6 bits of flags) ──
-    // System V ABI: for variadic functions, AL = number of vector (xmm)
-    // registers used.  Non-variadic functions ignore AL, so always setting
-    // it is harmless and simplifies the code.
-    movl    %r12d, %eax
-    andb    $0x3F, %al
+    // Align to 16: round up to nearest 16
+    addl    $15, %eax
+    andl    $-16, %eax
+    subq    %rax, %rsp
 
-    // ── Load 6 integer args from int_regs (r11) into rdi..r9 ──
-    // Load in reverse order so rdi (which held target) is loaded last.
-    movq    40(%r11), %r9
-    movq    32(%r11), %r8
-    movq    24(%r11), %rcx
-    movq    16(%r11), %rdx
-    movq     8(%r11), %rsi
-    movq     0(%r11), %rdi
+    // Copy stack_buf to [rsp]
+    leaq    144(%r12), %rsi     // src = desc->stack_buf
+    movq    %rsp, %rdi          // dst = rsp
+    movzwl  272(%r12), %ecx     // count = stack_size
+    rep     movsb
 
-    // ── Call target ──
-    // Stack is 16-byte aligned (pushq rbp + pushq r12 = 16 bytes).
-    call    *%r10
+    jmp     .Lload_regs_sysv
 
-    // ── Handle return value ──
-    // Integer result is already in rax.
-    // If returns_fp (bit 6 of flags), copy xmm0 bit-pattern to rax.
-    testb   $0x40, %r12b
-    jz      .Lreturn
-    movq    %xmm0, %rax
-.Lreturn:
+.Lno_stack_sysv:
+    // Ensure 16-byte alignment for call.
+    // On entry: rsp was 8-misaligned (return addr). After 3 pushes: 8+24=32 → aligned.
+    // CALL will push 8 → 40 → misaligned. Need sub 8 to make it 48 → aligned at callee entry.
+    subq    $8, %rsp
 
-    // Epilogue
+.Lload_regs_sysv:
+    movq    0(%r12), %r13       // r13 = target
+
+    // ── 2. Load 8 FP args ───────────────────────────────────────────
+    movq     72(%r12), %xmm0
+    movq     80(%r12), %xmm1
+    movq     88(%r12), %xmm2
+    movq     96(%r12), %xmm3
+    movq    104(%r12), %xmm4
+    movq    112(%r12), %xmm5
+    movq    120(%r12), %xmm6
+    movq    128(%r12), %xmm7
+
+    // ── 3. Set AL = fp_count for variadic ───────────────────────────
+    movzbl  277(%r12), %eax     // flags
+    andb    $0x3F, %al          // AL = fp_count
+
+    // ── 4. Load 6 int args (rdi last — it holds desc pointer) ───────
+    movq    48(%r12), %r9       // int_regs[5]
+    movq    40(%r12), %r8       // int_regs[4]
+    movq    32(%r12), %rcx      // int_regs[3]
+    movq    24(%r12), %rdx      // int_regs[2]
+    movq    16(%r12), %rsi      // int_regs[1]
+    movq     8(%r12), %rdi      // int_regs[0] — LAST (clobbers desc ptr)
+
+    // ── 5. Call target ──────────────────────────────────────────────
+    call    *%r13
+
+    // ── 6. Handle returns_fp ────────────────────────────────────────
+    movzbl  277(%r12), %ecx     // reload flags (rdi was clobbered)
+    testb   $0x40, %cl
+    jz      .Lreturn_sysv
+    movq    %xmm0, %rax         // FP result → rax (bit-cast)
+.Lreturn_sysv:
+
+    // ── 7. Epilogue ─────────────────────────────────────────────────
+    leaq    -16(%rbp), %rsp     // restore rsp (skip stack args)
+    popq    %r13
     popq    %r12
     popq    %rbp
     ret
 
     .size platform_call, . - platform_call
+
+// ─────────────────────────────────────────────────────────────────────
+// platform_call_struct — on x86-64 SysV, struct ptr is already in
+// int_regs[0] via classify_args (rdi).  Just delegate to platform_call.
+// ─────────────────────────────────────────────────────────────────────
+
+    .globl platform_call_struct
+    .type  platform_call_struct, @function
+
+platform_call_struct:
+    // rdi = desc (same as platform_call), rsi = struct_ptr (ignored — already in int_regs[0])
+    jmp     platform_call
+
+    .size platform_call_struct, . - platform_call_struct
 
 #endif  // __x86_64__ && !_WIN32

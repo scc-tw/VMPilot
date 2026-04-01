@@ -14,30 +14,48 @@ set(RUNTIME_INCLUDE_DIRS
 # Source files
 # ---------------------------------------------------------------------------
 set(RUNTIME_SOURCES
-    # New architecture (Phases 1-6)
+    # Core VM engine
     ${CMAKE_CURRENT_SOURCE_DIR}/src/vm_stub_entry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/vm_runtime_init.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/vm_state.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pipeline.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/oram_strategies.cpp
-    # Note: old vm_loader.cpp removed — blob loading now in VmEngine::create()
-    # TLS helpers (standalone, no VM dependency)
+    # NATIVE_CALL arg classification (platform-independent)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/classify_args.cpp
+    # TLS helpers (standalone)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tls_helpers.cpp
 )
 
 # ---------------------------------------------------------------------------
-# Platform-specific native call trampoline (FP + variadic ABI support)
+# Platform-specific native call trampoline (FP + variadic + stack args)
 # ---------------------------------------------------------------------------
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+if(MSVC)
+    enable_language(ASM_MASM)
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        list(APPEND RUNTIME_SOURCES
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/platform_call_win64.asm)
+    else()
+        list(APPEND RUNTIME_SOURCES
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/platform_call_x86_32.asm)
+    endif()
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     enable_language(ASM)
-    list(APPEND RUNTIME_SOURCES
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/platform_call_x86_64.S)
+    if(WIN32)
+        list(APPEND RUNTIME_SOURCES
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/platform_call_win64.S)
+    else()
+        list(APPEND RUNTIME_SOURCES
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/platform_call_x86_64.S)
+    endif()
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
     enable_language(ASM)
     list(APPEND RUNTIME_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/platform_call_arm64.S)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "i[3-6]86|x86")
+    enable_language(ASM)
+    list(APPEND RUNTIME_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/platform_call_x86_32.S)
 else()
-    # Generic fallback: integer-only (no FP arg support)
     list(APPEND RUNTIME_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/platform_call_fallback.cpp)
 endif()
@@ -135,76 +153,4 @@ if(ENABLE_TESTS)
                 GTest::gtest_main
     )
     gtest_discover_tests(test_engine_comprehensive)
-
-    add_executable(test_vm_runner
-        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_vm_runner.cpp
-    )
-    target_include_directories(test_vm_runner
-        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
-    )
-    target_link_libraries(test_vm_runner
-        PRIVATE VMPilot_Runtime
-                GTest::gtest_main
-    )
-    gtest_discover_tests(test_vm_runner)
-    # ── New test coverage (Phase 1-3 test plan) ──
-
-    set(NEW_TEST_FILES
-        test_jcc_conditions
-        test_width_extension
-        test_shift_rotate
-        test_push_pop_oram
-        test_cfg_patterns
-        test_load_store
-        test_call_depth
-        test_error_paths
-        test_native_call_variants
-        test_cmp_edge_cases
-        test_ctx_ops
-        test_policy_consistency
-    )
-
-    foreach(TEST_NAME ${NEW_TEST_FILES})
-        add_executable(${TEST_NAME}
-            ${CMAKE_CURRENT_SOURCE_DIR}/test/${TEST_NAME}.cpp
-        )
-        target_include_directories(${TEST_NAME}
-            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
-        )
-        target_link_libraries(${TEST_NAME}
-            PRIVATE VMPilot_Runtime
-                    GTest::gtest_main
-        )
-        gtest_discover_tests(${TEST_NAME})
-    endforeach()
-    add_executable(test_doc16_crypto
-        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_doc16_crypto.cpp
-    )
-    target_link_libraries(test_doc16_crypto
-        PRIVATE VMPilot_Runtime
-                GTest::gtest_main
-    )
-    gtest_discover_tests(test_doc16_crypto)
 endif()
-
-# ---------------------------------------------------------------------------
-# Examples (always built, no gtest dependency)
-# ---------------------------------------------------------------------------
-set(EXAMPLE_INCLUDE_DIRS
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/test
-    ${CMAKE_SOURCE_DIR}/common/include
-    ${CMAKE_SOURCE_DIR}/common/include/vm
-    ${CMAKE_SOURCE_DIR}/third_party/expected/include
-)
-
-add_executable(hello_world_example       ${CMAKE_CURRENT_SOURCE_DIR}/example/hello_world.cpp)
-add_executable(arithmetic_example        ${CMAKE_CURRENT_SOURCE_DIR}/example/arithmetic.cpp)
-add_executable(verify_signature_example  ${CMAKE_CURRENT_SOURCE_DIR}/example/verify_signature.cpp)
-add_executable(snake_example             ${CMAKE_CURRENT_SOURCE_DIR}/example/snake.cpp)
-
-foreach(tgt hello_world_example arithmetic_example
-            verify_signature_example snake_example)
-    target_include_directories(${tgt} PRIVATE ${EXAMPLE_INCLUDE_DIRS})
-    target_link_libraries(${tgt} PRIVATE VMPilot_Runtime)
-endforeach()

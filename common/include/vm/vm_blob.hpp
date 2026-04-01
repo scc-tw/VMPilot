@@ -46,7 +46,7 @@ namespace VMPilot::Common::VM {
 constexpr uint32_t VM_BLOB_MAGIC   = 0x31504D56;
 
 /// Blob format version.  Breaking changes increment this.
-constexpr uint16_t VM_BLOB_VERSION = 1;
+constexpr uint16_t VM_BLOB_VERSION = 2;  // v2: TransitionEntry bit layout change (revert to 1 before release)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Header (32 bytes)
@@ -112,22 +112,21 @@ constexpr uint16_t BB_FLAG_EPOCH_CHANGED = 0x0001;
 // Transition entry (32 bytes, for NATIVE_CALL)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Per-NATIVE_CALL metadata: target, arg layout, and ephemeral encoding.
+/// Per-NATIVE_CALL metadata: target, arg layout, and calling convention.
 ///
-/// arg_count is bit-packed to carry FP/variadic metadata without growing
-/// the struct (preserves 32-byte blob alignment):
+/// arg_count is bit-packed (v2 layout):
 ///
-///   [3:0]   = actual_arg_count (0–8)
-///   [11:4]  = fp_arg_mask (bit i set ⇒ arg i is double/float)
-///   [15:12] = flags:
-///       bit 12: is_variadic (x86-64: sets AL = fp arg count)
-///       bit 13: returns_fp  (result in xmm0/d0 instead of rax/x0)
-///       bit 14: returns_struct (hidden first pointer arg)
-///       bit 15: reserved
-///   [31:16] = struct_return_size (bytes, if returns_struct)
-///
-/// Backward compat: old blobs have arg_count ≤ 8 → upper bits = 0
-/// → no FP, not variadic, int return.  Identical to legacy behavior.
+///   [4:0]   = actual_arg_count (0–31)
+///   [12:5]  = fp_arg_mask (bit i set ⇒ arg i is double/float)
+///   [13]    = is_variadic (x86-64 SysV: sets AL = fp arg count)
+///   [14]    = returns_fp  (result in xmm0/d0/ST(0) instead of rax/x0/eax)
+///   [15]    = returns_struct (hidden first pointer arg)
+///   [17:16] = calling_convention:
+///       00 = platform-default (cdecl on x86-32, SysV on Linux x64, MS on Win x64)
+///       01 = stdcall (Windows x86-32: callee cleans stack)
+///       10 = thiscall (reserved — issue #13)
+///       11 = fastcall (reserved — issue #13)
+///   [31:18] = struct_return_size (14 bits, max 16383 bytes)
 struct TransitionEntry {
     uint32_t call_site_ip;        ///< instruction index of the NATIVE_CALL
     uint32_t arg_count;           ///< bit-packed: see above
@@ -137,24 +136,48 @@ struct TransitionEntry {
 };
 static_assert(sizeof(TransitionEntry) == 32, "TransitionEntry must be exactly 32 bytes");
 
-/// Helpers for TransitionEntry.arg_count bit-field extraction.
+/// Helpers for TransitionEntry.arg_count bit-field extraction (v2 layout).
 constexpr uint8_t te_arg_count(const TransitionEntry& e) noexcept {
-    return static_cast<uint8_t>(e.arg_count & 0x0Fu);
+    return static_cast<uint8_t>(e.arg_count & 0x1Fu);  // 5 bits (0-31)
 }
 constexpr uint8_t te_fp_mask(const TransitionEntry& e) noexcept {
-    return static_cast<uint8_t>((e.arg_count >> 4) & 0xFFu);
+    return static_cast<uint8_t>((e.arg_count >> 5) & 0xFFu);  // 8 bits
 }
 constexpr bool te_is_variadic(const TransitionEntry& e) noexcept {
-    return (e.arg_count & (1u << 12)) != 0;
-}
-constexpr bool te_returns_fp(const TransitionEntry& e) noexcept {
     return (e.arg_count & (1u << 13)) != 0;
 }
-constexpr bool te_returns_struct(const TransitionEntry& e) noexcept {
+constexpr bool te_returns_fp(const TransitionEntry& e) noexcept {
     return (e.arg_count & (1u << 14)) != 0;
 }
+constexpr bool te_returns_struct(const TransitionEntry& e) noexcept {
+    return (e.arg_count & (1u << 15)) != 0;
+}
+constexpr uint8_t te_convention(const TransitionEntry& e) noexcept {
+    return static_cast<uint8_t>((e.arg_count >> 16) & 0x03u);  // 2 bits
+}
 constexpr uint16_t te_struct_size(const TransitionEntry& e) noexcept {
-    return static_cast<uint16_t>(e.arg_count >> 16);
+    return static_cast<uint16_t>(e.arg_count >> 18);  // 14 bits
+}
+
+/// Calling convention constants for te_convention().
+constexpr uint8_t TE_CONV_DEFAULT  = 0;  ///< cdecl (x86-32) / SysV (Linux x64) / MS (Win x64)
+constexpr uint8_t TE_CONV_STDCALL  = 1;  ///< Windows x86-32: callee cleans stack
+constexpr uint8_t TE_CONV_THISCALL = 2;  ///< reserved (issue #13)
+constexpr uint8_t TE_CONV_FASTCALL = 3;  ///< reserved (issue #13)
+
+/// Build a v2 arg_count value from components.
+constexpr uint32_t te_pack_arg_count(
+    uint8_t argc, uint8_t fp_mask, bool is_variadic, bool returns_fp,
+    bool returns_struct, uint8_t convention = 0,
+    uint16_t struct_size = 0) noexcept
+{
+    return (static_cast<uint32_t>(argc & 0x1F))
+         | (static_cast<uint32_t>(fp_mask)          << 5)
+         | (static_cast<uint32_t>(is_variadic)      << 13)
+         | (static_cast<uint32_t>(returns_fp)        << 14)
+         | (static_cast<uint32_t>(returns_struct)    << 15)
+         | (static_cast<uint32_t>(convention & 0x03) << 16)
+         | (static_cast<uint32_t>(struct_size)       << 18);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

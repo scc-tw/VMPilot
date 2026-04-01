@@ -1,35 +1,31 @@
 /// @file platform_call_fallback.cpp
 /// @brief Generic fallback for platform_call (integer args only).
 ///
-/// Used on platforms without a dedicated ASM trampoline (Windows x86,
-/// exotic architectures).  FP args are passed as integer bit-patterns
-/// which is ABI-incorrect for FP-typed parameters but works for
-/// integer-only native calls (the vast majority of protected code).
+/// Used on platforms without a dedicated ASM trampoline.
+/// FP args are passed as integer bit-patterns — ABI-incorrect for
+/// FP-typed parameters but works for integer-only native calls.
 
 #include "platform_call.hpp"
 
-// Only compile if no ASM trampoline is available for this platform.
-#if !defined(__x86_64__) || defined(_WIN32)
-#if !defined(__aarch64__)
+// Only compile if no ASM trampoline is available
+#if (!defined(__x86_64__) && !defined(_M_X64) && !defined(__aarch64__) && !defined(_M_ARM64) && !defined(__i386__) && !defined(_M_IX86))
 
 extern "C"
-uint64_t platform_call(
-    void* target,
-    const uint64_t* int_regs,
-    const uint64_t* fp_regs,
-    uint8_t flags) noexcept
-{
-    (void)fp_regs;
-    (void)flags;
-
-    // Integer-only fallback: pass all args as uint64_t.
-    // FP args will be in the wrong registers (int instead of xmm/d).
+uint64_t platform_call(const VMPilot::Runtime::PlatformCallDesc* desc) noexcept {
     using Fn = uint64_t(*)(uint64_t,uint64_t,uint64_t,uint64_t,
                             uint64_t,uint64_t,uint64_t,uint64_t);
-    auto fn = reinterpret_cast<Fn>(target);
-    return fn(int_regs[0], int_regs[1], int_regs[2], int_regs[3],
-              int_regs[4], int_regs[5], int_regs[6], int_regs[7]);
+    auto fn = reinterpret_cast<Fn>(desc->target);
+    return fn(desc->int_regs[0], desc->int_regs[1], desc->int_regs[2], desc->int_regs[3],
+              desc->int_regs[4], desc->int_regs[5], desc->int_regs[6], desc->int_regs[7]);
 }
 
-#endif  // !__aarch64__
-#endif  // !__x86_64__ || _WIN32
+extern "C"
+uint64_t platform_call_struct(
+    const VMPilot::Runtime::PlatformCallDesc* desc,
+    void* /*struct_return_ptr*/) noexcept
+{
+    // Fallback: struct ptr already in int_regs[0] via classify_args
+    return platform_call(desc);
+}
+
+#endif
