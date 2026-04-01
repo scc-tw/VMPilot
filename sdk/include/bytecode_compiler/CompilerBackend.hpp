@@ -15,7 +15,6 @@ namespace VMPilot::SDK::BytecodeCompiler {
 
 /// Configuration passed to every backend invocation.
 struct CompileConfig {
-    std::string opcode_key;     // BLAKE3 key for opcode obfuscation
     bool debug_mode = false;    // preserve intermediate files for diagnosis
 };
 
@@ -37,11 +36,8 @@ public:
 
 /// Factory.  Currently supports: "simple".  Future: "llvm".
 /// @param name   Backend name (e.g. "simple").
-/// @param config Compile configuration — some backends need the opcode key
-///               at construction time for table generation.
 [[nodiscard]] std::unique_ptr<CompilerBackend>
-create_backend(const std::string& name,
-               const CompileConfig& config) noexcept;
+create_backend(const std::string& name) noexcept;
 
 }  // namespace VMPilot::SDK::BytecodeCompiler
 

@@ -9,12 +9,9 @@ using namespace VMPilot::SDK::Core;
 using namespace VMPilot::SDK::Segmentator;
 using VMPilot::Common::DiagnosticCollector;
 
-static const std::string TEST_KEY =
-    "01234567890123456789012345678901";
-
 class OrchestratorTest : public ::testing::Test {
 protected:
-    CompileConfig config{TEST_KEY, false};
+    CompileConfig config{false};
 
     std::vector<CompilationUnit> make_units(int count) {
         CompilationContext ctx_val;
@@ -41,7 +38,7 @@ protected:
 
 TEST_F(OrchestratorTest, EmptyUnits) {
     DiagnosticCollector diag;
-    auto backend = std::make_unique<SimpleBackend>(TEST_KEY);
+    auto backend = std::make_unique<SimpleBackend>();
     CompilationOrchestrator orch(std::move(backend), config, 2);
 
     auto units = make_units(0);
@@ -54,7 +51,7 @@ TEST_F(OrchestratorTest, EmptyUnits) {
 
 TEST_F(OrchestratorTest, SingleUnit) {
     DiagnosticCollector diag;
-    auto backend = std::make_unique<SimpleBackend>(TEST_KEY);
+    auto backend = std::make_unique<SimpleBackend>();
     CompilationOrchestrator orch(std::move(backend), config, 2);
 
     auto units = make_units(1);
@@ -68,7 +65,7 @@ TEST_F(OrchestratorTest, SingleUnit) {
 
 TEST_F(OrchestratorTest, MultipleUnitsParallel) {
     DiagnosticCollector diag;
-    auto backend = std::make_unique<SimpleBackend>(TEST_KEY);
+    auto backend = std::make_unique<SimpleBackend>();
     CompilationOrchestrator orch(std::move(backend), config, 4);
 
     auto units = make_units(20);
@@ -90,17 +87,17 @@ TEST_F(OrchestratorTest, NullBackendReturnsError) {
 
 TEST_F(OrchestratorTest, OutputBytecodesAreValid) {
     DiagnosticCollector diag;
-    auto backend = std::make_unique<SimpleBackend>(TEST_KEY);
+    auto backend = std::make_unique<SimpleBackend>();
     CompilationOrchestrator orch(std::move(backend), config, 2);
 
     auto units = make_units(3);
     auto comp = orch.compile(units, diag);
     ASSERT_TRUE(comp.has_value());
 
-    VMPilot::Common::Instruction instr_helper;
-    for (const auto& output : comp->outputs) {
-        for (const auto& inst : output.bytecodes) {
-            EXPECT_TRUE(instr_helper.check(inst));
-        }
+    for (size_t i = 0; i < comp->outputs.size(); ++i) {
+        EXPECT_FALSE(comp->outputs[i].bytecodes.empty())
+            << "output " << i << " should have non-empty bytecodes";
+        // Stub backend copies code bytes verbatim
+        EXPECT_EQ(comp->outputs[i].bytecodes.size(), 5u);
     }
 }

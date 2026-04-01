@@ -2,7 +2,7 @@ add_subdirectory(crypto)
 
 find_package(Threads REQUIRED)
 
-set(LIB_NAME opcode_table)
+set(LIB_NAME VMPilot_Common)
 
 # Platform-specific hardware RNG implementation
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
@@ -17,8 +17,6 @@ else()
 endif()
 
 add_library(${LIB_NAME} STATIC
-    src/opcode_table.cpp
-    src/instruction_t.cpp
     src/file_type_parser.cpp
     src/utilities.cpp
     src/macho_parser.cpp

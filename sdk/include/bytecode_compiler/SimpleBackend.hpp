@@ -3,30 +3,23 @@
 #pragma once
 
 #include <CompilerBackend.hpp>
-#include <opcode_table.hpp>
 
 namespace VMPilot::SDK::BytecodeCompiler {
 
-/// Structural stub backend that emits MOV instructions for each code byte.
+/// Trivial stub backend that copies native bytes into the output blob.
 ///
-/// Produces valid Instruction_t values that pass Instruction::check(),
-/// enabling end-to-end pipeline testing.  Thread-safe: the cached opcode
-/// table is read-only after construction.
+/// The real backend will emit an encrypted VmInsn stream; this stub
+/// exists to keep the pipeline end-to-end testable.
 class SimpleBackend final : public CompilerBackend {
 public:
-    explicit SimpleBackend(const std::string& opcode_key);
+    SimpleBackend() = default;
 
     [[nodiscard]] tl::expected<CompilationOutput, Common::DiagnosticCode>
     compile_unit(const Core::CompilationUnit& unit,
                  const CompileConfig& config,
                  Common::DiagnosticCollector& diag) noexcept override;
 
-    [[nodiscard]] std::string name() const noexcept override {
-        return "simple";
-    }
-
-private:
-    Common::Buildtime_OT buildtime_ot_;
+    [[nodiscard]] std::string name() const noexcept override { return "simple"; }
 };
 
 }  // namespace VMPilot::SDK::BytecodeCompiler

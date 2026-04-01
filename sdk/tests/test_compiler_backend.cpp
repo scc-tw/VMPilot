@@ -2,7 +2,6 @@
 #include <SimpleBackend.hpp>
 #include <CompilationUnit.hpp>
 #include <diagnostic_collector.hpp>
-#include <instruction_t.hpp>
 
 #include <gtest/gtest.h>
 
@@ -11,13 +10,10 @@ using VMPilot::SDK::Core::CompilationUnit;
 using VMPilot::Common::DiagnosticCollector;
 using VMPilot::Common::DiagnosticCode;
 
-static const std::string TEST_KEY =
-    "01234567890123456789012345678901";
-
 class SimpleBackendTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        backend = std::make_unique<SimpleBackend>(TEST_KEY);
+        backend = std::make_unique<SimpleBackend>();
     }
 
     CompilationUnit make_unit(const std::string& name,
@@ -32,7 +28,7 @@ protected:
     }
 
     std::unique_ptr<SimpleBackend> backend;
-    CompileConfig config{TEST_KEY, false};
+    CompileConfig config{false};
     DiagnosticCollector diag;
 };
 
@@ -55,21 +51,10 @@ TEST_F(SimpleBackendTest, SingleByte) {
     EXPECT_EQ(result->name, "single");
     EXPECT_EQ(result->addr, 0x1000u);
     ASSERT_EQ(result->bytecodes.size(), 1u);
+    EXPECT_EQ(result->bytecodes[0], 0x90);
 }
 
-TEST_F(SimpleBackendTest, BytecodesPassChecksum) {
-    auto unit = make_unit("checksum_test", {0x55, 0x89, 0xe5, 0xc3});
-    auto result = backend->compile_unit(unit, config, diag);
-    ASSERT_TRUE(result.has_value());
-    ASSERT_EQ(result->bytecodes.size(), 4u);
-
-    VMPilot::Common::Instruction instr_helper;
-    for (const auto& inst : result->bytecodes) {
-        EXPECT_TRUE(instr_helper.check(inst));
-    }
-}
-
-TEST_F(SimpleBackendTest, BytecodesEncodeCorrectValues) {
+TEST_F(SimpleBackendTest, BytecodesMatchInputCode) {
     std::vector<uint8_t> code = {0xAA, 0xBB, 0xCC};
     auto unit = make_unit("values", code);
     auto result = backend->compile_unit(unit, config, diag);
@@ -77,8 +62,7 @@ TEST_F(SimpleBackendTest, BytecodesEncodeCorrectValues) {
     ASSERT_EQ(result->bytecodes.size(), 3u);
 
     for (size_t i = 0; i < code.size(); ++i) {
-        EXPECT_EQ(result->bytecodes[i].left_operand, i);
-        EXPECT_EQ(result->bytecodes[i].right_operand, code[i]);
+        EXPECT_EQ(result->bytecodes[i], code[i]);
     }
 }
 
@@ -90,23 +74,21 @@ TEST_F(SimpleBackendTest, LargerCode) {
     auto result = backend->compile_unit(unit, config, diag);
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->bytecodes.size(), 256u);
+    EXPECT_EQ(result->bytecodes, code);
 }
 
 TEST(BackendFactory, SimpleCreation) {
-    CompileConfig config{TEST_KEY, false};
-    auto backend = create_backend("simple", config);
+    auto backend = create_backend("simple");
     ASSERT_NE(backend, nullptr);
     EXPECT_EQ(backend->name(), "simple");
 }
 
 TEST(BackendFactory, UnknownReturnsNull) {
-    CompileConfig config{TEST_KEY, false};
-    auto backend = create_backend("nonexistent", config);
+    auto backend = create_backend("nonexistent");
     EXPECT_EQ(backend, nullptr);
 }
 
 TEST(BackendFactory, LLVMNotYetImplemented) {
-    CompileConfig config{TEST_KEY, false};
-    auto backend = create_backend("llvm", config);
+    auto backend = create_backend("llvm");
     EXPECT_EQ(backend, nullptr);
 }

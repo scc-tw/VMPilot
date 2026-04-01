@@ -93,7 +93,7 @@ compile_binary(const std::string& binary_path,
     }
 
     // 4. Create backend and compile
-    auto backend = create_backend(backend_name, config);
+    auto backend = create_backend(backend_name);
     if (!backend) {
         diag.error("compiler", DiagnosticCode::BackendCreationFailed,
                    "unknown or failed backend: " + backend_name);

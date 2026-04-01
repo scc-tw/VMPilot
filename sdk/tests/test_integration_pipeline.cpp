@@ -1,13 +1,12 @@
 /// Integration tests using real compiled binaries.
 ///
-/// Tests the full pipeline: segment → build_units → dump → load → compile
+/// Tests the full pipeline: segment -> build_units -> dump -> load -> compile
 /// across multiple test data sets and platforms.
 
 #include <Serializer.hpp>
 #include <SerializationTraits.hpp>
 #include <compile_pipeline.hpp>
 #include <diagnostic_collector.hpp>
-#include <instruction_t.hpp>
 #include <segmentator.hpp>
 
 #include <gtest/gtest.h>
@@ -40,9 +39,6 @@ using VMPilot::Common::DiagnosticCode;
 #ifndef TEST_DATA_DATA_REFS
 #define TEST_DATA_DATA_REFS ""
 #endif
-
-static const std::string TEST_KEY =
-    "01234567890123456789012345678901";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -78,19 +74,15 @@ TEST_F(BasicPipelineTest, FullPipelineEndToEnd) {
     if (binary.empty()) GTEST_SKIP() << "No basic test binary found";
 
     DiagnosticCollector diag;
-    BytecodeCompiler::CompileConfig config{TEST_KEY, false};
+    BytecodeCompiler::CompileConfig config{false};
     auto result = BytecodeCompiler::compile_binary(binary, config, diag);
     ASSERT_TRUE(result.has_value()) << diag.summary();
     EXPECT_GT(result->total_units, 0u);
     EXPECT_EQ(result->failed_units, 0u);
 
-    // Every output should have valid bytecodes
-    VMPilot::Common::Instruction instr_helper;
+    // Every output should have non-empty bytecodes
     for (const auto& out : result->outputs) {
         EXPECT_FALSE(out.bytecodes.empty()) << out.name;
-        for (const auto& inst : out.bytecodes) {
-            EXPECT_TRUE(instr_helper.check(inst)) << out.name;
-        }
     }
 }
 
@@ -164,7 +156,7 @@ TEST_F(MultiRegionTest, AllFunctionsCompile) {
     if (binary.empty()) GTEST_SKIP() << "No multi_region binary found";
 
     DiagnosticCollector diag;
-    BytecodeCompiler::CompileConfig config{TEST_KEY, false};
+    BytecodeCompiler::CompileConfig config{false};
     auto result = BytecodeCompiler::compile_binary(binary, config, diag);
     ASSERT_TRUE(result.has_value()) << diag.summary();
 
@@ -195,7 +187,7 @@ TEST_F(MultiRegionTest, RoundTrip) {
 }
 
 // ---------------------------------------------------------------------------
-// inline_heavy: Inlined protected function → multiple sites per group
+// inline_heavy: Inlined protected function -> multiple sites per group
 // ---------------------------------------------------------------------------
 
 class InlineHeavyTest : public ::testing::Test {
@@ -243,19 +235,16 @@ TEST_F(InlineHeavyTest, CompileAllCopies) {
     if (binary.empty()) GTEST_SKIP() << "No inline_heavy binary found";
 
     DiagnosticCollector diag;
-    BytecodeCompiler::CompileConfig config{TEST_KEY, false};
+    BytecodeCompiler::CompileConfig config{false};
     auto result = BytecodeCompiler::compile_binary(binary, config, diag);
     ASSERT_TRUE(result.has_value()) << diag.summary();
 
     EXPECT_GT(result->total_units, 0u);
     EXPECT_EQ(result->failed_units, 0u);
 
-    // All outputs should have valid bytecodes
-    VMPilot::Common::Instruction instr_helper;
+    // All outputs should have non-empty bytecodes
     for (const auto& out : result->outputs) {
-        for (const auto& inst : out.bytecodes) {
-            EXPECT_TRUE(instr_helper.check(inst)) << out.name;
-        }
+        EXPECT_FALSE(out.bytecodes.empty()) << out.name;
     }
 }
 
@@ -298,7 +287,7 @@ TEST_F(NestedProtectTest, BothFunctionsCompile) {
     if (binary.empty()) GTEST_SKIP() << "No nested_protect binary found";
 
     DiagnosticCollector diag;
-    BytecodeCompiler::CompileConfig config{TEST_KEY, false};
+    BytecodeCompiler::CompileConfig config{false};
     auto result = BytecodeCompiler::compile_binary(binary, config, diag);
     ASSERT_TRUE(result.has_value()) << diag.summary();
 
@@ -372,19 +361,15 @@ TEST_F(DataRefsTest, FullPipelineCompiles) {
     if (binary.empty()) GTEST_SKIP() << "No data_refs binary found";
 
     DiagnosticCollector diag;
-    BytecodeCompiler::CompileConfig config{TEST_KEY, false};
+    BytecodeCompiler::CompileConfig config{false};
     auto result = BytecodeCompiler::compile_binary(binary, config, diag);
     ASSERT_TRUE(result.has_value()) << diag.summary();
 
     EXPECT_GE(result->total_units, 2u);
     EXPECT_EQ(result->failed_units, 0u);
 
-    VMPilot::Common::Instruction instr_helper;
     for (const auto& out : result->outputs) {
         EXPECT_FALSE(out.bytecodes.empty()) << out.name;
-        for (const auto& inst : out.bytecodes) {
-            EXPECT_TRUE(instr_helper.check(inst)) << out.name;
-        }
     }
 }
 

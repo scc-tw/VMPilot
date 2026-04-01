@@ -27,15 +27,15 @@ target_link_libraries(dump_regions
     VMPilot_SDK_Segmentator
     VMPilot_SDK_RegionRefiner
     capstone_wrapper
-    opcode_table
+    VMPilot_Common
 )
 
 include(${CMAKE_SOURCE_DIR}/cmake/SuppressThirdPartyWarnings.cmake)
 
 add_executable(dump_compile dump_compile.cpp)
 suppress_thirdparty_warnings(dump_compile)
-target_link_libraries(dump_compile VMPilot_SDK_LIB opcode_table)
+target_link_libraries(dump_compile VMPilot_SDK_LIB VMPilot_Common)
 
 add_executable(verify_roundtrip verify_roundtrip.cpp)
 suppress_thirdparty_warnings(verify_roundtrip)
-target_link_libraries(verify_roundtrip VMPilot_SDK_LIB opcode_table)
+target_link_libraries(verify_roundtrip VMPilot_SDK_LIB VMPilot_Common)

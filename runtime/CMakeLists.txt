@@ -50,7 +50,7 @@ target_include_directories(VMPilot_Runtime
 )
 
 target_link_libraries(VMPilot_Runtime
-    PUBLIC  opcode_table
+    PUBLIC  VMPilot_Common
     PRIVATE Threads::Threads
             vmpilot_options
             vmpilot_sanitizer

@@ -29,7 +29,7 @@ target_include_directories(${TARGET_NAME}
 )
 
 target_link_libraries(${TARGET_NAME}
-    PRIVATE opcode_table
+    PRIVATE VMPilot_Common
             vmpilot_options
             vmpilot_sanitizer
 )

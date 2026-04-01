@@ -41,10 +41,10 @@ add_executable(test_capstone_wrapper test_capstone_wrapper.cpp)
 target_link_libraries(test_capstone_wrapper GTest::gtest_main capstone_wrapper)
 
 add_executable(test_elf_handler test_elf_handler.cpp)
-target_link_libraries(test_elf_handler GTest::gtest_main VMPilot_SDK_Segmentator capstone_wrapper opcode_table)
+target_link_libraries(test_elf_handler GTest::gtest_main VMPilot_SDK_Segmentator capstone_wrapper VMPilot_Common)
 
 add_executable(test_x86_handler test_x86_handler.cpp)
-target_link_libraries(test_x86_handler GTest::gtest_main VMPilot_SDK_Segmentator capstone_wrapper opcode_table)
+target_link_libraries(test_x86_handler GTest::gtest_main VMPilot_SDK_Segmentator capstone_wrapper VMPilot_Common)
 
 add_executable(test_region_refiner test_region_refiner.cpp)
 target_link_libraries(test_region_refiner GTest::gtest_main VMPilot_SDK_RegionRefiner)
@@ -53,7 +53,7 @@ add_executable(test_region_grouping test_region_grouping.cpp)
 target_link_libraries(test_region_grouping GTest::gtest_main VMPilot_SDK_RegionRefiner)
 
 add_executable(test_strategy test_strategy.cpp)
-target_link_libraries(test_strategy GTest::gtest_main VMPilot_SDK_Segmentator capstone_wrapper opcode_table)
+target_link_libraries(test_strategy GTest::gtest_main VMPilot_SDK_Segmentator capstone_wrapper VMPilot_Common)
 
 add_executable(test_bytecode_compiler test_bytecode_compiler.cpp)
 target_link_libraries(test_bytecode_compiler GTest::gtest_main VMPilot_SDK_LIB)
@@ -62,16 +62,16 @@ add_executable(test_segmentator_integration test_segmentator_integration.cpp)
 target_link_libraries(test_segmentator_integration GTest::gtest_main VMPilot_SDK_LIB)
 
 add_executable(test_thread_pool test_thread_pool.cpp)
-target_link_libraries(test_thread_pool GTest::gtest_main opcode_table)
+target_link_libraries(test_thread_pool GTest::gtest_main VMPilot_Common)
 
 add_executable(test_compilation_unit test_compilation_unit.cpp)
 target_link_libraries(test_compilation_unit GTest::gtest_main)
 
 add_executable(test_compiler_backend test_compiler_backend.cpp)
-target_link_libraries(test_compiler_backend GTest::gtest_main VMPilot_SDK_Bytecode_Compiler opcode_table)
+target_link_libraries(test_compiler_backend GTest::gtest_main VMPilot_SDK_Bytecode_Compiler VMPilot_Common)
 
 add_executable(test_compilation_orchestrator test_compilation_orchestrator.cpp)
-target_link_libraries(test_compilation_orchestrator GTest::gtest_main VMPilot_SDK_Bytecode_Compiler opcode_table)
+target_link_libraries(test_compilation_orchestrator GTest::gtest_main VMPilot_SDK_Bytecode_Compiler VMPilot_Common)
 
 add_executable(test_compile_pipeline test_compile_pipeline.cpp)
 suppress_thirdparty_warnings(test_compile_pipeline)
@@ -81,22 +81,22 @@ target_link_libraries(test_compile_pipeline
 )
 
 add_executable(test_macho_handler test_macho_handler.cpp)
-target_link_libraries(test_macho_handler GTest::gtest_main VMPilot_SDK_Segmentator capstone_wrapper opcode_table)
+target_link_libraries(test_macho_handler GTest::gtest_main VMPilot_SDK_Segmentator capstone_wrapper VMPilot_Common)
 
 add_executable(test_arm64_handler test_arm64_handler.cpp)
-target_link_libraries(test_arm64_handler GTest::gtest_main VMPilot_SDK_Segmentator capstone_wrapper opcode_table)
+target_link_libraries(test_arm64_handler GTest::gtest_main VMPilot_SDK_Segmentator capstone_wrapper VMPilot_Common)
 
 add_executable(test_pe_handler test_pe_handler.cpp)
-target_link_libraries(test_pe_handler GTest::gtest_main VMPilot_SDK_Segmentator capstone_wrapper opcode_table)
+target_link_libraries(test_pe_handler GTest::gtest_main VMPilot_SDK_Segmentator capstone_wrapper VMPilot_Common)
 
 add_executable(test_section test_section.cpp)
 target_link_libraries(test_section GTest::gtest_main)
 
 add_executable(test_string_extraction test_string_extraction.cpp)
-target_link_libraries(test_string_extraction GTest::gtest_main VMPilot_SDK_Segmentator capstone_wrapper opcode_table)
+target_link_libraries(test_string_extraction GTest::gtest_main VMPilot_SDK_Segmentator capstone_wrapper VMPilot_Common)
 
 add_executable(test_segment_api test_segment_api.cpp)
-target_link_libraries(test_segment_api GTest::gtest_main VMPilot_SDK_Segmentator VMPilot_SDK_RegionRefiner capstone_wrapper opcode_table)
+target_link_libraries(test_segment_api GTest::gtest_main VMPilot_SDK_Segmentator VMPilot_SDK_RegionRefiner capstone_wrapper VMPilot_Common)
 
 include(${CMAKE_SOURCE_DIR}/cmake/SuppressThirdPartyWarnings.cmake)
 
@@ -111,7 +111,7 @@ target_link_libraries(test_serializer
     VMPilot_SDK_Segmentator
     VMPilot_SDK_RegionRefiner
     capstone_wrapper
-    opcode_table
+    VMPilot_Common
 )
 
 add_executable(test_write_classification test_write_classification.cpp)
@@ -143,7 +143,7 @@ target_link_libraries(test_pattern_layer
     VMPilot_SDK_ReferenceAnalyzer
     VMPilot_SDK_Segmentator
     capstone_wrapper
-    opcode_table
+    VMPilot_Common
 )
 
 add_executable(test_insn_layer test_insn_layer.cpp)
@@ -187,7 +187,7 @@ target_link_libraries(test_symbolic_resolver
     VMPilot_SDK_ReferenceAnalyzer
     VMPilot_SDK_Segmentator
     capstone_wrapper
-    opcode_table
+    VMPilot_Common
 )
 
 add_executable(test_memory_model test_memory_model.cpp)
@@ -209,7 +209,7 @@ target_link_libraries(test_reference_analyzer
     VMPilot_SDK_ReferenceAnalyzer
     VMPilot_SDK_Segmentator
     capstone_wrapper
-    opcode_table
+    VMPilot_Common
 )
 
 # Register with CTest
@@ -255,6 +255,6 @@ target_include_directories(test_integration_pipeline PRIVATE
 target_link_libraries(test_integration_pipeline
     GTest::gtest_main
     VMPilot_SDK_LIB
-    opcode_table
+    VMPilot_Common
 )
 gtest_discover_tests(test_integration_pipeline)

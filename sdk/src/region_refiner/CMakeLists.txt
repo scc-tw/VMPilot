@@ -13,4 +13,4 @@ set(INCLUDE_DIRS
 include_directories(${INCLUDE_DIRS})
 
 add_library(${TARGET_NAME} STATIC ${SRC_FILES})
-target_link_libraries(${TARGET_NAME} opcode_table)
+target_link_libraries(${TARGET_NAME} VMPilot_Common)

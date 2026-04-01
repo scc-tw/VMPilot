@@ -11,16 +11,13 @@ using VMPilot::Common::DiagnosticCode;
 
 namespace fs = std::filesystem;
 
-static const std::string TEST_KEY =
-    "01234567890123456789012345678901";
-
 class CompilePipelineTest : public ::testing::Test {
 protected:
     std::string binary_path =
         std::string(TEST_DATA_DIR) + "/basic_binary.Linux.x86";
 
     CompileConfig make_config(bool debug = false) {
-        return CompileConfig{TEST_KEY, debug};
+        return CompileConfig{debug};
     }
 };
 
@@ -82,13 +79,9 @@ TEST_F(CompilePipelineTest, OutputBytecodesValid) {
     auto result = compile_binary(binary_path, make_config(), diag);
     ASSERT_TRUE(result.has_value()) << diag.summary();
 
-    VMPilot::Common::Instruction instr_helper;
     for (const auto& output : result->outputs) {
         EXPECT_FALSE(output.name.empty());
-        EXPECT_FALSE(output.bytecodes.empty());
-        for (const auto& inst : output.bytecodes) {
-            EXPECT_TRUE(instr_helper.check(inst))
-                << "Invalid checksum in output for " << output.name;
-        }
+        EXPECT_FALSE(output.bytecodes.empty())
+            << "Empty bytecodes for " << output.name;
     }
 }

@@ -2,8 +2,6 @@
 #define __SDK_BYTECODE_COMPILER_COMPILATION_OUTPUT_HPP__
 #pragma once
 
-#include <instruction_t.hpp>
-
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -14,7 +12,11 @@ namespace VMPilot::SDK::BytecodeCompiler {
 struct CompilationOutput {
     std::string name;
     uint64_t addr = 0;
-    std::vector<Common::Instruction_t> bytecodes;
+
+    /// Raw VM bytecode blob (header + encrypted VmInsn stream + integrity table).
+    /// Format defined by doc 09 §2: "emission phase produces VmBytecodeBlob, not
+    /// individual Instruction_t structs."
+    std::vector<uint8_t> bytecodes;
 };
 
 }  // namespace VMPilot::SDK::BytecodeCompiler

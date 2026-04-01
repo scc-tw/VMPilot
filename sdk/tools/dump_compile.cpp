@@ -1,13 +1,13 @@
 /// dump_compile: Developer debug tool — dump full pipeline state at every stage.
 ///
-/// Usage: dump_compile <binary> [opcode_key]
+/// Usage: dump_compile <binary>
 ///
 /// Shows detailed output for each pipeline stage:
 ///   1. Segmentation: regions found, addresses, sizes, code hex
 ///   2. Grouping: groups, sites, canonical detection, enclosing symbols
 ///   3. Build units: CompilationUnit fields
 ///   4. Data references: per-unit reference analysis results
-///   5. Compilation: per-unit bytecodes with opcode/operand/checksum detail
+///   5. Compilation: per-unit bytecodes (raw blob hex)
 ///   6. Diagnostics: full diagnostic report
 
 #include <compile_pipeline.hpp>
@@ -16,7 +16,6 @@
 #include <Section.hpp>
 #include <capstone.hpp>
 #include <diagnostic_collector.hpp>
-#include <instruction_t.hpp>
 #include <segmentator.hpp>
 
 #include <cinttypes>
@@ -126,13 +125,10 @@ static std::string hexdump(const std::vector<uint8_t>& data, size_t max = 64) {
 }
 
 int main(int argc, char* argv[]) {
-    if (argc < 2 || argc > 3) {
-        fprintf(stderr, "Usage: %s <binary> [opcode_key]\n", argv[0]);
+    if (argc < 2 || argc > 2) {
+        fprintf(stderr, "Usage: %s <binary>\n", argv[0]);
         return 1;
     }
-
-    std::string opcode_key =
-        (argc >= 3) ? argv[2] : "01234567890123456789012345678901";
 
     DiagnosticCollector diag;
 
@@ -299,8 +295,8 @@ int main(int argc, char* argv[]) {
     }
 
     // ── Stage 4: Compilation ──
-    BytecodeCompiler::CompileConfig config{opcode_key, false};
-    auto backend = BytecodeCompiler::create_backend("simple", config);
+    BytecodeCompiler::CompileConfig config{false};
+    auto backend = BytecodeCompiler::create_backend("simple");
     if (!backend) {
         fprintf(stderr, "Failed to create backend\n");
         return 1;
@@ -327,29 +323,14 @@ int main(int argc, char* argv[]) {
     printf("  Succeeded:    %zu\n", result->outputs.size());
     printf("  Failed:       %zu\n\n", result->failed_units);
 
-    VMPilot::Common::Instruction instr_helper;
-
     for (size_t i = 0; i < result->outputs.size(); ++i) {
         const auto& out = result->outputs[i];
         printf("  Output [%zu] \"%s\"  addr=0x%" PRIx64
-               "  bytecodes=%zu\n",
+               "  bytecodes=%zu bytes\n",
                i, out.name.c_str(), out.addr, out.bytecodes.size());
 
-        // Show first few bytecodes in detail
-        size_t show = std::min(out.bytecodes.size(), size_t(5));
-        for (size_t j = 0; j < show; ++j) {
-            const auto& inst = out.bytecodes[j];
-            bool valid = instr_helper.check(inst);
-            printf("    [%3zu] opcode=0x%04x  L=%" PRIu64
-                   "  R=0x%02" PRIx64
-                   "  nonce=0x%08x  checksum=0x%04x  %s\n",
-                   j, inst.opcode, inst.left_operand,
-                   inst.right_operand, inst.nounce,
-                   inst.checksum, valid ? "OK" : "FAIL");
-        }
-        if (out.bytecodes.size() > show)
-            printf("    ... %zu more bytecodes\n",
-                   out.bytecodes.size() - show);
+        // Show first bytes as hex dump
+        printf("    %s\n", hexdump(out.bytecodes).c_str());
         printf("\n");
     }
 

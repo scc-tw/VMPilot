@@ -23,7 +23,7 @@ set (SRC_FILES ${SRC_FILES}
     ${CMAKE_CURRENT_SOURCE_DIR}/compile_pipeline.cpp
 )
 
-set (LIBS ${LIBS} opcode_table VMPilot_SDK_Segmentator VMPilot_SDK_ReferenceAnalyzer VMPilot_SDK_Serializer)
+set (LIBS ${LIBS} VMPilot_Common VMPilot_SDK_Segmentator VMPilot_SDK_ReferenceAnalyzer VMPilot_SDK_Serializer)
 
 include_directories(${INCLUDE_DIRS})
 
