@@ -1,22 +1,5 @@
-CPMAddPackage(
-    NAME ELFIO
-    GITHUB_REPOSITORY "serge1/ELFIO"
-    GIT_TAG "Release_3.12"
-)
-
-CPMAddPackage(
-    NAME COFFI
-    GITHUB_REPOSITORY "scc-tw/COFFI"
-    GIT_TAG "1.1.5"
-)
-
-CPMAddPackage("gh:gabime/spdlog@1.17.0")
-
-CPMAddPackage(
-    NAME tomlplusplus
-    GITHUB_REPOSITORY "marzer/tomlplusplus"
-    GIT_TAG "v3.4.0"
-)
+# CPM dependencies (ELFIO, COFFI, spdlog, toml++) are declared centrally
+# in cmake/Dependencies.cmake — not here.
 
 # Build abseil-cpp + protobuf from submodules.
 # Save and strip warnings-as-errors so third-party C code compiles cleanly.

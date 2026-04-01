@@ -50,8 +50,7 @@ target_include_directories(VMPilot_Runtime
 )
 
 target_link_libraries(VMPilot_Runtime
-    PUBLIC  nlohmann_json::nlohmann_json
-            opcode_table
+    PUBLIC  opcode_table
     PRIVATE Threads::Threads
             vmpilot_options
             vmpilot_sanitizer

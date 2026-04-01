@@ -1,0 +1,138 @@
+{
+    "version": 3,
+    "cmakeMinimumRequired": { "major": 3, "minor": 20, "patch": 0 },
+    "configurePresets": [
+        {
+            "name": "base",
+            "hidden": true,
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+            }
+        },
+        {
+            "name": "ninja",
+            "hidden": true,
+            "inherits": "base",
+            "generator": "Ninja"
+        },
+        {
+            "name": "vs2022",
+            "hidden": true,
+            "inherits": "base",
+            "generator": "Visual Studio 17 2022",
+            "architecture": { "value": "x64", "strategy": "set" }
+        },
+
+        {
+            "name": "dev",
+            "displayName": "Development (Debug + tests + sanitizers)",
+            "description": "Daily development on Linux / macOS",
+            "inherits": "ninja",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "VMPILOT_ENABLE_TESTS": "ON",
+                "VMPILOT_ENABLE_SANITIZERS": "ON"
+            }
+        },
+        {
+            "name": "dev-win",
+            "displayName": "Development — Windows (Debug + tests + sanitizers)",
+            "description": "Daily development on Windows with Visual Studio",
+            "inherits": "vs2022",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "VMPILOT_ENABLE_TESTS": "ON",
+                "VMPILOT_ENABLE_SANITIZERS": "ON"
+            }
+        },
+        {
+            "name": "release",
+            "displayName": "Release (optimised + LTO)",
+            "description": "Production build",
+            "inherits": "ninja",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "VMPILOT_ENABLE_TESTS": "OFF",
+                "VMPILOT_ENABLE_SANITIZERS": "OFF",
+                "VMPILOT_ENABLE_LTO": "ON"
+            }
+        },
+        {
+            "name": "release-win",
+            "displayName": "Release — Windows",
+            "inherits": "vs2022",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "VMPILOT_ENABLE_TESTS": "OFF",
+                "VMPILOT_ENABLE_SANITIZERS": "OFF",
+                "VMPILOT_ENABLE_LTO": "ON"
+            }
+        },
+        {
+            "name": "reldbg",
+            "displayName": "RelWithDebInfo (optimised + debuggable + sanitizers)",
+            "inherits": "ninja",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "VMPILOT_ENABLE_TESTS": "ON",
+                "VMPILOT_ENABLE_SANITIZERS": "ON"
+            }
+        },
+        {
+            "name": "minsize",
+            "displayName": "MinSizeRel (size-optimised)",
+            "inherits": "ninja",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "MinSizeRel",
+                "VMPILOT_ENABLE_TESTS": "OFF",
+                "VMPILOT_ENABLE_SANITIZERS": "OFF",
+                "VMPILOT_ENABLE_LTO": "ON"
+            }
+        },
+        {
+            "name": "ci",
+            "displayName": "CI (Debug + tests + sanitizers)",
+            "inherits": "dev"
+        },
+        {
+            "name": "ci-win",
+            "displayName": "CI — Windows",
+            "inherits": "dev-win"
+        }
+    ],
+    "buildPresets": [
+        { "name": "dev",         "configurePreset": "dev" },
+        { "name": "dev-win",     "configurePreset": "dev-win", "configuration": "Debug" },
+        { "name": "release",     "configurePreset": "release" },
+        { "name": "release-win", "configurePreset": "release-win", "configuration": "Release" },
+        { "name": "reldbg",      "configurePreset": "reldbg" },
+        { "name": "minsize",     "configurePreset": "minsize" },
+        { "name": "ci",          "configurePreset": "ci" },
+        { "name": "ci-win",      "configurePreset": "ci-win", "configuration": "Debug" }
+    ],
+    "testPresets": [
+        {
+            "name": "dev",
+            "configurePreset": "dev",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "dev-win",
+            "configurePreset": "dev-win",
+            "configuration": "Debug",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "ci",
+            "configurePreset": "ci",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "ci-win",
+            "configurePreset": "ci-win",
+            "configuration": "Debug",
+            "output": { "outputOnFailure": true }
+        }
+    ]
+}

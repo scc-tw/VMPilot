@@ -1,0 +1,29 @@
+# cmake/Sanitizers.cmake — vmpilot_sanitizer INTERFACE target
+#
+# ASan + UBsan, applied only to first-party targets.
+# Third-party code (abseil, protobuf) must NOT be sanitised:
+# GCC 15 + UBsan rejects constexpr fn-ptr null comparisons in
+# abseil's hash_policy_traits.h.
+
+add_library(vmpilot_sanitizer INTERFACE)
+
+if (VMPILOT_ENABLE_SANITIZERS)
+    if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        # ASan + UBsan work on x86_64, Apple Silicon (arm64), and x86.
+        # Only skip embedded ARM Linux where sanitizer runtime may be absent.
+        if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
+            CMAKE_SYSTEM_PROCESSOR MATCHES "^arm")
+            message(WARNING "Sanitizers not supported on ARM Linux — skipping")
+        else()
+            target_compile_options(vmpilot_sanitizer INTERFACE
+                -fsanitize=address,undefined
+                -fno-omit-frame-pointer)
+            target_link_options(vmpilot_sanitizer INTERFACE
+                -fsanitize=address,undefined)
+        endif()
+    elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+        # MSVC supports ASan only (no UBsan)
+        target_compile_options(vmpilot_sanitizer INTERFACE /fsanitize=address)
+        target_link_options(vmpilot_sanitizer INTERFACE /fsanitize=address)
+    endif()
+endif()
