@@ -34,7 +34,7 @@ int main() {
         .end_bb();
 
     auto blob = prog.build();
-    auto engine = VmEngine<DebugPolicy, DirectOram>::create(blob.data(), blob.size(), seed);
+    auto engine = VmEngine<StandardPolicy, RollingKeyOram>::create(blob.data(), blob.size(), seed);
     if (!engine) { std::fprintf(stderr, "create failed\n"); return 1; }
 
     auto result = engine->execute();

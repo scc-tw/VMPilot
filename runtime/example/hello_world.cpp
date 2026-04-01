@@ -67,7 +67,7 @@ int main() {
     uint64_t initial_regs[16] = {};
     initial_regs[0] = reinterpret_cast<uint64_t>(hello_str);
 
-    auto engine = VmEngine<DebugPolicy, DirectOram>::create(
+    auto engine = VmEngine<StandardPolicy, RollingKeyOram>::create(
         blob.data(), blob.size(), seed,
         /*load_base_delta=*/0,
         initial_regs, 1);

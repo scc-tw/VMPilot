@@ -303,7 +303,7 @@ int main() {
     auto blob = build_test_blob(seed, {bb1, bb2, bb3}, {}, false, ncs);
 
     uint64_t regs[16] = {};  // r10 = 0 for CMP
-    auto engine = VmEngine<DebugPolicy, DirectOram>::create(
+    auto engine = VmEngine<StandardPolicy, RollingKeyOram>::create(
         blob.data(), blob.size(), seed, 0, regs, 11);
     if (!engine) { std::fprintf(stderr, "VmEngine::create() failed\n"); return 1; }
 

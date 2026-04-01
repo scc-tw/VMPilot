@@ -126,7 +126,7 @@ static bool run_verification(const uint8_t seed[32],
     regs[2] = static_cast<uint64_t>(std::strlen(message));
     regs[3] = reinterpret_cast<uint64_t>(correct_mac);
 
-    auto engine = VmEngine<DebugPolicy, DirectOram>::create(
+    auto engine = VmEngine<StandardPolicy, RollingKeyOram>::create(
         blob.data(), blob.size(), seed, 0, regs, 4);
     if (!engine) { std::fprintf(stderr, "create failed\n"); return false; }
 
