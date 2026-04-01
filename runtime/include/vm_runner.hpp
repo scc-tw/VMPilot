@@ -38,6 +38,7 @@
 #include "blob_builder.hpp"
 
 #include <vm/vm_opcode.hpp>
+#include <vm/xex_speck64.hpp>
 
 #include <tl/expected.hpp>
 
@@ -93,12 +94,12 @@ public:
 
     /// Get the return value (decoded r0) after halting.
     /// Only valid after is_halted() returns true.
+    /// Doc 16: uses FPE_Decode with current insn_fpe_key (replaces LUT decode).
     [[nodiscard]] uint64_t return_value() const {
         if (!engine_) return 0;
-        auto decoded = decode_register(
-            engine_->epoch().reg.decode_lut(0),
-            engine_->execution().regs[0]);
-        return decoded.bits;
+        return Common::VM::Crypto::FPE_Decode(
+            engine_->execution().insn_fpe_key, 0,
+            engine_->execution().regs[0].bits);
     }
 
     /// Read-only access to the engine (for inspection).

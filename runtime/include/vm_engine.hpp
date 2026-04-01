@@ -138,12 +138,21 @@ static constexpr bool opcode_writes_reg(VmOpcode op) noexcept {
         // wrong for snapshot values -- RESYNC needs redesign for doc 16.
         case VmOpcode::SAVE_EPOCH:
         case VmOpcode::RESYNC:
+
+        // CALL_VM / RET_VM: shadow stack manipulation, not plaintext register writes.
+        // CALL_VM saves already-FPE-encoded regs[] to shadow_stack (no reg write).
+        // RET_VM restores FPE-encoded snapshot into regs[] and restores insn_fpe_key
+        // to the saved key, so regs[] are valid ciphertext under the restored key.
+        // Phase E must NOT re-encode them (double-encoding produces garbage).
+        // Phase H's re-encoding from restored key → ratcheted key handles the
+        // domain transition correctly.
+        case VmOpcode::CALL_VM:
+        case VmOpcode::RET_VM:
             return false;
 
         // Everything else writes a plaintext result to regs[reg_a]:
         // MOVE, LOAD, POP, LOAD_CONST, LOAD_CTX, GET_FLAG,
-        // ADD..MOD, AND..ROR, SEXT8..TRUNC16,
-        // CALL_VM, RET_VM, NATIVE_CALL,
+        // ADD..MOD, AND..ROR, SEXT8..TRUNC16, NATIVE_CALL,
         // LOCK_ADD, XCHG, CMPXCHG, ATOMIC_LOAD
         default:
             return true;

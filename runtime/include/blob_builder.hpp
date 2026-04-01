@@ -129,18 +129,21 @@ inline std::vector<uint8_t> build_blob(
     std::vector<uint8_t> blob(header.total_size, 0);
     std::memcpy(blob.data(), &header, sizeof(header));
 
-    // ── Derive keys ─────────────────────────────────────────────────────
+    // ── Derive keys (doc 16 §6: all via BLAKE3_KEYED, matching engine) ──
     uint8_t fast_key[16];
-    blake3_kdf(stored_seed, "fast", 4, fast_key, 16);
+    blake3_keyed_hash(stored_seed, reinterpret_cast<const uint8_t*>("fast"), 4, fast_key, 16);
 
     uint8_t meta_key[16];
-    blake3_kdf(stored_seed, "meta", 4, meta_key, 16);
+    blake3_keyed_hash(stored_seed, reinterpret_cast<const uint8_t*>("meta"), 4, meta_key, 16);
 
     uint8_t pool_key[16];
-    blake3_kdf(stored_seed, "pool", 4, pool_key, 16);
+    blake3_keyed_hash(stored_seed, reinterpret_cast<const uint8_t*>("pool"), 4, pool_key, 16);
 
     uint8_t integrity_key[32];
-    blake3_kdf(stored_seed, "integrity", 9, integrity_key, 32);
+    blake3_keyed_hash(stored_seed, reinterpret_cast<const uint8_t*>("integrity"), 9, integrity_key, 32);
+
+    uint8_t rekey_key[32];
+    blake3_keyed_hash(stored_seed, reinterpret_cast<const uint8_t*>("rekey"), 5, rekey_key, 32);
 
     // ── Build alias LUT ─────────────────────────────────────────────────
     uint8_t alias_lut[256];
@@ -183,7 +186,7 @@ inline std::vector<uint8_t> build_blob(
             std::memcpy(blob.data() + insn_offset + global_ip * 8,
                         &encrypted, 8);
 
-            // REKEY enc_state replay
+            // REKEY enc_state replay (must match runtime's handle_rekey)
             {
                 uint8_t sem = static_cast<uint8_t>(ti.opcode);
                 if (sem == static_cast<uint8_t>(VmOpcode::REKEY)) {
@@ -192,9 +195,7 @@ inline std::vector<uint8_t> build_blob(
                     std::memcpy(rk_ctx, "rekey", 5);
                     std::memcpy(rk_ctx + 5, &rk_counter, 4);
                     uint8_t rk_mat[16];
-                    blake3_kdf(stored_seed,
-                               reinterpret_cast<const char*>(rk_ctx), 9,
-                               rk_mat, 16);
+                    blake3_keyed_hash(rekey_key, rk_ctx, 9, rk_mat, 16);
                     uint8_t es[8];
                     std::memcpy(es, &enc_state, 8);
                     enc_state = siphash_2_4(rk_mat, es, 8);
@@ -208,44 +209,28 @@ inline std::vector<uint8_t> build_blob(
         }
     }
 
-    // ── Encrypt constant pool (per-register encoding) ───────────────────
+    // ── Encrypt constant pool ──────────────────────────────────────────
+    //
+    // Doc 16 change: pool values are stored as PLAINTEXT (not pre-encoded
+    // with per-BB LUT tables).  The runtime FPE-encodes them at LOAD_CONST
+    // time using the per-instruction FPE key.
+    //
+    // WHY plaintext pool:  Per-instruction FPE keys depend on execution
+    // history (RDRAND nonce + BLAKE3 chain), so the compiler cannot predict
+    // the key at pool encode time.  Storing plaintext is the only option.
+    // The SipHash encryption layer (D1) still protects pool values at rest.
     const uint32_t pool_offset = blob_section_pool(header);
-
-    struct BBEncodeTables {
-        uint8_t tables[VM_REG_COUNT][VM_BYTE_LANES][256];
-        bool derived = false;
-    };
-    std::vector<BBEncodeTables> bb_encode_cache(bb_count);
 
     for (uint32_t i = 0; i < pool_count; ++i) {
         const auto& pe = pool_entries[i];
-        uint32_t bb_idx = pe.target_bb_index;
-        uint8_t  reg    = pe.target_reg;
+        uint64_t plain = pe.plaintext;
 
-        if (bb_idx < bb_count && !bb_encode_cache[bb_idx].derived) {
-            uint8_t decode_tables[VM_REG_COUNT][VM_BYTE_LANES][256];
-            derive_register_tables(bbs[bb_idx].epoch_seed,
-                                   bbs[bb_idx].live_regs_bitmap,
-                                   bb_encode_cache[bb_idx].tables,
-                                   decode_tables);
-            bb_encode_cache[bb_idx].derived = true;
-        }
-
-        uint64_t encoded = 0;
-        if (bb_idx < bb_count) {
-            for (int k = 0; k < 8; ++k) {
-                uint8_t lane = static_cast<uint8_t>(pe.plaintext >> (k * 8));
-                encoded |= static_cast<uint64_t>(
-                    bb_encode_cache[bb_idx].tables[reg & 0x0F][k][lane])
-                    << (k * 8);
-            }
-        }
-
+        // Pool stores plaintext, encrypted only with SipHash keystream (D1)
         uint64_t idx = static_cast<uint64_t>(i);
         uint8_t idx_bytes[8];
         std::memcpy(idx_bytes, &idx, 8);
         uint64_t keystream = siphash_2_4(pool_key, idx_bytes, 8);
-        uint64_t enc_val = encoded ^ keystream;
+        uint64_t enc_val = plain ^ keystream;
         std::memcpy(blob.data() + pool_offset + i * 8, &enc_val, 8);
     }
 

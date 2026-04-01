@@ -37,6 +37,9 @@ static void fill_epoch(uint8_t seed[32], uint8_t base) {
 static uint8_t pool_none() {
     return static_cast<uint8_t>((VM_OPERAND_POOL << 6) | (VM_OPERAND_NONE << 4));
 }
+static uint8_t reg_none() {
+    return static_cast<uint8_t>((VM_OPERAND_REG << 6) | (VM_OPERAND_NONE << 4));
+}
 static uint8_t flags_none() { return 0; }
 
 template<typename Policy = DebugPolicy, typename Oram = DirectOram>
@@ -106,7 +109,7 @@ TEST(CtxOps, StoreCtxLoadCtxRoundtrip) {
     // LOAD_CONST r0=2048, STORE_CTX r0 → vm_sp, LOAD_CTX r0 → vm_sp, HALT
     auto engine = single_bb_engine(seed, 0xA2,
         {{VmOpcode::LOAD_CONST, pool_none(), 0, 0, 0},  // r0 = 2048
-         {VmOpcode::STORE_CTX, flags_none(), 0, 0, 1},   // vm_sp = r0
+         {VmOpcode::STORE_CTX, reg_none(), 0, 0, 1},     // vm_sp = r0 (operand A = REG)
          {VmOpcode::LOAD_CTX, flags_none(), 0, 0, 1},    // r0 = vm_sp
          {VmOpcode::HALT, flags_none(), 0, 0, 0}},
         {{2048, 0, 0}});

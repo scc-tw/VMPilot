@@ -76,6 +76,11 @@ target_link_libraries(VMPilot_Runtime
 )
 
 # ---------------------------------------------------------------------------
+# Examples
+# ---------------------------------------------------------------------------
+add_subdirectory(example)
+
+# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 if(ENABLE_TESTS)
@@ -153,4 +158,50 @@ if(ENABLE_TESTS)
                 GTest::gtest_main
     )
     gtest_discover_tests(test_engine_comprehensive)
+
+    # ── Test coverage tests (doc 16 compliance + opcode coverage) ──
+
+    set(_coverage_tests
+        test_jcc_conditions
+        test_width_extension
+        test_shift_rotate
+        test_push_pop_oram
+        test_cfg_patterns
+        test_load_store
+        test_call_depth
+        test_error_paths
+        test_native_call_variants
+        test_cmp_edge_cases
+        test_ctx_ops
+        test_policy_consistency
+    )
+
+    foreach(_t IN LISTS _coverage_tests)
+        add_executable(${_t}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test/${_t}.cpp
+        )
+        target_include_directories(${_t}
+            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+        )
+        target_link_libraries(${_t}
+            PRIVATE VMPilot_Runtime
+                    GTest::gtest_main
+        )
+        gtest_discover_tests(${_t})
+    endforeach()
+
+    # ── VmRunner factory tests ──
+
+    add_executable(test_vm_runner
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_vm_runner.cpp
+    )
+    target_include_directories(test_vm_runner
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+                ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(test_vm_runner
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+    gtest_discover_tests(test_vm_runner)
 endif()
