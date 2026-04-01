@@ -11,6 +11,7 @@
 
 #include <vm/hardware_rng.hpp>
 #include <cstdint>
+#include <immintrin.h>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -27,21 +28,21 @@ uint64_t hardware_random_u64() noexcept {
 #if defined(_M_X64) || defined(__x86_64__)
     {
         uint64_t val = 0;
-        unsigned char ok = 0;
-        for (int retries = 0; retries < 10 && !ok; ++retries)
-            __asm__ volatile("rdrand %0; setc %1" : "=r"(val), "=q"(ok));
-        if (ok) return val;
+        for (int retries = 0; retries < 10; ++retries) {
+            if (_rdrand64_step(reinterpret_cast<unsigned __int64*>(&val))) {
+                return val;
+            }
+        }
     }
 #elif defined(_M_IX86) || defined(__i386__)
     {
         uint32_t lo = 0, hi = 0;
-        unsigned char ok_lo = 0, ok_hi = 0;
-        for (int retries = 0; retries < 10 && !(ok_lo & ok_hi); ++retries) {
-            __asm__ volatile("rdrand %0; setc %1" : "=r"(lo), "=q"(ok_lo));
-            __asm__ volatile("rdrand %0; setc %1" : "=r"(hi), "=q"(ok_hi));
+        for (int retries = 0; retries < 10; ++retries) {
+            if (_rdrand32_step(reinterpret_cast<unsigned int*>(&lo)) && 
+                _rdrand32_step(reinterpret_cast<unsigned int*>(&hi))) {
+                return (static_cast<uint64_t>(hi) << 32) | lo;
+            }
         }
-        if (ok_lo & ok_hi)
-            return (static_cast<uint64_t>(hi) << 32) | lo;
     }
 #elif defined(_M_ARM64)
     // MSVC does not support inline assembly on ARM64.
