@@ -51,13 +51,15 @@ inline uint64_t hardware_random_u64() noexcept {
     unsigned char ok = 0;
     for (int retries = 0; retries < 10 && !ok; ++retries) {
 #if defined(__x86_64__) || defined(_M_X64)
-        __asm__ volatile("rdrand %0; setc %1" : "=r"(val), "=qm"(ok));
+        // "=q" (not "=qm"): force setc to a register to avoid ASan
+        // conflicts with inline-asm memory operands.
+        __asm__ volatile("rdrand %0; setc %1" : "=r"(val), "=q"(ok));
 #else
         // x86-32: RDRAND yields 32-bit values, combine two
         uint32_t lo = 0, hi = 0;
         unsigned char ok_lo = 0, ok_hi = 0;
-        __asm__ volatile("rdrand %0; setc %1" : "=r"(lo), "=qm"(ok_lo));
-        __asm__ volatile("rdrand %0; setc %1" : "=r"(hi), "=qm"(ok_hi));
+        __asm__ volatile("rdrand %0; setc %1" : "=r"(lo), "=q"(ok_lo));
+        __asm__ volatile("rdrand %0; setc %1" : "=r"(hi), "=q"(ok_hi));
         ok = ok_lo & ok_hi;
         val = (static_cast<uint64_t>(hi) << 32) | lo;
 #endif
