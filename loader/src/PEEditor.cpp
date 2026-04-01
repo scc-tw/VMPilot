@@ -108,7 +108,9 @@ PEEditor::add_segment_impl(std::string_view name,
     uint64_t seg_va = next_segment_va_impl(alignment);
     uint32_t rva = static_cast<uint32_t>(seg_va - impl_->image_base);
 
-    // Add new section via coffi-modern
+    // Add new section via coffi-modern.
+    // NOTE: add_section may reallocate the sections vector, invalidating
+    // any stored section pointers (including impl_->text_sec).
     auto& new_sec = pe.add_section(std::string{name},
         coffi::SCN_MEM_READ | coffi::SCN_MEM_WRITE |
         coffi::SCN_CNT_INITIALIZED_DATA);
@@ -116,6 +118,9 @@ PEEditor::add_segment_impl(std::string_view name,
                      static_cast<uint32_t>(payload.size()));
     new_sec.set_virtual_address(rva);
     new_sec.set_virtual_size(static_cast<uint32_t>(payload.size()));
+
+    // Refresh the cached .text pointer after potential reallocation.
+    impl_->text_sec = pe.find_section(".text");
 
     return NewSegmentInfo{seg_va, payload.size()};
 }

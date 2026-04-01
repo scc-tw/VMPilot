@@ -147,8 +147,9 @@ ELFFileHandlerStrategy::doGetSections() noexcept {
     namespace Core = VMPilot::SDK::Core;
     std::vector<Core::Section> result;
 
-    for (auto& [name, viewer] : pImpl->section_table) {
-        auto idx = viewer.getSectionIndex();
+    for (auto& kv : pImpl->section_table) {
+        const auto& sec_name = kv.first;
+        auto idx = kv.second.getSectionIndex();
         visit_file(pImpl->file, [&](auto& f) {
             auto sec = f.sections()[static_cast<uint16_t>(idx)];
             if (sec.size() == 0)
@@ -157,24 +158,24 @@ ELFFileHandlerStrategy::doGetSections() noexcept {
             Core::Section s;
             s.base_addr = sec.address();
             s.size = sec.size();
-            s.name = name;
+            s.name = sec_name;
 
             // Classify by name
-            if (name == ".text")
+            if (sec_name == ".text")
                 s.kind = Core::SectionKind::Text;
-            else if (name == ".rodata" || name == ".rodata.str1.1" ||
-                     name == ".rodata.str1.8" || name == ".rodata.cst4" ||
-                     name == ".rodata.cst8" || name == ".rodata.cst16")
+            else if (sec_name == ".rodata" || sec_name == ".rodata.str1.1" ||
+                     sec_name == ".rodata.str1.8" || sec_name == ".rodata.cst4" ||
+                     sec_name == ".rodata.cst8" || sec_name == ".rodata.cst16")
                 s.kind = Core::SectionKind::Rodata;
-            else if (name == ".data" || name == ".data.rel.ro")
+            else if (sec_name == ".data" || sec_name == ".data.rel.ro")
                 s.kind = Core::SectionKind::Data;
-            else if (name == ".bss")
+            else if (sec_name == ".bss")
                 s.kind = Core::SectionKind::Bss;
-            else if (name == ".tdata" || name == ".tbss")
+            else if (sec_name == ".tdata" || sec_name == ".tbss")
                 s.kind = Core::SectionKind::Tls;
-            else if (name.substr(0, 4) == ".got")
+            else if (sec_name.substr(0, 4) == ".got")
                 s.kind = Core::SectionKind::Got;
-            else if (name.substr(0, 4) == ".plt")
+            else if (sec_name.substr(0, 4) == ".plt")
                 s.kind = Core::SectionKind::Plt;
             else
                 s.kind = Core::SectionKind::Unknown;
@@ -227,17 +228,19 @@ ELFFileHandlerStrategy::buildRelocationMap() noexcept {
 
         if (pImpl->is_64) {
             // SHT_RELA sections
+            std::size_t idx = 0;
             for (auto rel : f.relas(rela_sec)) {
                 uint64_t symbol = rel.symbol();
                 uint64_t offset = rel.r_offset();
-                result[symbol] = {result.size(), offset};
+                result[symbol] = {idx++, offset};
             }
         } else {
             // SHT_REL sections
+            std::size_t idx = 0;
             for (auto rel : f.rels(rela_sec)) {
                 uint64_t symbol = rel.symbol();
                 uint64_t offset = rel.r_offset();
-                result[symbol] = {result.size(), offset};
+                result[symbol] = {idx++, offset};
             }
         }
     });
