@@ -633,6 +633,13 @@ struct HandlerTraits<VmOpcode::RET_VM, P> {
         auto& cp = e.shadow_stack[e.shadow_depth];
         for (int r = 0; r < VM_REG_COUNT; ++r)
             e.regs[r] = RegVal(cp.encoded_regs_snapshot[r]);
+        // Restore FPE key to the caller's domain (doc 16 §5 step 4).
+        // The register snapshot is ciphertext under saved_insn_fpe_key.
+        // enter_basic_block will use exec.insn_fpe_key as the "old" key
+        // for re-encoding — it must match the snapshot's domain, not the
+        // callee's current key.  Without this, FPE domain translation
+        // breaks and all registers become garbage after RET_VM.
+        std::memcpy(e.insn_fpe_key, cp.saved_insn_fpe_key, 16);
         e.branch_target_bb = cp.bb_id;
         e.branch_taken = true;
         e.return_resume_ip = cp.vm_ip + 1;
