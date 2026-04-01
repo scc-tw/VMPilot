@@ -197,8 +197,23 @@ enter_basic_block(VmExecution& exec,
     exec.insn_index_in_bb = 0;
     exec.vm_ip = target.entry_ip;
 
-    // 4. Handle epoch change: apply RE_TABLE before deriving new tables
-    if (target.epoch != exec.current_epoch) {
+    // 4. Re-encode all live registers + sanitize dead registers (doc 16 §5).
+    //
+    //    Unconditional on normal branches: forward secrecy requires the
+    //    outgoing key domain to be destroyed on every BB transition.
+    //
+    //    Exception: RET_VM returns.  RET_VM restored the register snapshot
+    //    which is in the CALLER BB's encoding domain (saved at CALL_VM time).
+    //    The current epoch tables are the callee's — using them as the "old"
+    //    decode source would corrupt the snapshot.  Since the target IS the
+    //    caller BB and epoch_seed is deterministic, enter_bb() below will
+    //    re-derive the same tables the snapshot was encoded with.
+    //
+    //    Doc 16 FPE model: RET_VM should restore insn_fpe_key from the
+    //    checkpoint's saved_insn_fpe_key before re-encoding.  In the current
+    //    LUT model, skipping transition_regs is equivalent because same BB
+    //    always produces identical tables (epoch_seed is static).
+    if (exec.return_resume_ip == 0) {
         epoch.transition_regs(exec, target, imm);
     }
 

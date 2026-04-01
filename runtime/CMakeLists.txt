@@ -141,4 +141,34 @@ if(ENABLE_TESTS)
                 GTest::gtest_main
     )
     gtest_discover_tests(test_vm_runner)
+    # ── New test coverage (Phase 1-3 test plan) ──
+
+    set(NEW_TEST_FILES
+        test_jcc_conditions
+        test_width_extension
+        test_shift_rotate
+        test_push_pop_oram
+        test_cfg_patterns
+        test_load_store
+        test_call_depth
+        test_error_paths
+        test_native_call_variants
+        test_cmp_edge_cases
+        test_ctx_ops
+        test_policy_consistency
+    )
+
+    foreach(TEST_NAME ${NEW_TEST_FILES})
+        add_executable(${TEST_NAME}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test/${TEST_NAME}.cpp
+        )
+        target_include_directories(${TEST_NAME}
+            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+        )
+        target_link_libraries(${TEST_NAME}
+            PRIVATE VMPilot_Runtime
+                    GTest::gtest_main
+        )
+        gtest_discover_tests(${TEST_NAME})
+    endforeach()
 endif()
