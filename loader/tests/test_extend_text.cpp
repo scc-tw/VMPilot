@@ -18,6 +18,8 @@
 
 #include <gtest/gtest.h>
 
+#include "temp_file.hpp"
+
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -62,12 +64,9 @@ std::string build_minimal_elf() {
     text_seg->set_physical_address(TEXT_VA);
     text_seg->add_section_index(text_sec->get_index(), text_sec->get_addr_align());
 
-    char tmpname[] = "/tmp/vmpilot_ext_XXXXXX";
-    int fd = mkstemp(tmpname);
-    EXPECT_GE(fd, 0);
-    close(fd);
+    std::string tmpname = VMPilot::Test::make_temp_file("vmpilot");
     writer.save(tmpname);
-    return std::string(tmpname);
+    return tmpname;
 }
 
 /// Build recognizable test payload data.
@@ -328,12 +327,9 @@ std::string build_elf_with_gaps() {
     seg->set_physical_address(TEXT_VA);
     seg->add_section_index(text_sec->get_index(), text_sec->get_addr_align());
 
-    char tmpname[] = "/tmp/vmpilot_gaps_XXXXXX";
-    int fd = mkstemp(tmpname);
-    EXPECT_GE(fd, 0);
-    close(fd);
+    std::string tmpname = VMPilot::Test::make_temp_file("vmpilot");
     writer.save(tmpname);
-    return std::string(tmpname);
+    return tmpname;
 }
 
 }  // namespace
@@ -426,12 +422,9 @@ std::string build_pe_for_extend() {
         writer.add_directory(COFFI::image_data_directory{0, 0});
     writer.layout();
 
-    char tmpname[] = "/tmp/vmpilot_pe_ext_XXXXXX";
-    int fd = mkstemp(tmpname);
-    EXPECT_GE(fd, 0);
-    close(fd);
+    std::string tmpname = VMPilot::Test::make_temp_file("vmpilot");
     writer.save(tmpname);
-    return std::string(tmpname);
+    return tmpname;
 }
 
 std::string build_pe_with_gaps() {
@@ -471,12 +464,9 @@ std::string build_pe_with_gaps() {
         writer.add_directory(COFFI::image_data_directory{0, 0});
     writer.layout();
 
-    char tmpname[] = "/tmp/vmpilot_pe_gaps_XXXXXX";
-    int fd = mkstemp(tmpname);
-    EXPECT_GE(fd, 0);
-    close(fd);
+    std::string tmpname = VMPilot::Test::make_temp_file("vmpilot");
     writer.save(tmpname);
-    return std::string(tmpname);
+    return tmpname;
 }
 
 }  // namespace

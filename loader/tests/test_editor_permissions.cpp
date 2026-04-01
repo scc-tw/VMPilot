@@ -22,6 +22,8 @@
 
 #include <gtest/gtest.h>
 
+#include "temp_file.hpp"
+
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -64,13 +66,10 @@ std::string build_minimal_elf(uint64_t text_va = 0x401000, size_t text_size = 0x
     text_seg->set_physical_address(text_va);
     text_seg->add_section_index(text_sec->get_index(), text_sec->get_addr_align());
 
-    char tmpname[] = "/tmp/vmpilot_test_elf_XXXXXX";
-    int fd = mkstemp(tmpname);
-    EXPECT_GE(fd, 0) << "mkstemp failed";
-    close(fd);
+    std::string tmpname = VMPilot::Test::make_temp_file("vmpilot");
 
     writer.save(tmpname);
-    return std::string(tmpname);
+    return tmpname;
 }
 
 }  // namespace
@@ -255,10 +254,7 @@ TEST(EditorPermissions, ELFDtNeededInjection) {
     dyn_seg->set_align(8);
     dyn_seg->add_section_index(dyn_sec->get_index(), dyn_sec->get_addr_align());
 
-    char tmpname[] = "/tmp/vmpilot_test_dtneeded_XXXXXX";
-    int fd = mkstemp(tmpname);
-    ASSERT_GE(fd, 0);
-    close(fd);
+    std::string tmpname = VMPilot::Test::make_temp_file("vmpilot");
     writer.save(tmpname);
 
     // Open with ELFEditor and inject DT_NEEDED
@@ -269,7 +265,7 @@ TEST(EditorPermissions, ELFDtNeededInjection) {
     auto result = editor->add_runtime_dep("libvmpilot_runtime.so", diag);
     ASSERT_TRUE(result.has_value()) << "add_runtime_dep failed";
 
-    std::string out_path = std::string(tmpname) + ".patched";
+    std::string out_path = tmpname + ".patched";
     auto save_res = editor->save(out_path, diag);
     ASSERT_TRUE(save_res.has_value()) << "save failed";
 
@@ -294,7 +290,7 @@ TEST(EditorPermissions, ELFDtNeededInjection) {
     }
     EXPECT_TRUE(found_needed) << "DT_NEEDED for libvmpilot_runtime.so not found";
 
-    std::remove(tmpname);
+    std::remove(tmpname.c_str());
     std::remove(out_path.c_str());
 }
 
@@ -377,10 +373,7 @@ TEST(EditorPermissions, ELFDtNeededNoSpareSlotsFallsBackToGrowth) {
     dyn_seg->set_align(8);
     dyn_seg->add_section_index(dyn_sec->get_index(), dyn_sec->get_addr_align());
 
-    char tmpname[] = "/tmp/vmpilot_nospare_XXXXXX";
-    int fd = mkstemp(tmpname);
-    ASSERT_GE(fd, 0);
-    close(fd);
+    std::string tmpname = VMPilot::Test::make_temp_file("vmpilot");
     writer.save(tmpname);
 
     Common::DiagnosticCollector diag;
@@ -393,7 +386,7 @@ TEST(EditorPermissions, ELFDtNeededNoSpareSlotsFallsBackToGrowth) {
         << "Layer 2 (ELFIO growth) should succeed when Layer 1 has no spare slots";
 
     // Save and verify DT_NEEDED was injected via Layer 2
-    std::string out_path = std::string(tmpname) + ".patched";
+    std::string out_path = tmpname + ".patched";
     ASSERT_TRUE(editor->save(out_path, diag).has_value());
 
     ELFIO::elfio reader;
@@ -412,7 +405,7 @@ TEST(EditorPermissions, ELFDtNeededNoSpareSlotsFallsBackToGrowth) {
     }
     EXPECT_TRUE(found) << "DT_NEEDED not found after Layer 2 fallback";
 
-    std::remove(tmpname);
+    std::remove(tmpname.c_str());
     std::remove(out_path.c_str());
 }
 
@@ -483,13 +476,10 @@ std::string build_minimal_pe(uint32_t text_rva = 0x1000,
 
     writer.layout();
 
-    char tmpname[] = "/tmp/vmpilot_test_pe_XXXXXX";
-    int fd = mkstemp(tmpname);
-    EXPECT_GE(fd, 0) << "mkstemp failed";
-    close(fd);
+    std::string tmpname = VMPilot::Test::make_temp_file("vmpilot");
 
     writer.save(tmpname);
-    return std::string(tmpname);
+    return tmpname;
 }
 
 }  // namespace
@@ -751,10 +741,7 @@ TEST(CfiDetection, ELF_WithCetProperty) {
     note_sec->set_data(reinterpret_cast<const char*>(note_data.data()),
                        note_data.size());
 
-    char tmpname[] = "/tmp/vmpilot_cfi_XXXXXX";
-    int fd = mkstemp(tmpname);
-    ASSERT_GE(fd, 0);
-    close(fd);
+    std::string tmpname = VMPilot::Test::make_temp_file("vmpilot");
     writer.save(tmpname);
 
     Common::DiagnosticCollector diag;
@@ -763,7 +750,7 @@ TEST(CfiDetection, ELF_WithCetProperty) {
     EXPECT_TRUE(editor->cfi_enforced())
         << "ELF with IBT flag in .note.gnu.property must report CFI enforced";
 
-    std::remove(tmpname);
+    std::remove(tmpname.c_str());
 }
 
 TEST(CfiDetection, PE_NoCfiByDefault) {
@@ -809,10 +796,7 @@ TEST(CfiDetection, PE_WithCetCompat) {
         writer.add_directory(COFFI::image_data_directory{0, 0});
     writer.layout();
 
-    char tmpname[] = "/tmp/vmpilot_pe_cet_XXXXXX";
-    int fd = mkstemp(tmpname);
-    ASSERT_GE(fd, 0);
-    close(fd);
+    std::string tmpname = VMPilot::Test::make_temp_file("vmpilot");
     writer.save(tmpname);
 
     Common::DiagnosticCollector diag;
@@ -821,7 +805,7 @@ TEST(CfiDetection, PE_WithCetCompat) {
     EXPECT_TRUE(editor->cfi_enforced())
         << "PE with CET_COMPAT (0x8000) must report CFI enforced";
 
-    std::remove(tmpname);
+    std::remove(tmpname.c_str());
 }
 
 TEST(CfiDetection, ELF_NotePreservedAfterAddSegment) {
@@ -875,10 +859,7 @@ TEST(CfiDetection, ELF_NotePreservedAfterAddSegment) {
     note_sec->set_data(reinterpret_cast<const char*>(note_data.data()),
                        note_data.size());
 
-    char tmpname[] = "/tmp/vmpilot_cfi_pres_XXXXXX";
-    int fd = mkstemp(tmpname);
-    ASSERT_GE(fd, 0);
-    close(fd);
+    std::string tmpname = VMPilot::Test::make_temp_file("vmpilot");
     writer.save(tmpname);
 
     // Open, add a segment (triggers ensure_cfi_note), save
@@ -891,7 +872,7 @@ TEST(CfiDetection, ELF_NotePreservedAfterAddSegment) {
     auto seg = editor->add_segment(".vmpilot", payload, 0x1000, diag);
     ASSERT_TRUE(seg.has_value());
 
-    std::string out_path = std::string(tmpname) + ".patched";
+    std::string out_path = tmpname + ".patched";
     ASSERT_TRUE(editor->save(out_path, diag).has_value());
 
     // Reload and verify the note survived
@@ -900,7 +881,7 @@ TEST(CfiDetection, ELF_NotePreservedAfterAddSegment) {
     EXPECT_TRUE(editor2->cfi_enforced())
         << "Post-patch: .note.gnu.property IBT flag must survive add_segment + save";
 
-    std::remove(tmpname);
+    std::remove(tmpname.c_str());
     std::remove(out_path.c_str());
 }
 

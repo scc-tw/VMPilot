@@ -25,6 +25,8 @@
 
 #include <gtest/gtest.h>
 
+#include "temp_file.hpp"
+
 #include <array>
 #include <cstdio>
 #include <cstring>
@@ -126,12 +128,9 @@ std::string build_test_elf() {
     dyn_seg->set_align(8);
     dyn_seg->add_section_index(dyn_sec->get_index(), dyn_sec->get_addr_align());
 
-    char tmpname[] = "/tmp/vmpilot_e2e_XXXXXX";
-    int fd = mkstemp(tmpname);
-    EXPECT_GE(fd, 0);
-    close(fd);
+    std::string tmpname = VMPilot::Test::make_temp_file("vmpilot");
     writer.save(tmpname);
-    return std::string(tmpname);
+    return tmpname;
 }
 
 uint64_t read64_le(const uint8_t* p) {
@@ -385,12 +384,9 @@ std::string build_test_pe() {
 
     writer.layout();
 
-    char tmpname[] = "/tmp/vmpilot_e2e_pe_XXXXXX";
-    int fd = mkstemp(tmpname);
-    EXPECT_GE(fd, 0);
-    close(fd);
+    std::string tmpname = VMPilot::Test::make_temp_file("vmpilot");
     writer.save(tmpname);
-    return std::string(tmpname);
+    return tmpname;
 }
 
 }  // namespace
@@ -552,16 +548,13 @@ std::string build_test_macho() {
     std::memcpy(buf.data() + sizeof(hdr) + sizeof(text_seg), &text_sec, sizeof(text_sec));
     std::memcpy(buf.data() + text_file_off, nops.data(), nops.size());
 
-    char tmpname[] = "/tmp/vmpilot_e2e_macho_XXXXXX";
-    int fd = mkstemp(tmpname);
-    EXPECT_GE(fd, 0);
-    close(fd);
+    std::string tmpname = VMPilot::Test::make_temp_file("vmpilot");
 
     std::ofstream ofs(tmpname, std::ios::binary | std::ios::trunc);
     ofs.write(reinterpret_cast<const char*>(buf.data()),
               static_cast<std::streamsize>(buf.size()));
     ofs.close();
-    return std::string(tmpname);
+    return tmpname;
 }
 
 }  // namespace
