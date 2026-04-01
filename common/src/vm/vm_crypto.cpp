@@ -2,6 +2,7 @@
 #include <vm/secure_zero.hpp>
 
 #include <blake3.h>
+#include <cstring>
 
 namespace VMPilot::Common::VM::Crypto {
 
@@ -27,8 +28,8 @@ void blake3_keyed_128(const uint8_t key128[16],
     // Extend 128-bit key to 256-bit by repeating: [K || K].
     // Security level remains 128-bit (matching Speck64/128 key size).
     uint8_t extended[32];
-    __builtin_memcpy(extended, key128, 16);
-    __builtin_memcpy(extended + 16, key128, 16);
+    std::memcpy(extended, key128, 16);
+    std::memcpy(extended + 16, key128, 16);
 
     blake3_hasher hasher;
     blake3_hasher_init_keyed(&hasher, extended);
