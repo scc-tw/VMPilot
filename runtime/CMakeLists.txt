@@ -129,4 +129,16 @@ if(ENABLE_TESTS)
                 GTest::gtest_main
     )
     gtest_discover_tests(test_engine_comprehensive)
+
+    add_executable(test_vm_runner
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_vm_runner.cpp
+    )
+    target_include_directories(test_vm_runner
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(test_vm_runner
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+    gtest_discover_tests(test_vm_runner)
 endif()
