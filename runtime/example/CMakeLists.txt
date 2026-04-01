@@ -16,5 +16,6 @@ foreach(_example_src IN LISTS RUNTIME_EXAMPLE_SOURCES)
     )
     target_link_libraries(${_example_target}
         PRIVATE VMPilot_Runtime
+                vmpilot_sanitizer
     )
 endforeach()

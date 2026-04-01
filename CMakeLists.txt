@@ -71,6 +71,33 @@ if (CMAKE_BUILD_TYPE MATCHES "Release")
     endif()
 endif()
 
+# RelWithDebInfo: optimised build with debug symbols and per-target sanitizers.
+# Overrides CMAKE_CXX_FLAGS_RELWITHDEBINFO (not CMAKE_CXX_FLAGS) so that
+# sanitisers stay per-target via vmpilot_sanitizer, keeping third-party code
+# (abseil, protobuf) clean.  Usage:
+#   cmake -S . -B build-diag -DCMAKE_BUILD_TYPE=RelWithDebInfo
+if (CMAKE_BUILD_TYPE MATCHES "RelWithDebInfo")
+    if (CMAKE_CXX_COMPILER_ID MATCHES "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-Og -g -fno-omit-frame-pointer -fno-lto"
+            CACHE STRING "Flags for RelWithDebInfo" FORCE)
+        if (NOT (CMAKE_SYSTEM_PROCESSOR MATCHES "arm" OR CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64"))
+            set(VMPILOT_SANITIZER_FLAGS "-fsanitize=address,undefined")
+        else ()
+            message(WARNING "Sanitizer is not supported on ARM")
+            set(VMPILOT_SANITIZER_FLAGS "")
+        endif ()
+    elseif (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
+        set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/Zi /Od"
+            CACHE STRING "Flags for RelWithDebInfo" FORCE)
+        if (CMAKE_CXX_FLAGS MATCHES ".*(/sdl|-sdl).*")
+            set(VMPILOT_SANITIZER_FLAGS "/fsanitize=address")
+        else ()
+            message(WARNING "Your MSVC version does not support sanitizer")
+            set(VMPILOT_SANITIZER_FLAGS "")
+        endif ()
+    endif ()
+endif()
+
 
 if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
     add_compile_options (-fdiagnostics-color=always)
