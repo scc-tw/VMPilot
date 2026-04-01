@@ -68,13 +68,18 @@ inline uint64_t hardware_random_u64() noexcept {
 
 #elif defined(__aarch64__) || defined(_M_ARM64)
     // ARM64: MRS RNDR (requires FEAT_RNG, ARMv8.5+).
-    uint64_t val = 0;
-    uint64_t ok = 0;
-    __asm__ volatile(
-        "mrs %0, s3_3_c2_c4_0\n"   // RNDR → val
-        "cset %1, ne\n"             // ok = (NZCV.Z == 0)
-        : "=r"(val), "=r"(ok));
-    if (ok) return val;
+    // Apple Silicon does not implement FEAT_RNG — skip to OS fallback.
+#if !defined(__APPLE__)
+    {
+        uint64_t val = 0;
+        uint64_t ok = 0;
+        __asm__ volatile(
+            "mrs %0, s3_3_c2_c4_0\n"   // RNDR → val
+            "cset %1, ne\n"             // ok = (NZCV.Z == 0)
+            : "=r"(val), "=r"(ok));
+        if (ok) return val;
+    }
+#endif
 #endif
 
     // OS fallback when hardware instruction unavailable or failed
