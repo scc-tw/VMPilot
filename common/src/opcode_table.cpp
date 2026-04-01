@@ -3,6 +3,7 @@
 #include <opcode_enum.hpp>
 #include <opcode_table.hpp>
 
+#include <cstring>
 #include <map>
 #include <stdexcept>
 #include <utility>
@@ -107,17 +108,26 @@ void VMPilot::Common::Opcode_table_generator::three_way_table_init() {
 
 std::string detail::get_Opcode_BLAKE3(Opcode_t opcode,
                                       const std::string& salt) noexcept {
-    // To string
-    const auto& opcode_str = std::to_string(opcode) + salt;
+    // Doc 16 rev.8: use keyed mode.  salt is the key; opcode is the message.
+    // Pad/truncate salt to 32 bytes for BLAKE3 keyed mode.
+    uint8_t key[BLAKE3_KEY_LEN] = {};
+    const size_t key_len = salt.size() < BLAKE3_KEY_LEN
+                         ? salt.size() : BLAKE3_KEY_LEN;
+    if (key_len > 0)
+        std::memcpy(key, salt.c_str(), key_len);
+
+    // Message: opcode as string
+    const auto opcode_str = std::to_string(opcode);
 
     blake3_hasher hasher;
-    blake3_hasher_init(&hasher);
+    blake3_hasher_init_keyed(&hasher, key);
 
-    // Hash the opcode
     blake3_hasher_update(&hasher, opcode_str.c_str(), opcode_str.size());
-    // Finalize the hash. BLAKE3_OUT_LEN is the default output length, 32 bytes.
+
     uint8_t result[BLAKE3_OUT_LEN];
     blake3_hasher_finalize(&hasher, result, BLAKE3_OUT_LEN);
+
+    std::memset(key, 0, sizeof(key));
 
     return std::string(result, result + BLAKE3_OUT_LEN);
 }

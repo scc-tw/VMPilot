@@ -387,10 +387,12 @@ enter_basic_block(VmExecution& exec,
 
         for (uint8_t r = 0; r < VM_REG_COUNT; ++r) {
             if (target.live_regs_bitmap & (1u << r)) {
-                // Live register: decode with old key, encode with new key
-                uint64_t plain = FPE_Decode(old_rk, old_tw, r,
-                                            exec.regs[r].bits);
-                exec.regs[r] = RegVal(FPE_Encode(new_rk, new_tw, r, plain));
+                // Live register: decode with old key, encode with new key.
+                // SecureLocal ensures plaintext is zeroed after use (Theorem 7.1).
+                SecureLocal<uint64_t> plain;
+                plain.val = FPE_Decode(old_rk, old_tw, r,
+                                       exec.regs[r].bits);
+                exec.regs[r] = RegVal(FPE_Encode(new_rk, new_tw, r, plain.val));
             } else {
                 // Dead register: encode zero with new key (sanitise)
                 exec.regs[r] = RegVal(FPE_Encode(new_rk, new_tw, r, 0));

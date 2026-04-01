@@ -571,6 +571,12 @@ VmEngine<Policy, Oram>::step() noexcept
         exec_, *epoch_, *oram_, *imm_, insn);
     if (!r) return tl::make_unexpected(r.error());
 
+    // Zero plaintext operands immediately after handler (Theorem 7.1).
+    // These existed in CPU registers during handler execution; zeroing
+    // prevents stack residue if the compiler spilled them.
+    secure_zero(&insn.plain_a, sizeof(insn.plain_a));
+    secure_zero(&insn.plain_b, sizeof(insn.plain_b));
+
     // ── Phases E-I: FPE encode + fingerprint + key ratchet ──────────────
     //
     // This is the core forward-secrecy pipeline from doc 16 rev.8 section 4.
@@ -640,10 +646,12 @@ VmEngine<Policy, Oram>::step() noexcept
             XEX_ComputeTweaks(new_rk.val, new_tw.val);
 
             for (uint8_t i = 0; i < 16; ++i) {
-                uint64_t plain = FPE_Decode(rk.val, tw.val, i,
-                                            exec_.regs[i].bits);
+                SecureLocal<uint64_t> plain;
+                plain.val = FPE_Decode(rk.val, tw.val, i,
+                                       exec_.regs[i].bits);
                 exec_.regs[i] = RegVal(
-                    FPE_Encode(new_rk.val, new_tw.val, i, plain));
+                    FPE_Encode(new_rk.val, new_tw.val, i, plain.val));
+                // plain auto-zeroed by SecureLocal destructor (Theorem 7.1)
             }
             // new_rk, new_tw zeroed by SecureLocal destructor.
         }

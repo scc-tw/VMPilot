@@ -89,9 +89,10 @@ inline uint64_t hardware_random_u64() noexcept {
         // fopen/fread is portable across all POSIX and avoids raw syscall deps.
         std::FILE* f = std::fopen("/dev/urandom", "rb");
         if (f) {
-            [[maybe_unused]] auto n = std::fread(&val, sizeof(val), 1, f);
+            auto n = std::fread(&val, sizeof(val), 1, f);
             std::fclose(f);
-            return val;
+            if (n == 1) return val;
+            // fread failed (I/O error) — fall through to deterministic fallback
         }
     }
 #endif
