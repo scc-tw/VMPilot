@@ -1189,3 +1189,129 @@ TEST(EngineCfg, CallVmRetVm) {
     // But execute() decodes r0 with current BB tables... this depends on
     // whether RET returns to BB1's tables or not. The intent: RET_VM works.
 }
+
+// ============================================================================
+// 17. NATIVE_CALL: FP argument support via platform_call trampoline
+// ============================================================================
+
+static double native_add_doubles(double a, double b,
+                                  uint64_t, uint64_t, uint64_t, uint64_t,
+                                  uint64_t, uint64_t) {
+    return a + b;
+}
+
+static double native_mul_double_int(double a, uint64_t b,
+                                     uint64_t, uint64_t, uint64_t, uint64_t,
+                                     uint64_t, uint64_t) {
+    return a * static_cast<double>(b);
+}
+
+TEST(EngineNativeCall, FpArgsTwoDoubles) {
+    uint8_t seed[32]; fill_seed(seed);
+
+    TestBB bb{}; bb.bb_id = 1; bb.epoch = 0;
+    bb.live_regs_bitmap = 0xFFFF; bb.flags = 0;
+    fill_epoch(bb.epoch_seed, 0xF9);
+
+    bb.instructions = {
+        {VmOpcode::NATIVE_CALL, none(), 0, 0, 0},
+        {VmOpcode::HALT, none(), 0, 0, 0},
+    };
+
+    // TransitionEntry: 2 args, both FP (fp_mask = 0x03), returns_fp
+    TestNativeCall tc{};
+    tc.call_site_ip = 0;
+    // arg_count bit-packed: [3:0]=2, [11:4]=0x03 (fp_mask), [13]=returns_fp
+    tc.arg_count = 2 | (0x03 << 4) | (1u << 13);
+    tc.target_addr = reinterpret_cast<uint64_t>(&native_add_doubles);
+
+    auto blob = build_test_blob(seed, {bb}, {}, false, {tc});
+
+    // Set initial regs: r0 = bit-pattern of 2.5, r1 = bit-pattern of 3.5
+    double d0 = 2.5, d1 = 3.5;
+    uint64_t regs[16] = {};
+    std::memcpy(&regs[0], &d0, 8);
+    std::memcpy(&regs[1], &d1, 8);
+
+    auto engine = VmEngine<DebugPolicy, DirectOram>::create(
+        blob.data(), blob.size(), seed, 0, regs, 2);
+    ASSERT_TRUE(engine.has_value());
+    auto r = engine->execute();
+    ASSERT_TRUE(r.has_value());
+
+    // Result should be bit-pattern of 6.0 (2.5 + 3.5)
+    double expected = 6.0;
+    uint64_t expected_bits;
+    std::memcpy(&expected_bits, &expected, 8);
+    EXPECT_EQ(r->return_value, expected_bits);
+}
+
+TEST(EngineNativeCall, MixedIntFpArgs) {
+    uint8_t seed[32]; fill_seed(seed);
+
+    TestBB bb{}; bb.bb_id = 1; bb.epoch = 0;
+    bb.live_regs_bitmap = 0xFFFF; bb.flags = 0;
+    fill_epoch(bb.epoch_seed, 0xFA);
+
+    bb.instructions = {
+        {VmOpcode::NATIVE_CALL, none(), 0, 0, 0},
+        {VmOpcode::HALT, none(), 0, 0, 0},
+    };
+
+    // arg0 = double (fp_mask bit 0), arg1 = int
+    // fp_mask = 0x01, returns_fp = 1
+    TestNativeCall tc{};
+    tc.call_site_ip = 0;
+    tc.arg_count = 2 | (0x01 << 4) | (1u << 13);
+    tc.target_addr = reinterpret_cast<uint64_t>(&native_mul_double_int);
+
+    auto blob = build_test_blob(seed, {bb}, {}, false, {tc});
+
+    double d0 = 3.0;
+    uint64_t regs[16] = {};
+    std::memcpy(&regs[0], &d0, 8);
+    regs[1] = 7;  // integer arg
+
+    auto engine = VmEngine<DebugPolicy, DirectOram>::create(
+        blob.data(), blob.size(), seed, 0, regs, 2);
+    ASSERT_TRUE(engine.has_value());
+    auto r = engine->execute();
+    ASSERT_TRUE(r.has_value());
+
+    // 3.0 * 7 = 21.0
+    double expected = 21.0;
+    uint64_t expected_bits;
+    std::memcpy(&expected_bits, &expected, 8);
+    EXPECT_EQ(r->return_value, expected_bits);
+}
+
+TEST(EngineNativeCall, IntegerCallStillWorks) {
+    // Regression: ensure integer-only calls (fp_mask=0) still work
+    uint8_t seed[32]; fill_seed(seed);
+
+    TestBB bb{}; bb.bb_id = 1; bb.epoch = 0;
+    bb.live_regs_bitmap = 0xFFFF; bb.flags = 0;
+    fill_epoch(bb.epoch_seed, 0xFB);
+
+    bb.instructions = {
+        {VmOpcode::NATIVE_CALL, none(), 0, 0, 0},
+        {VmOpcode::HALT, none(), 0, 0, 0},
+    };
+
+    TestNativeCall tc{};
+    tc.call_site_ip = 0;
+    tc.arg_count = 2;  // fp_mask=0, not variadic, int return
+    tc.target_addr = reinterpret_cast<uint64_t>(&native_add_two);
+
+    auto blob = build_test_blob(seed, {bb}, {}, false, {tc});
+
+    uint64_t regs[16] = {};
+    regs[0] = 100; regs[1] = 23;
+
+    auto engine = VmEngine<DebugPolicy, DirectOram>::create(
+        blob.data(), blob.size(), seed, 0, regs, 2);
+    ASSERT_TRUE(engine.has_value());
+    auto r = engine->execute();
+    ASSERT_TRUE(r.has_value());
+    EXPECT_EQ(r->return_value, 123u);
+}

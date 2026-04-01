@@ -37,8 +37,10 @@
 ///   LOAD/POP:   MemVal from guest/ORAM -> im.mem.decode_lut() -> plaintext
 
 #include "handler_traits.hpp"
+#include "platform_call.hpp"
 
 #include <vm/encoded_value.hpp>
+#include <vm/secure_zero.hpp>
 #include <vm/xex_speck64.hpp>
 
 #include <atomic>
@@ -629,14 +631,17 @@ struct HandlerTraits<VmOpcode::RET_VM, P> {
     }
 };
 
-/// NATIVE_CALL: call a native function with decoded register arguments.
+/// NATIVE_CALL: call a native function with ABI-correct register placement.
 ///
-/// Arguments come from plain_a/plain_b for the first two and from the
-/// pre-decoded register file for the rest (pipeline decodes all arg
-/// registers before the handler call in the NATIVE_CALL path).
+/// Supports integer AND floating-point arguments via platform_call trampoline:
+///   - fp_mask classifies each arg as int or FP
+///   - Integer args → rdi/rsi/rdx/rcx/r8/r9 (x86-64) or x0-x7 (ARM64)
+///   - FP args → xmm0-7 (x86-64) or d0-d7 (ARM64)
+///   - Variadic: AL = fp_count (x86-64 System V)
+///   - FP return: xmm0/d0 bit-cast to uint64_t
 ///
 /// The result is written as plaintext to reg 0; the pipeline FPE-encodes
-/// it after handler return.  Ephemeral nonce incremented for audit trail.
+/// it after handler return.
 template<typename P>
 struct HandlerTraits<VmOpcode::NATIVE_CALL, P> {
     static constexpr auto security_class = SecurityClass::A;
@@ -648,36 +653,46 @@ struct HandlerTraits<VmOpcode::NATIVE_CALL, P> {
 
         const auto& te = im.native_calls[insn.aux];
         uint8_t argc = Common::VM::te_arg_count(te);
+        uint8_t fp_mask = Common::VM::te_fp_mask(te);
+        bool is_variadic = Common::VM::te_is_variadic(te);
+        bool returns_fp = Common::VM::te_returns_fp(te);
 
-        auto target = reinterpret_cast<uint64_t(*)(
-            uint64_t,uint64_t,uint64_t,uint64_t,
-            uint64_t,uint64_t,uint64_t,uint64_t)>(
-                static_cast<uintptr_t>(te.target_offset + e.load_base_delta));
+        auto target = reinterpret_cast<void*>(
+            static_cast<uintptr_t>(te.target_offset + e.load_base_delta));
 
         if (!target)
             return tl::make_unexpected(DiagnosticCode::NativeCallBridgeFailed);
 
-        // FPE-decode arg registers to plaintext for the native call.
-        //
-        // WHY decode here (not in pipeline):
-        //   The pipeline only pre-decodes operand_a and operand_b (2 operands).
-        //   NATIVE_CALL needs up to 8 args from regs[0..7].  Rather than
-        //   special-casing the pipeline, we decode inline using insn_fpe_key.
-        //   This is acceptable because NATIVE_CALL is Class C (plaintext
-        //   transient in registers for the duration of the native call).
-        Crypto::Speck64_RoundKeys nc_rk;
-        Crypto::Speck64_KeySchedule(e.insn_fpe_key, nc_rk);
-        Crypto::XEX_Tweaks nc_tw;
-        Crypto::XEX_ComputeTweaks(nc_rk, nc_tw);
+        // FPE-decode arg registers to plaintext (Class C — acknowledged).
+        SecureLocal<Crypto::Speck64_RoundKeys> nc_rk;
+        Crypto::Speck64_KeySchedule(e.insn_fpe_key, nc_rk.val);
+        SecureLocal<Crypto::XEX_Tweaks> nc_tw;
+        Crypto::XEX_ComputeTweaks(nc_rk.val, nc_tw.val);
 
-        uint64_t args[8] = {};
+        uint64_t raw_args[8] = {};
         for (uint8_t i = 0; i < argc && i < 8; ++i)
-            args[i] = Crypto::FPE_Decode(nc_rk, nc_tw, i, e.regs[i].bits);
+            raw_args[i] = Crypto::FPE_Decode(nc_rk.val, nc_tw.val, i,
+                                              e.regs[i].bits);
+        // nc_rk, nc_tw auto-zeroed by SecureLocal
 
-        uint64_t result = target(args[0], args[1], args[2], args[3],
-                                  args[4], args[5], args[6], args[7]);
+        // Classify args into separate int/FP sequences per ABI.
+        uint64_t int_regs[8] = {}, fp_regs[8] = {};
+        uint8_t nint = 0, nfp = 0;
+        classify_args(raw_args, argc, fp_mask, int_regs, fp_regs, nint, nfp);
 
-        // Store plaintext result; pipeline will FPE-encode reg 0
+        // Call via platform-specific ASM trampoline.
+        // The trampoline loads int_regs → rdi/rsi/... and fp_regs → xmm0/...
+        // and sets AL = nfp for variadic.
+        uint8_t flags = pack_call_flags(
+            is_variadic ? nfp : static_cast<uint8_t>(0), returns_fp);
+        uint64_t result = platform_call(target, int_regs, fp_regs, flags);
+
+        // Zero plaintext args from stack (forward secrecy).
+        secure_zero(raw_args, sizeof(raw_args));
+        secure_zero(int_regs, sizeof(int_regs));
+        secure_zero(fp_regs, sizeof(fp_regs));
+
+        // Store plaintext result; pipeline will FPE-encode reg 0.
         e.regs[0] = RegVal(result);
         e.native_call_nonce++;
         return {};

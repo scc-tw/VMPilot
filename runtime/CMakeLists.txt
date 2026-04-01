@@ -26,14 +26,20 @@ set(RUNTIME_SOURCES
 )
 
 # ---------------------------------------------------------------------------
-# Platform-specific ASM support (placeholders for future .S files)
+# Platform-specific native call trampoline (FP + variadic ABI support)
 # ---------------------------------------------------------------------------
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
-    # Future: add x86_64 native bridge assembly here
-    # list(APPEND RUNTIME_SOURCES src/arch/x86_64_bridge.S)
+    enable_language(ASM)
+    list(APPEND RUNTIME_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/platform_call_x86_64.S)
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
-    # Future: add AArch64 native bridge assembly here
-    # list(APPEND RUNTIME_SOURCES src/arch/aarch64_bridge.S)
+    enable_language(ASM)
+    list(APPEND RUNTIME_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/platform_call_arm64.S)
+else()
+    # Generic fallback: integer-only (no FP arg support)
+    list(APPEND RUNTIME_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/platform_call_fallback.cpp)
 endif()
 
 # ---------------------------------------------------------------------------
