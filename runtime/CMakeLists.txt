@@ -198,11 +198,14 @@ set(EXAMPLE_INCLUDE_DIRS
     ${CMAKE_SOURCE_DIR}/third_party/expected/include
 )
 
-add_executable(dry_run_example       ${CMAKE_CURRENT_SOURCE_DIR}/example/dry_run.cpp)
-add_executable(hello_world_example   ${CMAKE_CURRENT_SOURCE_DIR}/example/hello_world.cpp)
-add_executable(arithmetic_example    ${CMAKE_CURRENT_SOURCE_DIR}/example/arithmetic.cpp)
+add_executable(dry_run_example           ${CMAKE_CURRENT_SOURCE_DIR}/example/dry_run.cpp)
+add_executable(hello_world_example       ${CMAKE_CURRENT_SOURCE_DIR}/example/hello_world.cpp)
+add_executable(arithmetic_example        ${CMAKE_CURRENT_SOURCE_DIR}/example/arithmetic.cpp)
+add_executable(verify_signature_example  ${CMAKE_CURRENT_SOURCE_DIR}/example/verify_signature.cpp)
+add_executable(snake_example             ${CMAKE_CURRENT_SOURCE_DIR}/example/snake.cpp)
 
-foreach(tgt dry_run_example hello_world_example arithmetic_example)
+foreach(tgt dry_run_example hello_world_example arithmetic_example
+            verify_signature_example snake_example)
     target_include_directories(${tgt} PRIVATE ${EXAMPLE_INCLUDE_DIRS})
     target_link_libraries(${tgt} PRIVATE VMPilot_Runtime)
 endforeach()
