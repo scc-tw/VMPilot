@@ -251,11 +251,11 @@ MachOEditor::find_text_gaps_impl(std::size_t min_size) const noexcept {
     const uint8_t* data = buf_.data() + text_file_off_;
     const size_t text_len = static_cast<size_t>(text_size_);
 
-    // ARM64 filler detection (4-byte aligned)
-    constexpr uint32_t ARM64_NOP = 0xD503201F;
-    constexpr uint32_t ARM64_BRK = 0xD4200000;
-
+    // ARM64 filler detection (4-byte aligned).
+    // Constants inside the lambda to satisfy MSVC's strict constexpr capture rules.
     auto is_filler_word = [](uint32_t w) -> bool {
+        constexpr uint32_t ARM64_NOP = 0xD503201F;
+        constexpr uint32_t ARM64_BRK = 0xD4200000;
         return w == ARM64_NOP || w == ARM64_BRK || w == 0;
     };
 

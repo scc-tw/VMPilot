@@ -19,8 +19,8 @@
 // A thread-local variable we can test against.
 // The compiler places this in the TLS segment; we can compare
 // direct C++ access vs our asm helper access.
-static thread_local uint64_t tls_test_var_64 = 0;
-static thread_local uint32_t tls_test_var_32 = 0;
+[[maybe_unused]] static thread_local uint64_t tls_test_var_64 = 0;
+[[maybe_unused]] static thread_local uint32_t tls_test_var_32 = 0;
 
 // ============================================================================
 // Helper: get TLS offset of a variable
