@@ -46,11 +46,11 @@ SYM(platform_call):
     testl   %eax, %eax
     jz      .Lno_stack_sysv
 
-    // Align: need (3 pushes + alloc + call) to be 16-aligned at callee.
-    // 3 pushes = 24B, entry was 8-misaligned → 32 total.
-    // After alloc N + call 8 → 32+N+8 = 40+N. Need 40+N ≡ 0 (mod 16).
-    // N is rounded to 16 → 40 mod 16 = 8. Add 8 to fix.
-    addl    $15+8, %eax
+    // Align: after 3 pushes rsp ≡ 0 (mod 16).
+    // We need rsp - N still ≡ 0 (mod 16) so that CALL pushes 8 and
+    // callee entry sees rsp ≡ 8 (mod 16) per SysV ABI.
+    // → round N up to a multiple of 16.
+    addl    $15, %eax
     andl    $-16, %eax
     subq    %rax, %rsp
 
@@ -64,9 +64,11 @@ SYM(platform_call):
 
 .Lno_stack_sysv:
     // Ensure 16-byte alignment for call.
-    // On entry: rsp was 8-misaligned (return addr). After 3 pushes: 8+24=32 → aligned.
-    // CALL will push 8 → 40 → misaligned. Need sub 8 to make it 48 → aligned at callee entry.
-    subq    $8, %rsp
+    // On entry: rsp ≡ 8 (mod 16) — return addr pushed by caller's CALL.
+    // After 3 pushes (24B): rsp ≡ 8+24 = 32 ≡ 0 (mod 16) — aligned.
+    // CALL *r13 pushes 8B return addr → callee entry rsp ≡ 8 (mod 16). ✓
+    // No adjustment needed — 3 pushes already fixed alignment.
+    // (Previous sub $8 gave callee rsp ≡ 0, violating SysV ABI.)
 
 .Lload_regs_sysv:
     movq    0(%r12), %r13       // r13 = target
