@@ -1221,8 +1221,8 @@ TEST(EngineNativeCall, FpArgsTwoDoubles) {
     // TransitionEntry: 2 args, both FP (fp_mask = 0x03), returns_fp
     TestNativeCall tc{};
     tc.call_site_ip = 0;
-    // arg_count bit-packed: [3:0]=2, [11:4]=0x03 (fp_mask), [13]=returns_fp
-    tc.arg_count = 2 | (0x03 << 4) | (1u << 13);
+    // v2 bit layout: argc=2, fp_mask=0x03, returns_fp=true
+    tc.arg_count = te_pack_arg_count(2, 0x03, false, true, false);
     tc.target_addr = reinterpret_cast<uint64_t>(&native_add_doubles);
 
     auto blob = build_test_blob(seed, {bb}, {}, false, {tc});
@@ -1262,7 +1262,8 @@ TEST(EngineNativeCall, MixedIntFpArgs) {
     // fp_mask = 0x01, returns_fp = 1
     TestNativeCall tc{};
     tc.call_site_ip = 0;
-    tc.arg_count = 2 | (0x01 << 4) | (1u << 13);
+    // v2 bit layout: argc=2, fp_mask=0x01 (arg0 is FP), returns_fp=true
+    tc.arg_count = te_pack_arg_count(2, 0x01, false, true, false);
     tc.target_addr = reinterpret_cast<uint64_t>(&native_mul_double_int);
 
     auto blob = build_test_blob(seed, {bb}, {}, false, {tc});

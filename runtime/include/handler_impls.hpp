@@ -3,29 +3,45 @@
 #define __RUNTIME_HANDLER_IMPLS_HPP__
 
 /// @file handler_impls.hpp
-/// @brief ALL 55 HandlerTraits specializations with real implementations.
+/// @brief ALL 55 HandlerTraits specializations — doc 16 forward-secrecy architecture.
 ///
-/// Ported from the old VMContext-based handlers to the new 4-way state
-/// split (VmExecution, VmEpoch, VmOramState, VmImmutable).
+/// Architecture change from doc 15 to doc 16:
 ///
-/// Phantom type safety: handler boundaries enforce RegVal for registers,
-/// MemVal for ORAM/memory, PlainVal for Class C bridge operations.
-/// Inside handlers, raw .bits access is used for table lookups.
+///   Old (doc 15): Handlers receive encoded RegVal operands and must decode/encode
+///   internally.  Class A handlers use composition tables, Class B uses MBA
+///   decomposition, Class C bridges to plaintext.  Per-policy specializations
+///   for ADD/SUB/NEG.  CompositionCache (~8MB) allocated per-epoch.
+///
+///   New (doc 16): The step() pipeline FPE-decodes operands BEFORE the handler
+///   call (plain_a, plain_b in DecodedInsn) and FPE-encodes the destination
+///   register AFTER the handler returns.  Handlers operate exclusively on
+///   plaintext values.  The A/B/C classification is now moot — all handlers
+///   are uniform.  CompositionCache, MBA tables, and composition helpers are
+///   eliminated entirely.
+///
+/// Security argument: plaintext exists in CPU registers for the duration of
+/// handler execution (~10-50ns).  The pipeline's FPE key ratchet (Speck64/XEX)
+/// re-encodes ALL 16 registers after every instruction, providing forward
+/// secrecy — a memory snapshot after instruction N reveals nothing about
+/// register values before instruction N.
+///
+/// Handler contract:
+///   - Receives pre-decoded i.plain_a, i.plain_b (pipeline did FPE_Decode)
+///   - Computes on plaintext, writes result: e.regs[dst] = RegVal(result)
+///   - The value is temporarily plaintext in regs[] for ~nanoseconds
+///   - Pipeline immediately FPE_Encodes regs[dst] after handler returns
+///   - Then key ratchet re-encodes all 16 registers
+///
+/// Memory domain:
+///   STORE/PUSH: plaintext -> im.mem.encode_lut() -> MemVal for guest/ORAM
+///   LOAD/POP:   MemVal from guest/ORAM -> im.mem.decode_lut() -> plaintext
 
 #include "handler_traits.hpp"
-#include "composition_cache_v2.hpp"
 #include "platform_call.hpp"
 
-#include <vm/vm_encoding.hpp>
-// secure_zero is forward-declared here; full implementation comes from
-// vm/secure_zero.hpp on branches that have it.  This inline fallback
-// ensures compilation on branches without the header.
-namespace VMPilot::Runtime::detail {
-inline void secure_zero_impl(void* p, size_t n) noexcept {
-    static void* (* volatile vset)(void*, int, size_t) = std::memset;
-    if (p && n) vset(p, 0, n);
-}
-}  // namespace VMPilot::Runtime::detail
+#include <vm/encoded_value.hpp>
+#include <vm/secure_zero.hpp>
+#include <vm/xex_speck64.hpp>
 
 #include <atomic>
 #include <cstring>
@@ -38,244 +54,142 @@ using Common::VM::VM_OBLIVIOUS_SIZE;
 using Common::VM::VM_OPERAND_POOL;
 using Common::VM::VM_OPERAND_REG;
 using Common::VM::VM_OPERAND_MEM;
+using Common::VM::MemVal;
+using Common::VM::PlainVal;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Internal helpers (encoding-free)
+// ---------------------------------------------------------------------------
 
 namespace detail {
 
-inline void ensure_cache(VmEpoch& epoch) noexcept {
-    if (!epoch.cache)
-        epoch.cache = std::make_unique<CompositionCache>();
-}
-
-static inline uint8_t op_and(uint8_t a, uint8_t b) { return a & b; }
-static inline uint8_t op_or(uint8_t a, uint8_t b)  { return a | b; }
-static inline uint8_t op_xor(uint8_t a, uint8_t b) { return a ^ b; }
-static inline uint8_t op_not(uint8_t a)             { return static_cast<uint8_t>(~a); }
-
-/// Apply binary composition table to two encoded values.
-inline uint64_t apply_comp(const uint8_t comp[][256][256],
-                            uint64_t a, uint64_t b) noexcept {
-    uint64_t r = 0;
-    for (int k = 0; k < 8; ++k) {
-        uint8_t la = static_cast<uint8_t>(a >> (k * 8));
-        uint8_t lb = static_cast<uint8_t>(b >> (k * 8));
-        r |= uint64_t(comp[k][la][lb]) << (k * 8);
-    }
-    return r;
-}
-
-/// Apply unary composition table.
-inline uint64_t apply_unary(const uint8_t comp[][256], uint64_t a) noexcept {
-    uint64_t r = 0;
-    for (int k = 0; k < 8; ++k) {
-        uint8_t la = static_cast<uint8_t>(a >> (k * 8));
-        r |= uint64_t(comp[k][la]) << (k * 8);
-    }
-    return r;
-}
-
-/// MBA SHL1 (cross-lane carry propagation, branchless).
-inline uint64_t mba_shl1(uint64_t encoded,
-                          const CompositionCache::MbaEntry& mba) noexcept {
-    uint64_t result = 0;
-    // Lane 0: SHL1_INTRA only (no carry-in)
-    uint8_t lane0 = static_cast<uint8_t>(encoded);
-    result = mba.shl1_intra[0][lane0];
-    uint8_t carry_out = mba.carry_extract[0][lane0];
-
-    // Lanes 1-7: SHL1_INTRA + branchless dual-table carry injection
-    for (int k = 1; k < 8; ++k) {
-        uint8_t lane = static_cast<uint8_t>(encoded >> (k * 8));
-        uint8_t shifted = mba.shl1_intra[k][lane];
-        uint8_t no_carry  = mba.inject_0[k][shifted];
-        uint8_t yes_carry = mba.inject_1[k][shifted];
-        uint8_t mask = -carry_out;  // 0x00 or 0xFF
-        uint8_t byte = static_cast<uint8_t>((no_carry & ~mask) | (yes_carry & mask));
-        result |= uint64_t(byte) << (k * 8);
-        carry_out = mba.carry_extract[k][lane];
-    }
-    return result;
-}
-
-/// MBA ADD on two values already in the SAME encoding domain (dst_reg).
-/// Used for carry propagation iterations and for SUB/NEG chaining.
-inline uint64_t mba_add_self(uint64_t a, uint64_t b,
-                              VmEpoch& epoch, uint8_t dst_reg,
-                              int iterations) noexcept {
-    ensure_cache(epoch);
-    // Both operands are in dst_reg's encoding — use self-domain tables
-    auto xor_tbl = epoch.cache->get_binary(12, dst_reg, dst_reg, dst_reg, op_xor, epoch.reg);
-    auto and_tbl = epoch.cache->get_binary(13, dst_reg, dst_reg, dst_reg, op_and, epoch.reg);
-    auto& mba = epoch.cache->get_mba(dst_reg, dst_reg, epoch.reg);
-
-    uint64_t s = apply_comp(xor_tbl, a, b);
-    uint64_t c = apply_comp(and_tbl, a, b);
-    c = mba_shl1(c, mba);
-
-    int iters = iterations > 0 ? iterations : 64;
-    for (int i = 0; i < iters; ++i) {
-        uint64_t t = apply_comp(xor_tbl, s, c);
-        c = apply_comp(and_tbl, s, c);
-        c = mba_shl1(c, mba);
-        s = t;
-    }
-    return s;
-}
-
-/// MBA ADD of two values from DIFFERENT registers (reg_a, reg_b).
-/// The first XOR/AND uses cross-register tables; then carry propagation
-/// uses self-domain tables (both s,c are in dst=reg_a's domain after first step).
-inline uint64_t mba_add_cross(uint64_t a, uint64_t b,
-                               VmEpoch& epoch, uint8_t reg_a, uint8_t reg_b,
-                               int iterations) noexcept {
-    ensure_cache(epoch);
-    // First half-add: cross-register (reg_a × reg_b → reg_a domain)
-    auto xor_cross = epoch.cache->get_binary(10, reg_a, reg_a, reg_b, op_xor, epoch.reg);
-    auto and_cross = epoch.cache->get_binary(11, reg_a, reg_a, reg_b, op_and, epoch.reg);
-    auto& mba = epoch.cache->get_mba(reg_a, reg_a, epoch.reg);
-
-    uint64_t s = apply_comp(xor_cross, a, b);
-    uint64_t c = apply_comp(and_cross, a, b);
-    c = mba_shl1(c, mba);
-
-    // Carry propagation: both s and c are now in reg_a's domain
-    auto xor_self = epoch.cache->get_binary(12, reg_a, reg_a, reg_a, op_xor, epoch.reg);
-    auto and_self = epoch.cache->get_binary(13, reg_a, reg_a, reg_a, op_and, epoch.reg);
-
-    int iters = iterations > 0 ? iterations : 64;
-    for (int i = 0; i < iters; ++i) {
-        uint64_t t = apply_comp(xor_self, s, c);
-        c = apply_comp(and_self, s, c);
-        c = mba_shl1(c, mba);
-        s = t;
-    }
-    return s;
-}
-
-/// Evaluate condition code against flags.
+/// Evaluate condition code against flags register.
+/// Pure predicate logic — no encoding involvement.
 inline bool evaluate_condition(uint8_t flags, uint8_t cond) noexcept {
     bool zf = (flags & 0x01) != 0;
     bool sf = (flags & 0x02) != 0;
     bool cf = (flags & 0x04) != 0;
     bool of = (flags & 0x08) != 0;
     switch (cond) {
-        case 0: return zf;
-        case 1: return !zf;
-        case 2: return sf != of;
-        case 3: return sf == of;
-        case 4: return zf || (sf != of);
-        case 5: return !zf && (sf == of);
-        case 6: return cf;
-        case 7: return !cf;
-        case 8: return cf || zf;
-        case 9: return !cf && !zf;
+        case 0: return zf;           // EQ  / Z
+        case 1: return !zf;          // NE  / NZ
+        case 2: return sf != of;     // LT  (signed)
+        case 3: return sf == of;     // GE  (signed)
+        case 4: return zf || (sf != of);  // LE (signed)
+        case 5: return !zf && (sf == of); // GT (signed)
+        case 6: return cf;           // B   (unsigned below)
+        case 7: return !cf;          // AE  (unsigned above-or-equal)
+        case 8: return cf || zf;     // BE  (unsigned below-or-equal)
+        case 9: return !cf && !zf;   // A   (unsigned above)
         default: return false;
     }
 }
 
-/// Decode register to plaintext (Class C bridge).
-inline uint64_t decode_reg(const VmEpoch& ep, uint8_t reg, uint64_t encoded) noexcept {
-    return ep.reg.decode_lut(reg).apply(encoded);
-}
-
-/// Encode plaintext to register domain.
-inline uint64_t encode_reg(const VmEpoch& ep, uint8_t reg, uint64_t plain) noexcept {
-    return ep.reg.encode_lut(reg).apply(plain);
-}
-
-/// Store convert: register → memory domain.
-inline uint64_t store_conv(const VmEpoch& ep, uint8_t reg, uint64_t encoded) noexcept {
-    return ep.dom.store_lut(reg).apply(encoded);
-}
-
-/// Load convert: memory → register domain.
-inline uint64_t load_conv(const VmEpoch& ep, uint8_t reg, uint64_t mem_val) noexcept {
-    return ep.dom.load_lut(reg).apply(mem_val);
-}
-
 }  // namespace detail
 
-// ═════════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 // Cat 0: Data Movement (8 opcodes)
-// ═════════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 
-/// MOVE: dst = src (same domain, zero plaintext)
+/// MOVE: dst = src.
+/// Pipeline decoded src into plain_b; we store it as the new dst value.
+/// Pipeline will FPE-encode regs[dst] afterward.
 template<typename P>
 struct HandlerTraits<VmOpcode::MOVE, P> {
     static constexpr auto security_class = SecurityClass::A;
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        e.regs[i.reg_a] = e.regs[i.reg_b];
+        e.regs[i.reg_a] = RegVal(i.plain_b);
         return {};
     }
 };
 
-/// LOAD: guest memory → register domain
+/// LOAD: guest memory -> register.
+/// Read raw bytes from guest address, decode from global memory domain to
+/// plaintext.  Pipeline will FPE-encode the result into regs[dst].
 template<typename P>
 struct HandlerTraits<VmOpcode::LOAD, P> {
     static constexpr auto security_class = SecurityClass::A;
     using oram_tag = NoOramTag;
-    static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
-                               const VmImmutable&, const DecodedInsn& i) noexcept {
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
+                               const VmImmutable& im, const DecodedInsn& i) noexcept {
+        // SECURITY NOTE: There are intentionally no bounds checks here.
+        // VMPilot's threat model assumes it is obfuscating trusted C++ code
+        // (Man-At-The-End attack model), not sandboxing untrusted code.
+        // The protected code must legitimately access the host process's
+        // global data, stack, and heap. Restricting memory access would
+        // break standard C++ execution capabilities.
         auto addr = static_cast<uintptr_t>(static_cast<int64_t>(i.aux) + e.load_base_delta);
-        uint64_t mem = 0;
-        std::memcpy(&mem, reinterpret_cast<const uint8_t*>(addr), 8);
-        e.regs[i.reg_a] = RegVal(detail::load_conv(ep, i.reg_a, mem));
+        uint64_t raw = 0;
+        std::memcpy(&raw, reinterpret_cast<const uint8_t*>(addr), 8);
+        // Guest memory is in global memory encoding; decode to plaintext
+        uint64_t plain = im.mem.decode_lut().apply(raw);
+        e.regs[i.reg_a] = RegVal(plain);
         return {};
     }
 };
 
-/// STORE: register → memory domain → guest memory
+/// STORE: register -> guest memory.
+/// plain_a was pre-decoded by pipeline.  Encode to global memory domain,
+/// then write to guest address.  No register result.
 template<typename P>
 struct HandlerTraits<VmOpcode::STORE, P> {
     static constexpr auto security_class = SecurityClass::A;
     using oram_tag = NoOramTag;
-    static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
-                               const VmImmutable&, const DecodedInsn& i) noexcept {
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
+                               const VmImmutable& im, const DecodedInsn& i) noexcept {
+        // SECURITY NOTE: Intentional lack of bounds checking.
+        // Similar to LOAD, the VM must have unrestricted access to the
+        // host process's memory space to correctly execute the obfuscated
+        // application logic. This is not a sandbox.
         auto addr = static_cast<uintptr_t>(static_cast<int64_t>(i.aux) + e.load_base_delta);
-        uint64_t mem = detail::store_conv(ep, i.reg_a, e.regs[i.reg_a].bits);
+        // Encode plaintext to global memory domain for guest storage
+        uint64_t mem = im.mem.encode_lut().apply(i.plain_a);
         std::memcpy(reinterpret_cast<uint8_t*>(addr), &mem, 8);
         return {};
     }
 };
 
-/// PUSH: register → memory domain → ORAM stack
+/// PUSH: register -> ORAM stack.
+/// Encode plaintext to memory domain, write via ORAM.  No register result.
 template<typename P>
 struct HandlerTraits<VmOpcode::PUSH, P> {
     static constexpr auto security_class = SecurityClass::A;
     using oram_tag = UsesOramTag;
     template<typename Oram>
-    static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState& o,
-                               const VmImmutable&, const DecodedInsn& i) noexcept {
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState& o,
+                               const VmImmutable& im, const DecodedInsn& i) noexcept {
         if (e.vm_sp < 8) return tl::make_unexpected(DiagnosticCode::StackOverflow);
         e.vm_sp -= 8;
-        MemVal mem(detail::store_conv(ep, i.reg_a, e.regs[i.reg_a].bits));
+        MemVal mem(im.mem.encode_lut().apply(i.plain_a));
         Oram::write(o, e.vm_sp, mem);
         return {};
     }
 };
 
-/// POP: ORAM stack → memory domain → register
+/// POP: ORAM stack -> register.
+/// Read MemVal from ORAM, decode from memory domain to plaintext.
+/// Pipeline will FPE-encode regs[dst].
 template<typename P>
 struct HandlerTraits<VmOpcode::POP, P> {
     static constexpr auto security_class = SecurityClass::A;
     using oram_tag = UsesOramTag;
     template<typename Oram>
-    static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState& o,
-                               const VmImmutable&, const DecodedInsn& i) noexcept {
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState& o,
+                               const VmImmutable& im, const DecodedInsn& i) noexcept {
         if (e.vm_sp >= VM_OBLIVIOUS_SIZE) return tl::make_unexpected(DiagnosticCode::StackUnderflow);
         MemVal mem = Oram::read(o, e.vm_sp);
         e.vm_sp += 8;
-        e.regs[i.reg_a] = RegVal(detail::load_conv(ep, i.reg_a, mem.bits));
+        uint64_t plain = im.mem.decode_lut().apply(mem.bits);
+        e.regs[i.reg_a] = RegVal(plain);
         return {};
     }
 };
 
-/// LOAD_CONST: pool[aux] → register (pre-encoded, zero plaintext)
+/// LOAD_CONST: constant pool -> register.
+/// Pool values are SipHash-encrypted at rest but decrypted to plaintext at
+/// load time.  The pipeline will FPE-encode regs[dst].
 template<typename P>
 struct HandlerTraits<VmOpcode::LOAD_CONST, P> {
     static constexpr auto security_class = SecurityClass::A;
@@ -283,288 +197,335 @@ struct HandlerTraits<VmOpcode::LOAD_CONST, P> {
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable& im, const DecodedInsn& i) noexcept {
         if (i.operand_a_type == VM_OPERAND_POOL) {
-            e.regs[i.reg_a] = i.resolved_a;
+            // resolved_a was pre-decoded by pipeline into plain_a
+            e.regs[i.reg_a] = RegVal(i.plain_a);
         } else {
             if (im.decrypted_pool.empty() || i.aux * 8 >= im.decrypted_pool.size())
                 return {};
             uint64_t v = 0;
             std::memcpy(&v, im.decrypted_pool.data() + i.aux * 8, 8);
+            // Pool stores plaintext after SipHash decryption
             e.regs[i.reg_a] = RegVal(v);
         }
         return {};
     }
 };
 
-/// LOAD_CTX: read VM context field → encode → register
+/// LOAD_CTX: read VM context field -> register.
+/// Context fields (IP, SP, bb_id, epoch) are already plaintext.
+/// Pipeline will FPE-encode regs[dst].
 template<typename P>
 struct HandlerTraits<VmOpcode::LOAD_CTX, P> {
-    static constexpr auto security_class = SecurityClass::C;
+    static constexpr auto security_class = SecurityClass::A;
     using oram_tag = NoOramTag;
-    static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        uint64_t plain = 0;
+        uint64_t val = 0;
         switch (i.aux) {
-            case 0: plain = e.vm_ip;          break;
-            case 1: plain = e.vm_sp;          break;
-            case 2: plain = e.current_bb_id;  break;
-            case 3: plain = e.current_epoch;  break;
+            case 0: val = e.vm_ip;          break;
+            case 1: val = e.vm_sp;          break;
+            case 2: val = e.current_bb_id;  break;
+            case 3: val = e.current_epoch;  break;
             default: break;
         }
-        e.regs[i.reg_a] = RegVal(detail::encode_reg(ep, i.reg_a, plain));
+        e.regs[i.reg_a] = RegVal(val);
         return {};
     }
 };
 
-/// STORE_CTX: decode register → write VM context field
+/// STORE_CTX: register -> VM context field.
+/// plain_a is pre-decoded.  Write plaintext directly to context field.
+/// No register result.
 template<typename P>
 struct HandlerTraits<VmOpcode::STORE_CTX, P> {
-    static constexpr auto security_class = SecurityClass::C;
+    static constexpr auto security_class = SecurityClass::A;
     using oram_tag = NoOramTag;
-    static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        uint64_t plain = detail::decode_reg(ep, i.reg_a, e.regs[i.reg_a].bits);
         switch (i.aux) {
-            case 1: e.vm_sp = plain; break;
+            case 1: e.vm_sp = i.plain_a; break;
             default: break;
         }
         return {};
     }
 };
 
-// ═════════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 // Cat 1: Arithmetic (8 opcodes)
-// ═════════════════════════════════════════════════════════════════════════════
+//
+// All arithmetic is now uniform across policies.  The old Class B (MBA) and
+// Class C (native bridge) distinction is gone — every handler receives
+// plaintext operands and returns a plaintext result.  The pipeline handles
+// all FPE encode/decode.
+// ===========================================================================
 
-// ADD: Policy-dependent (MBA for HighSec/Standard, bridge for Debug)
-template<> struct HandlerTraits<VmOpcode::ADD, HighSecPolicy> {
-    static constexpr auto security_class = SecurityClass::B;
+/// ADD: dst = a + b
+template<typename P>
+struct HandlerTraits<VmOpcode::ADD, P> {
+    static constexpr auto security_class = SecurityClass::A;
     using oram_tag = NoOramTag;
-    static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        int iters = (i.condition == 0) ? 64 : i.condition;
-        e.regs[i.reg_a] = RegVal(detail::mba_add_cross(
-            e.regs[i.reg_a].bits, e.regs[i.reg_b].bits,
-            ep, i.reg_a, i.reg_b, iters));
-        return {};
-    }
-};
-template<> struct HandlerTraits<VmOpcode::ADD, StandardPolicy> {
-    static constexpr auto security_class = SecurityClass::B;
-    using oram_tag = NoOramTag;
-    static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
-                               const VmImmutable&, const DecodedInsn& i) noexcept {
-        int iters = (i.condition == 0) ? 64 : i.condition;
-        e.regs[i.reg_a] = RegVal(detail::mba_add_cross(
-            e.regs[i.reg_a].bits, e.regs[i.reg_b].bits,
-            ep, i.reg_a, i.reg_b, iters));
-        return {};
-    }
-};
-template<> struct HandlerTraits<VmOpcode::ADD, DebugPolicy> {
-    static constexpr auto security_class = SecurityClass::C;
-    using oram_tag = NoOramTag;
-    static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
-                               const VmImmutable&, const DecodedInsn& i) noexcept {
-        uint64_t a = detail::decode_reg(ep, i.reg_a, e.regs[i.reg_a].bits);
-        uint64_t b = detail::decode_reg(ep, i.reg_b, e.regs[i.reg_b].bits);
-        e.regs[i.reg_a] = RegVal(detail::encode_reg(ep, i.reg_a, a + b));
+        e.regs[i.reg_a] = RegVal(i.plain_a + i.plain_b);
         return {};
     }
 };
 
-// SUB: similar pattern to ADD
-template<> struct HandlerTraits<VmOpcode::SUB, HighSecPolicy> {
-    static constexpr auto security_class = SecurityClass::B;
+/// SUB: dst = a - b
+template<typename P>
+struct HandlerTraits<VmOpcode::SUB, P> {
+    static constexpr auto security_class = SecurityClass::A;
     using oram_tag = NoOramTag;
-    static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        int iters = (i.condition == 0) ? 64 : i.condition;
-        // SUB(a,b) = ADD(a, ADD(NOT(b), 1))
-        // NOT(b) in reg_a's domain (cross-register NOT: src=reg_b, dst=reg_a)
-        detail::ensure_cache(ep);
-        auto not_tbl = ep.cache->get_unary(14, i.reg_a, i.reg_b, detail::op_not, ep.reg);
-        uint64_t not_b = detail::apply_unary(not_tbl, e.regs[i.reg_b].bits);
-        // not_b is now in reg_a's domain. ADD(not_b, 1) is self-domain.
-        uint64_t one_enc = detail::encode_reg(ep, i.reg_a, 1);
-        uint64_t neg_b = detail::mba_add_self(not_b, one_enc, ep, i.reg_a, iters);
-        // ADD(a, neg_b) — both in reg_a's domain → self-domain
-        e.regs[i.reg_a] = RegVal(detail::mba_add_self(
-            e.regs[i.reg_a].bits, neg_b, ep, i.reg_a, iters));
-        return {};
-    }
-};
-template<> struct HandlerTraits<VmOpcode::SUB, StandardPolicy> : HandlerTraits<VmOpcode::SUB, HighSecPolicy> {};
-template<> struct HandlerTraits<VmOpcode::SUB, DebugPolicy> {
-    static constexpr auto security_class = SecurityClass::C;
-    using oram_tag = NoOramTag;
-    static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
-                               const VmImmutable&, const DecodedInsn& i) noexcept {
-        uint64_t a = detail::decode_reg(ep, i.reg_a, e.regs[i.reg_a].bits);
-        uint64_t b = detail::decode_reg(ep, i.reg_b, e.regs[i.reg_b].bits);
-        e.regs[i.reg_a] = RegVal(detail::encode_reg(ep, i.reg_a, a - b));
+        e.regs[i.reg_a] = RegVal(i.plain_a - i.plain_b);
         return {};
     }
 };
 
-// NEG
-template<> struct HandlerTraits<VmOpcode::NEG, HighSecPolicy> {
-    static constexpr auto security_class = SecurityClass::B;
+/// MUL: dst = a * b (unsigned)
+template<typename P>
+struct HandlerTraits<VmOpcode::MUL, P> {
+    static constexpr auto security_class = SecurityClass::A;
     using oram_tag = NoOramTag;
-    static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        int iters = (i.condition == 0) ? 64 : i.condition;
-        detail::ensure_cache(ep);
-        auto not_tbl = ep.cache->get_unary(14, i.reg_a, i.reg_a, detail::op_not, ep.reg);
-        uint64_t not_a = detail::apply_unary(not_tbl, e.regs[i.reg_a].bits);
-        uint64_t one_enc = detail::encode_reg(ep, i.reg_a, 1);
-        e.regs[i.reg_a] = RegVal(detail::mba_add_self(
-            not_a, one_enc, ep, i.reg_a, iters));
-        return {};
-    }
-};
-template<> struct HandlerTraits<VmOpcode::NEG, StandardPolicy> : HandlerTraits<VmOpcode::NEG, HighSecPolicy> {};
-template<> struct HandlerTraits<VmOpcode::NEG, DebugPolicy> {
-    static constexpr auto security_class = SecurityClass::C;
-    using oram_tag = NoOramTag;
-    static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
-                               const VmImmutable&, const DecodedInsn& i) noexcept {
-        uint64_t a = detail::decode_reg(ep, i.reg_a, e.regs[i.reg_a].bits);
-        e.regs[i.reg_a] = RegVal(detail::encode_reg(ep, i.reg_a, -a));
+        e.regs[i.reg_a] = RegVal(i.plain_a * i.plain_b);
         return {};
     }
 };
 
-// MUL, IMUL, DIV, IDIV, MOD: Class C (all policies use native bridge)
-#define VMPILOT_CLASS_C_ARITH(OPCODE, OP_EXPR)                               \
-    template<typename P>                                                       \
-    struct HandlerTraits<VmOpcode::OPCODE, P> {                               \
-        static constexpr auto security_class = SecurityClass::C;              \
-        using oram_tag = NoOramTag;                                            \
-        static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&, \
-                                   const VmImmutable&, const DecodedInsn& i) noexcept { \
-            uint64_t a = detail::decode_reg(ep, i.reg_a, e.regs[i.reg_a].bits); \
-            uint64_t b = detail::decode_reg(ep, i.reg_b, e.regs[i.reg_b].bits); \
-            uint64_t r = (OP_EXPR);                                            \
-            e.regs[i.reg_a] = RegVal(detail::encode_reg(ep, i.reg_a, r));     \
-            return {};                                                         \
-        }                                                                      \
+/// IMUL: dst = a * b (signed)
+template<typename P>
+struct HandlerTraits<VmOpcode::IMUL, P> {
+    static constexpr auto security_class = SecurityClass::A;
+    using oram_tag = NoOramTag;
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
+                               const VmImmutable&, const DecodedInsn& i) noexcept {
+        auto sa = static_cast<int64_t>(i.plain_a);
+        auto sb = static_cast<int64_t>(i.plain_b);
+        e.regs[i.reg_a] = RegVal(static_cast<uint64_t>(sa * sb));
+        return {};
     }
+};
 
-VMPILOT_CLASS_C_ARITH(MUL,  a * b);
-VMPILOT_CLASS_C_ARITH(IMUL, static_cast<uint64_t>(static_cast<int64_t>(a) * static_cast<int64_t>(b)));
-VMPILOT_CLASS_C_ARITH(DIV,  b != 0 ? a / b : 0);
-VMPILOT_CLASS_C_ARITH(IDIV, b != 0 ? static_cast<uint64_t>(static_cast<int64_t>(a) / static_cast<int64_t>(b)) : 0);
-VMPILOT_CLASS_C_ARITH(MOD,  b != 0 ? a % b : 0);
+/// DIV: dst = a / b (unsigned), zero-safe
+template<typename P>
+struct HandlerTraits<VmOpcode::DIV, P> {
+    static constexpr auto security_class = SecurityClass::A;
+    using oram_tag = NoOramTag;
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
+                               const VmImmutable&, const DecodedInsn& i) noexcept {
+        e.regs[i.reg_a] = RegVal(i.plain_b != 0 ? i.plain_a / i.plain_b : 0);
+        return {};
+    }
+};
 
-#undef VMPILOT_CLASS_C_ARITH
+/// IDIV: dst = a / b (signed), zero-safe
+template<typename P>
+struct HandlerTraits<VmOpcode::IDIV, P> {
+    static constexpr auto security_class = SecurityClass::A;
+    using oram_tag = NoOramTag;
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
+                               const VmImmutable&, const DecodedInsn& i) noexcept {
+        auto sa = static_cast<int64_t>(i.plain_a);
+        auto sb = static_cast<int64_t>(i.plain_b);
+        e.regs[i.reg_a] = RegVal(sb != 0 ? static_cast<uint64_t>(sa / sb) : 0);
+        return {};
+    }
+};
 
-// ═════════════════════════════════════════════════════════════════════════════
+/// NEG: dst = -a (two's complement)
+template<typename P>
+struct HandlerTraits<VmOpcode::NEG, P> {
+    static constexpr auto security_class = SecurityClass::A;
+    using oram_tag = NoOramTag;
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
+                               const VmImmutable&, const DecodedInsn& i) noexcept {
+        e.regs[i.reg_a] = RegVal(-i.plain_a);
+        return {};
+    }
+};
+
+/// MOD: dst = a % b (unsigned), zero-safe
+template<typename P>
+struct HandlerTraits<VmOpcode::MOD, P> {
+    static constexpr auto security_class = SecurityClass::A;
+    using oram_tag = NoOramTag;
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
+                               const VmImmutable&, const DecodedInsn& i) noexcept {
+        e.regs[i.reg_a] = RegVal(i.plain_b != 0 ? i.plain_a % i.plain_b : 0);
+        return {};
+    }
+};
+
+// ===========================================================================
 // Cat 2: Logic (9 opcodes)
-// ═════════════════════════════════════════════════════════════════════════════
+//
+// Previously AND/OR/XOR/NOT were Class A (composition tables, zero plaintext).
+// Now all are uniform plaintext ops — the FPE pipeline provides the
+// equivalent security via per-instruction key ratchet.
+// ===========================================================================
 
-#define VMPILOT_CLASS_A_BINARY(OPCODE, OP_ID, OP_FN)                          \
-    template<typename P>                                                       \
-    struct HandlerTraits<VmOpcode::OPCODE, P> {                               \
-        static constexpr auto security_class = SecurityClass::A;              \
-        using oram_tag = NoOramTag;                                            \
-        static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&, \
-                                   const VmImmutable&, const DecodedInsn& i) noexcept { \
-            detail::ensure_cache(ep);                                          \
-            auto tbl = ep.cache->get_binary(OP_ID, i.reg_a, i.reg_a, i.reg_b, \
-                                             detail::OP_FN, ep.reg);           \
-            e.regs[i.reg_a] = RegVal(detail::apply_comp(tbl,                  \
-                e.regs[i.reg_a].bits, e.regs[i.reg_b].bits));                 \
-            return {};                                                         \
-        }                                                                      \
+/// AND: dst = a & b
+template<typename P>
+struct HandlerTraits<VmOpcode::AND, P> {
+    static constexpr auto security_class = SecurityClass::A;
+    using oram_tag = NoOramTag;
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
+                               const VmImmutable&, const DecodedInsn& i) noexcept {
+        e.regs[i.reg_a] = RegVal(i.plain_a & i.plain_b);
+        return {};
     }
+};
 
-VMPILOT_CLASS_A_BINARY(AND, 0, op_and);
-VMPILOT_CLASS_A_BINARY(OR,  1, op_or);
-VMPILOT_CLASS_A_BINARY(XOR, 2, op_xor);
+/// OR: dst = a | b
+template<typename P>
+struct HandlerTraits<VmOpcode::OR, P> {
+    static constexpr auto security_class = SecurityClass::A;
+    using oram_tag = NoOramTag;
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
+                               const VmImmutable&, const DecodedInsn& i) noexcept {
+        e.regs[i.reg_a] = RegVal(i.plain_a | i.plain_b);
+        return {};
+    }
+};
 
-#undef VMPILOT_CLASS_A_BINARY
+/// XOR: dst = a ^ b
+template<typename P>
+struct HandlerTraits<VmOpcode::XOR, P> {
+    static constexpr auto security_class = SecurityClass::A;
+    using oram_tag = NoOramTag;
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
+                               const VmImmutable&, const DecodedInsn& i) noexcept {
+        e.regs[i.reg_a] = RegVal(i.plain_a ^ i.plain_b);
+        return {};
+    }
+};
 
-/// NOT: unary Class A
+/// NOT: dst = ~a
 template<typename P>
 struct HandlerTraits<VmOpcode::NOT, P> {
     static constexpr auto security_class = SecurityClass::A;
     using oram_tag = NoOramTag;
-    static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        detail::ensure_cache(ep);
-        auto tbl = ep.cache->get_unary(3, i.reg_a, i.reg_a, detail::op_not, ep.reg);
-        e.regs[i.reg_a] = RegVal(detail::apply_unary(tbl, e.regs[i.reg_a].bits));
+        e.regs[i.reg_a] = RegVal(~i.plain_a);
         return {};
     }
 };
 
-// SHL, SHR, SAR, ROL, ROR: Class C (cross-lane shifts need plaintext)
-#define VMPILOT_SHIFT(OPCODE, OP_EXPR)                                         \
-    template<typename P>                                                        \
-    struct HandlerTraits<VmOpcode::OPCODE, P> {                                \
-        static constexpr auto security_class = SecurityClass::C;               \
-        using oram_tag = NoOramTag;                                             \
-        static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,  \
-                                   const VmImmutable&, const DecodedInsn& i) noexcept { \
-            uint64_t val = detail::decode_reg(ep, i.reg_a, e.regs[i.reg_a].bits); \
-            uint64_t amt = detail::decode_reg(ep, i.reg_b, e.regs[i.reg_b].bits) & 63; \
-            uint64_t r = (OP_EXPR);                                             \
-            e.regs[i.reg_a] = RegVal(detail::encode_reg(ep, i.reg_a, r));      \
-            return {};                                                          \
-        }                                                                       \
+/// SHL: dst = a << (b & 63)
+template<typename P>
+struct HandlerTraits<VmOpcode::SHL, P> {
+    static constexpr auto security_class = SecurityClass::A;
+    using oram_tag = NoOramTag;
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
+                               const VmImmutable&, const DecodedInsn& i) noexcept {
+        uint64_t amt = i.plain_b & 63;
+        e.regs[i.reg_a] = RegVal(i.plain_a << amt);
+        return {};
     }
+};
 
-VMPILOT_SHIFT(SHL, val << amt);
-VMPILOT_SHIFT(SHR, val >> amt);
-VMPILOT_SHIFT(SAR, static_cast<uint64_t>(static_cast<int64_t>(val) >> amt));
-VMPILOT_SHIFT(ROL, (val << amt) | (val >> (64 - amt)));
-VMPILOT_SHIFT(ROR, (val >> amt) | (val << (64 - amt)));
+/// SHR: dst = a >> (b & 63)  (logical)
+template<typename P>
+struct HandlerTraits<VmOpcode::SHR, P> {
+    static constexpr auto security_class = SecurityClass::A;
+    using oram_tag = NoOramTag;
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
+                               const VmImmutable&, const DecodedInsn& i) noexcept {
+        uint64_t amt = i.plain_b & 63;
+        e.regs[i.reg_a] = RegVal(i.plain_a >> amt);
+        return {};
+    }
+};
 
-#undef VMPILOT_SHIFT
+/// SAR: dst = a >> (b & 63)  (arithmetic, sign-extending)
+template<typename P>
+struct HandlerTraits<VmOpcode::SAR, P> {
+    static constexpr auto security_class = SecurityClass::A;
+    using oram_tag = NoOramTag;
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
+                               const VmImmutable&, const DecodedInsn& i) noexcept {
+        uint64_t amt = i.plain_b & 63;
+        e.regs[i.reg_a] = RegVal(static_cast<uint64_t>(
+            static_cast<int64_t>(i.plain_a) >> amt));
+        return {};
+    }
+};
 
-// ═════════════════════════════════════════════════════════════════════════════
+/// ROL: dst = rotate_left(a, b & 63)
+template<typename P>
+struct HandlerTraits<VmOpcode::ROL, P> {
+    static constexpr auto security_class = SecurityClass::A;
+    using oram_tag = NoOramTag;
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
+                               const VmImmutable&, const DecodedInsn& i) noexcept {
+        uint64_t amt = i.plain_b & 63;
+        e.regs[i.reg_a] = RegVal((i.plain_a << amt) | (i.plain_a >> (64 - amt)));
+        return {};
+    }
+};
+
+/// ROR: dst = rotate_right(a, b & 63)
+template<typename P>
+struct HandlerTraits<VmOpcode::ROR, P> {
+    static constexpr auto security_class = SecurityClass::A;
+    using oram_tag = NoOramTag;
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
+                               const VmImmutable&, const DecodedInsn& i) noexcept {
+        uint64_t amt = i.plain_b & 63;
+        e.regs[i.reg_a] = RegVal((i.plain_a >> amt) | (i.plain_a << (64 - amt)));
+        return {};
+    }
+};
+
+// ===========================================================================
 // Cat 3: Comparison (4 opcodes)
-// ═════════════════════════════════════════════════════════════════════════════
+//
+// CMP and TEST use pre-decoded plaintext operands to set flags.
+// No register result — pipeline skips FPE-encode for these.
+// ===========================================================================
 
-/// CMP: decode both, set flags
+/// CMP: set flags from signed/unsigned comparison of a and b.
 template<typename P>
 struct HandlerTraits<VmOpcode::CMP, P> {
-    static constexpr auto security_class = SecurityClass::C;
+    static constexpr auto security_class = SecurityClass::A;
     using oram_tag = NoOramTag;
-    static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        auto sa = static_cast<int64_t>(detail::decode_reg(ep, i.reg_a, e.regs[i.reg_a].bits));
-        auto sb = static_cast<int64_t>(detail::decode_reg(ep, i.reg_b, e.regs[i.reg_b].bits));
-        auto ua = static_cast<uint64_t>(sa);
-        auto ub = static_cast<uint64_t>(sb);
+        auto sa = static_cast<int64_t>(i.plain_a);
+        auto sb = static_cast<int64_t>(i.plain_b);
+        auto ua = i.plain_a;
+        auto ub = i.plain_b;
         int64_t diff = sa - sb;
         e.vm_flags = 0;
-        if (diff == 0)  e.vm_flags |= 0x01;
-        if (diff < 0)   e.vm_flags |= 0x02;
-        if (ua < ub)    e.vm_flags |= 0x04;
-        if (((sa ^ sb) & (sa ^ diff)) < 0) e.vm_flags |= 0x08;
+        if (diff == 0)  e.vm_flags |= 0x01;  // ZF
+        if (diff < 0)   e.vm_flags |= 0x02;  // SF
+        if (ua < ub)    e.vm_flags |= 0x04;  // CF
+        if (((sa ^ sb) & (sa ^ diff)) < 0) e.vm_flags |= 0x08;  // OF
         return {};
     }
 };
 
-/// TEST: AND then set flags
+/// TEST: AND then set flags (no register write).
 template<typename P>
 struct HandlerTraits<VmOpcode::TEST, P> {
-    static constexpr auto security_class = SecurityClass::C;
+    static constexpr auto security_class = SecurityClass::A;
     using oram_tag = NoOramTag;
-    static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        uint64_t a = detail::decode_reg(ep, i.reg_a, e.regs[i.reg_a].bits);
-        uint64_t b = detail::decode_reg(ep, i.reg_b, e.regs[i.reg_b].bits);
-        uint64_t result = a & b;
+        uint64_t result = i.plain_a & i.plain_b;
         e.vm_flags = 0;
-        if (result == 0) e.vm_flags |= 0x01;
-        if (static_cast<int64_t>(result) < 0) e.vm_flags |= 0x02;
+        if (result == 0) e.vm_flags |= 0x01;  // ZF
+        if (static_cast<int64_t>(result) < 0) e.vm_flags |= 0x02;  // SF
         return {};
     }
 };
 
-/// SET_FLAG
+/// SET_FLAG: set a specific flag bit.
+/// Pure flag manipulation — no register or encoding involvement.
 template<typename P>
 struct HandlerTraits<VmOpcode::SET_FLAG, P> {
     static constexpr auto security_class = SecurityClass::A;
@@ -578,24 +539,30 @@ struct HandlerTraits<VmOpcode::SET_FLAG, P> {
     }
 };
 
-/// GET_FLAG
+/// GET_FLAG: read a flag bit into register as 0 or 1.
+/// Pipeline will FPE-encode regs[dst].
 template<typename P>
 struct HandlerTraits<VmOpcode::GET_FLAG, P> {
-    static constexpr auto security_class = SecurityClass::C;
+    static constexpr auto security_class = SecurityClass::A;
     using oram_tag = NoOramTag;
-    static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
         uint8_t bit = i.condition & 0x03;
         uint64_t val = (e.vm_flags >> bit) & 1;
-        e.regs[i.reg_a] = RegVal(detail::encode_reg(ep, i.reg_a, val));
+        e.regs[i.reg_a] = RegVal(val);
         return {};
     }
 };
 
-// ═════════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 // Cat 4: Control Flow (6 opcodes)
-// ═════════════════════════════════════════════════════════════════════════════
+//
+// Branch/call/ret handlers modify execution flow state (branch_target_bb,
+// shadow_stack).  They do NOT produce register results — pipeline skips
+// FPE-encode.  NATIVE_CALL is the exception: it writes a result to reg 0.
+// ===========================================================================
 
+/// JMP: unconditional branch to BB at i.aux.
 template<typename P>
 struct HandlerTraits<VmOpcode::JMP, P> {
     static constexpr auto security_class = SecurityClass::A;
@@ -608,6 +575,7 @@ struct HandlerTraits<VmOpcode::JMP, P> {
     }
 };
 
+/// JCC: conditional branch — evaluate condition against vm_flags.
 template<typename P>
 struct HandlerTraits<VmOpcode::JCC, P> {
     static constexpr auto security_class = SecurityClass::A;
@@ -622,6 +590,9 @@ struct HandlerTraits<VmOpcode::JCC, P> {
     }
 };
 
+/// CALL_VM: save context to shadow stack, branch to callee BB.
+/// Register snapshot stores current FPE-encoded values (the snapshot
+/// is opaque to the handler — the pipeline manages encoding state).
 template<typename P>
 struct HandlerTraits<VmOpcode::CALL_VM, P> {
     static constexpr auto security_class = SecurityClass::A;
@@ -631,13 +602,14 @@ struct HandlerTraits<VmOpcode::CALL_VM, P> {
         if (e.shadow_depth >= VM_MAX_NESTING)
             return tl::make_unexpected(DiagnosticCode::ShadowStackOverflow);
         auto& cp = e.shadow_stack[e.shadow_depth];
-        // Save resume point: vm_ip of the CALL instruction itself.
-        // The dispatcher will advance to vm_ip+1 after RET_VM re-enters
-        // this BB (resume after the CALL, not at BB entry).
         cp.vm_ip = e.vm_ip;
         cp.bb_id = e.current_bb_id;
-        std::memcpy(cp.epoch_seed, ep.reg.encode[0], 32);
+        // Doc 16: save the epoch_seed for opcode permutation context
+        std::memcpy(cp.epoch_seed, &ep.opcode_perm, 32);
         cp.saved_insn_index = e.insn_index_in_bb;
+        // Doc 16: save current FPE key so RET_VM can decode the snapshot.
+        // The register snapshot is in insn_fpe_key's domain at this moment.
+        std::memcpy(cp.saved_insn_fpe_key, e.insn_fpe_key, 16);
         for (int r = 0; r < VM_REG_COUNT; ++r)
             cp.encoded_regs_snapshot[r] = e.regs[r].bits;
         e.shadow_depth++;
@@ -647,6 +619,8 @@ struct HandlerTraits<VmOpcode::CALL_VM, P> {
     }
 };
 
+/// RET_VM: restore context from shadow stack, branch to caller BB.
+/// Restores the opaque register snapshot saved by CALL_VM.
 template<typename P>
 struct HandlerTraits<VmOpcode::RET_VM, P> {
     static constexpr auto security_class = SecurityClass::A;
@@ -657,15 +631,10 @@ struct HandlerTraits<VmOpcode::RET_VM, P> {
             return tl::make_unexpected(DiagnosticCode::StackUnderflow);
         e.shadow_depth--;
         auto& cp = e.shadow_stack[e.shadow_depth];
-        // Restore register snapshot from before CALL_VM
         for (int r = 0; r < VM_REG_COUNT; ++r)
             e.regs[r] = RegVal(cp.encoded_regs_snapshot[r]);
         e.branch_target_bb = cp.bb_id;
         e.branch_taken = true;
-        // Resume AFTER the CALL_VM instruction (cp.vm_ip is CALL's ip,
-        // cp.saved_insn_index stores the insn_index_in_bb at CALL time).
-        // The dispatcher will use these to override enter_basic_block's
-        // default vm_ip = entry_ip.
         e.return_resume_ip = cp.vm_ip + 1;
         e.return_resume_insn_idx = cp.saved_insn_index + 1;
         return {};
@@ -675,13 +644,17 @@ struct HandlerTraits<VmOpcode::RET_VM, P> {
 /// NATIVE_CALL: ABI-correct native function call with FP, struct return,
 /// stack args, and platform-specific calling convention support.
 ///
-/// Uses platform_call trampoline (ASM) for correct register placement.
-/// Supports all 5 ABIs: SysV x64, Win x64, cdecl x86-32, stdcall x86-32, AAPCS64.
+/// Uses PlatformCallDesc + platform_call trampoline (ASM) for correct
+/// register placement across all ABIs: SysV x64, Win x64, cdecl/stdcall
+/// x86-32, AAPCS64.
+///
+/// The result is written as plaintext to reg 0; the pipeline FPE-encodes
+/// it after handler return.
 template<typename P>
 struct HandlerTraits<VmOpcode::NATIVE_CALL, P> {
-    static constexpr auto security_class = SecurityClass::C;
+    static constexpr auto security_class = SecurityClass::A;
     using oram_tag = NoOramTag;
-    static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable& im, const DecodedInsn& insn) noexcept {
         if (insn.aux >= im.native_calls.size())
             return tl::make_unexpected(DiagnosticCode::NativeCallBridgeFailed);
@@ -694,34 +667,38 @@ struct HandlerTraits<VmOpcode::NATIVE_CALL, P> {
         bool returns_struct = Common::VM::te_returns_struct(te);
         uint8_t convention  = Common::VM::te_convention(te);
 
-        void* target = reinterpret_cast<void*>(
+        auto target = reinterpret_cast<void*>(
             static_cast<uintptr_t>(te.target_offset + e.load_base_delta));
         if (!target)
             return tl::make_unexpected(DiagnosticCode::NativeCallBridgeFailed);
 
-        // Decode arg registers to plaintext (up to 31 args, using regs 0..argc-1)
+        // FPE-decode arg registers to plaintext (Class C — acknowledged).
+        SecureLocal<Crypto::Speck64_RoundKeys> nc_rk;
+        Crypto::Speck64_KeySchedule(e.insn_fpe_key, nc_rk.val);
+        SecureLocal<Crypto::XEX_Tweaks> nc_tw;
+        Crypto::XEX_ComputeTweaks(nc_rk.val, nc_tw.val);
+
         uint64_t raw_args[32] = {};
         uint8_t decode_count = argc < VM_REG_COUNT ? argc : VM_REG_COUNT;
         for (uint8_t i = 0; i < decode_count; ++i)
-            raw_args[i] = detail::decode_reg(ep, i, e.regs[i].bits);
+            raw_args[i] = Crypto::FPE_Decode(nc_rk.val, nc_tw.val, i,
+                                              e.regs[i].bits);
+        // nc_rk, nc_tw auto-zeroed by SecureLocal
 
-        // Struct return: raw_args[0] is the struct buffer pointer (from compiler)
+        // Struct return: raw_args[0] is the struct buffer pointer
         void* struct_ptr = returns_struct
             ? reinterpret_cast<void*>(static_cast<uintptr_t>(raw_args[0]))
             : nullptr;
 
         // Classify args into PlatformCallDesc for the native ABI
         PlatformCallDesc desc{};
-
         CallABI abi = native_abi();
-        // Override ABI for stdcall convention on x86-32
         if (abi == CallABI::Cdecl_x86 && convention == Common::VM::TE_CONV_STDCALL)
             abi = CallABI::Stdcall_x86;
 
         classify_args_for_abi(abi, raw_args, argc, fp_mask,
                               returns_struct, struct_ptr, desc);
 
-        // Set target and convention AFTER classify (which zeroes desc)
         desc.target = target;
         desc.convention = convention;
         desc.flags = pack_call_flags(
@@ -730,24 +707,22 @@ struct HandlerTraits<VmOpcode::NATIVE_CALL, P> {
         // Call via platform-specific ASM trampoline
         uint64_t result;
         if (returns_struct && abi == CallABI::AAPCS64) {
-            // ARM64: struct pointer goes in x8 (separate variant)
             result = platform_call_struct(&desc, struct_ptr);
         } else {
-            // All others: struct pointer already in int_regs[0] via classify_args
             result = platform_call(&desc);
         }
 
         // Zero plaintext args from stack (forward secrecy)
-        detail::secure_zero_impl(raw_args, sizeof(raw_args));
+        secure_zero(raw_args, sizeof(raw_args));
 
-        // Re-encode result into register 0's domain.
-        // execute() will decode it back to plaintext for the return value.
-        e.regs[0] = RegVal(detail::encode_reg(ep, 0, result));
+        // Store plaintext result; pipeline will FPE-encode reg 0
+        e.regs[0] = RegVal(result);
         e.native_call_nonce++;
         return {};
     }
 };
 
+/// HALT: stop execution.
 template<typename P>
 struct HandlerTraits<VmOpcode::HALT, P> {
     static constexpr auto security_class = SecurityClass::A;
@@ -759,86 +734,174 @@ struct HandlerTraits<VmOpcode::HALT, P> {
     }
 };
 
-// ═════════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 // Cat 5: Width/Extension (8 opcodes)
-// ═════════════════════════════════════════════════════════════════════════════
+//
+// All width operations are trivial on plaintext — just mask or sign-extend.
+// ===========================================================================
 
-#define VMPILOT_WIDTH(OPCODE, OP_EXPR)                                          \
-    template<typename P>                                                         \
-    struct HandlerTraits<VmOpcode::OPCODE, P> {                                 \
-        static constexpr auto security_class = SecurityClass::C;                \
-        using oram_tag = NoOramTag;                                              \
-        static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,   \
-                                   const VmImmutable&, const DecodedInsn& i) noexcept { \
-            uint64_t v = detail::decode_reg(ep, i.reg_a, e.regs[i.reg_a].bits); \
-            v = (OP_EXPR);                                                       \
-            e.regs[i.reg_a] = RegVal(detail::encode_reg(ep, i.reg_a, v));       \
-            return {};                                                           \
-        }                                                                        \
+/// SEXT8: sign-extend from 8 bits
+template<typename P>
+struct HandlerTraits<VmOpcode::SEXT8, P> {
+    static constexpr auto security_class = SecurityClass::A;
+    using oram_tag = NoOramTag;
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
+                               const VmImmutable&, const DecodedInsn& i) noexcept {
+        e.regs[i.reg_a] = RegVal(static_cast<uint64_t>(
+            static_cast<int64_t>(static_cast<int8_t>(i.plain_a & 0xFF))));
+        return {};
     }
+};
 
-VMPILOT_WIDTH(SEXT8,   static_cast<uint64_t>(static_cast<int64_t>(static_cast<int8_t>(v & 0xFF))));
-VMPILOT_WIDTH(SEXT16,  static_cast<uint64_t>(static_cast<int64_t>(static_cast<int16_t>(v & 0xFFFF))));
-VMPILOT_WIDTH(SEXT32,  static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(v & 0xFFFFFFFF))));
-VMPILOT_WIDTH(ZEXT8,   v & 0xFF);
-VMPILOT_WIDTH(ZEXT16,  v & 0xFFFF);
-VMPILOT_WIDTH(ZEXT32,  v & 0xFFFFFFFF);
-VMPILOT_WIDTH(TRUNC8,  v & 0xFF);
-VMPILOT_WIDTH(TRUNC16, v & 0xFFFF);
+/// SEXT16: sign-extend from 16 bits
+template<typename P>
+struct HandlerTraits<VmOpcode::SEXT16, P> {
+    static constexpr auto security_class = SecurityClass::A;
+    using oram_tag = NoOramTag;
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
+                               const VmImmutable&, const DecodedInsn& i) noexcept {
+        e.regs[i.reg_a] = RegVal(static_cast<uint64_t>(
+            static_cast<int64_t>(static_cast<int16_t>(i.plain_a & 0xFFFF))));
+        return {};
+    }
+};
 
-#undef VMPILOT_WIDTH
+/// SEXT32: sign-extend from 32 bits
+template<typename P>
+struct HandlerTraits<VmOpcode::SEXT32, P> {
+    static constexpr auto security_class = SecurityClass::A;
+    using oram_tag = NoOramTag;
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
+                               const VmImmutable&, const DecodedInsn& i) noexcept {
+        e.regs[i.reg_a] = RegVal(static_cast<uint64_t>(
+            static_cast<int64_t>(static_cast<int32_t>(i.plain_a & 0xFFFFFFFF))));
+        return {};
+    }
+};
 
-// ═════════════════════════════════════════════════════════════════════════════
-// Cat 6: Atomic (5 opcodes) — Class C (decode + std::atomic + re-encode)
-// ═════════════════════════════════════════════════════════════════════════════
+/// ZEXT8: zero-extend from 8 bits
+template<typename P>
+struct HandlerTraits<VmOpcode::ZEXT8, P> {
+    static constexpr auto security_class = SecurityClass::A;
+    using oram_tag = NoOramTag;
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
+                               const VmImmutable&, const DecodedInsn& i) noexcept {
+        e.regs[i.reg_a] = RegVal(i.plain_a & 0xFF);
+        return {};
+    }
+};
 
+/// ZEXT16: zero-extend from 16 bits
+template<typename P>
+struct HandlerTraits<VmOpcode::ZEXT16, P> {
+    static constexpr auto security_class = SecurityClass::A;
+    using oram_tag = NoOramTag;
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
+                               const VmImmutable&, const DecodedInsn& i) noexcept {
+        e.regs[i.reg_a] = RegVal(i.plain_a & 0xFFFF);
+        return {};
+    }
+};
+
+/// ZEXT32: zero-extend from 32 bits
+template<typename P>
+struct HandlerTraits<VmOpcode::ZEXT32, P> {
+    static constexpr auto security_class = SecurityClass::A;
+    using oram_tag = NoOramTag;
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
+                               const VmImmutable&, const DecodedInsn& i) noexcept {
+        e.regs[i.reg_a] = RegVal(i.plain_a & 0xFFFFFFFF);
+        return {};
+    }
+};
+
+/// TRUNC8: truncate to 8 bits (same as ZEXT8 for unsigned)
+template<typename P>
+struct HandlerTraits<VmOpcode::TRUNC8, P> {
+    static constexpr auto security_class = SecurityClass::A;
+    using oram_tag = NoOramTag;
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
+                               const VmImmutable&, const DecodedInsn& i) noexcept {
+        e.regs[i.reg_a] = RegVal(i.plain_a & 0xFF);
+        return {};
+    }
+};
+
+/// TRUNC16: truncate to 16 bits
+template<typename P>
+struct HandlerTraits<VmOpcode::TRUNC16, P> {
+    static constexpr auto security_class = SecurityClass::A;
+    using oram_tag = NoOramTag;
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
+                               const VmImmutable&, const DecodedInsn& i) noexcept {
+        e.regs[i.reg_a] = RegVal(i.plain_a & 0xFFFF);
+        return {};
+    }
+};
+
+// ===========================================================================
+// Cat 6: Atomic (5 opcodes)
+//
+// Atomic operations read/write guest memory at physical addresses.
+// The pipeline pre-decodes plain_a (the value operand) and plain_b
+// (for CMPXCHG expected/desired).  Guest atomic memory is NOT in the
+// global memory encoding domain — it uses native plaintext because
+// atomic ops require hardware atomicity guarantees on the actual value.
+// ===========================================================================
+
+/// LOCK_ADD: atomic fetch-add on guest memory.
+/// plain_a = addend.  Returns old value in reg_a.
 template<typename P>
 struct HandlerTraits<VmOpcode::LOCK_ADD, P> {
-    static constexpr auto security_class = SecurityClass::C;
+    static constexpr auto security_class = SecurityClass::A;
     using oram_tag = NoOramTag;
-    static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        uint64_t addend = detail::decode_reg(ep, i.reg_a, e.regs[i.reg_a].bits);
         auto addr = static_cast<uintptr_t>(static_cast<int64_t>(i.aux) + e.load_base_delta);
         auto* ptr = reinterpret_cast<std::atomic<uint64_t>*>(addr);
-        uint64_t old = ptr->fetch_add(addend, std::memory_order_seq_cst);
-        e.regs[i.reg_a] = RegVal(detail::encode_reg(ep, i.reg_a, old));
+        uint64_t old = ptr->fetch_add(i.plain_a, std::memory_order_seq_cst);
+        e.regs[i.reg_a] = RegVal(old);
         return {};
     }
 };
 
+/// XCHG: atomic exchange on guest memory.
+/// plain_a = new value.  Returns old value in reg_a.
 template<typename P>
 struct HandlerTraits<VmOpcode::XCHG, P> {
-    static constexpr auto security_class = SecurityClass::C;
+    static constexpr auto security_class = SecurityClass::A;
     using oram_tag = NoOramTag;
-    static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        uint64_t newval = detail::decode_reg(ep, i.reg_a, e.regs[i.reg_a].bits);
         auto addr = static_cast<uintptr_t>(static_cast<int64_t>(i.aux) + e.load_base_delta);
         auto* ptr = reinterpret_cast<std::atomic<uint64_t>*>(addr);
-        uint64_t old = ptr->exchange(newval, std::memory_order_seq_cst);
-        e.regs[i.reg_a] = RegVal(detail::encode_reg(ep, i.reg_a, old));
+        uint64_t old = ptr->exchange(i.plain_a, std::memory_order_seq_cst);
+        e.regs[i.reg_a] = RegVal(old);
         return {};
     }
 };
 
+/// CMPXCHG: atomic compare-and-swap on guest memory.
+/// plain_a = expected, plain_b = desired.
+/// Returns old value (expected after CAS) in reg_a; ZF = success.
 template<typename P>
 struct HandlerTraits<VmOpcode::CMPXCHG, P> {
-    static constexpr auto security_class = SecurityClass::C;
+    static constexpr auto security_class = SecurityClass::A;
     using oram_tag = NoOramTag;
-    static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        uint64_t expected = detail::decode_reg(ep, i.reg_a, e.regs[i.reg_a].bits);
-        uint64_t desired  = detail::decode_reg(ep, i.reg_b, e.regs[i.reg_b].bits);
+        uint64_t expected = i.plain_a;
+        uint64_t desired  = i.plain_b;
         auto addr = static_cast<uintptr_t>(static_cast<int64_t>(i.aux) + e.load_base_delta);
         auto* ptr = reinterpret_cast<std::atomic<uint64_t>*>(addr);
         bool ok = ptr->compare_exchange_strong(expected, desired, std::memory_order_seq_cst);
-        e.regs[i.reg_a] = RegVal(detail::encode_reg(ep, i.reg_a, expected));
-        e.vm_flags = ok ? 0x01 : 0x00;  // ZF = success
+        e.regs[i.reg_a] = RegVal(expected);
+        e.vm_flags = ok ? 0x01 : 0x00;
         return {};
     }
 };
 
+/// FENCE: full memory barrier.  No register result.
 template<typename P>
 struct HandlerTraits<VmOpcode::FENCE, P> {
     static constexpr auto security_class = SecurityClass::A;
@@ -850,87 +913,96 @@ struct HandlerTraits<VmOpcode::FENCE, P> {
     }
 };
 
+/// ATOMIC_LOAD: atomic load from guest memory.
+/// Returns loaded value in reg_a.
 template<typename P>
 struct HandlerTraits<VmOpcode::ATOMIC_LOAD, P> {
-    static constexpr auto security_class = SecurityClass::C;
+    static constexpr auto security_class = SecurityClass::A;
     using oram_tag = NoOramTag;
-    static HandlerResult exec(VmExecution& e, VmEpoch& ep, VmOramState&,
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
         auto addr = static_cast<uintptr_t>(static_cast<int64_t>(i.aux) + e.load_base_delta);
         auto* ptr = reinterpret_cast<std::atomic<uint64_t>*>(addr);
         uint64_t val = ptr->load(std::memory_order_seq_cst);
-        e.regs[i.reg_a] = RegVal(detail::encode_reg(ep, i.reg_a, val));
+        e.regs[i.reg_a] = RegVal(val);
         return {};
     }
 };
 
-// ═════════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 // Cat 7: VM Internal (7 opcodes)
-// ═════════════════════════════════════════════════════════════════════════════
+//
+// Internal VM control ops.  Most are no-ops or modify metadata.
+// The key ratchet and FPE pipeline run regardless of these.
+// ===========================================================================
 
+/// NOP: write to trash register file (GSS chaff — makes NOP
+/// indistinguishable from real ops in cache/memory traces).
 template<typename P>
 struct HandlerTraits<VmOpcode::NOP, P> {
     static constexpr auto security_class = SecurityClass::A;
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        e.trash_regs[i.reg_a] = e.regs[i.reg_b].bits;
+        e.trash_regs[i.reg_a] = i.plain_b;
         return {};
     }
 };
 
+/// CHECK_INTEGRITY: BB MAC verified by dispatcher at BB boundaries.
+/// This opcode is a no-op in v1 — future: explicit inline MAC check.
 template<typename P>
 struct HandlerTraits<VmOpcode::CHECK_INTEGRITY, P> {
     static constexpr auto security_class = SecurityClass::A;
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution&, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn&) noexcept {
-        // BB MAC is verified at BB boundaries by the dispatcher (step 11).
-        // This opcode is a no-op in v1 — future: explicit inline MAC check.
         return {};
     }
 };
 
+/// CHECK_DEBUG: anti-debug stub (phase 9 deferred).
 template<typename P>
 struct HandlerTraits<VmOpcode::CHECK_DEBUG, P> {
     static constexpr auto security_class = SecurityClass::A;
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution&, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn&) noexcept {
-        // Phase 9 stub: anti-debug checks deferred
         return {};
     }
 };
 
+/// MUTATE_ISA: trigger mid-BB opcode permutation re-derivation.
+/// In doc 16, the per-instruction FPE key ratchet subsumes this —
+/// the opcode permutation changes implicitly with every ratchet step.
+/// Retained as a no-op for ISA compatibility.
 template<typename P>
 struct HandlerTraits<VmOpcode::MUTATE_ISA, P> {
     static constexpr auto security_class = SecurityClass::A;
     using oram_tag = NoOramTag;
-    static HandlerResult exec(VmExecution&, VmEpoch& ep, VmOramState&,
+    static HandlerResult exec(VmExecution&, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn&) noexcept {
-        // Re-derive opcode permutation from current epoch_seed
-        // The epoch tables are already set by enter_basic_block; this opcode
-        // triggers an additional mid-BB mutation (D4 §5.1).
-        // For v1: no-op (mutation happens at BB boundaries via enter_bb).
-        (void)ep;
         return {};
     }
 };
 
+/// REKEY: derive new enc_state from stored_seed + rekey counter.
+/// This strengthens the SipHash chain mid-BB by mixing in fresh
+/// keying material.  The enc_state feeds the FPE key schedule.
 template<typename P>
 struct HandlerTraits<VmOpcode::REKEY, P> {
     static constexpr auto security_class = SecurityClass::A;
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable& im, const DecodedInsn& i) noexcept {
-        // Re-derive enc_state from stored_seed + rekey counter
         uint32_t counter = i.aux;
         uint8_t rk_ctx[9];
         std::memcpy(rk_ctx, "rekey", 5);
         std::memcpy(rk_ctx + 5, &counter, 4);
         uint8_t rk_mat[16];
-        Common::VM::Crypto::blake3_kdf(im.stored_seed,
-            reinterpret_cast<const char*>(rk_ctx), 9, rk_mat, 16);
+        // Use pre-derived rekey_key (stored_seed was zeroed at init)
+        Common::VM::Crypto::blake3_keyed_hash(im.rekey_key,
+            rk_ctx, 9, rk_mat, 16);
         uint8_t es[8];
         std::memcpy(es, &e.enc_state, 8);
         e.enc_state = Common::VM::Crypto::siphash_2_4(rk_mat, es, 8);
@@ -938,6 +1010,8 @@ struct HandlerTraits<VmOpcode::REKEY, P> {
     }
 };
 
+/// SAVE_EPOCH: snapshot current state to shadow stack (no branch).
+/// Used for speculative execution and error recovery.
 template<typename P>
 struct HandlerTraits<VmOpcode::SAVE_EPOCH, P> {
     static constexpr auto security_class = SecurityClass::A;
@@ -957,6 +1031,8 @@ struct HandlerTraits<VmOpcode::SAVE_EPOCH, P> {
     }
 };
 
+/// RESYNC: restore register snapshot from shadow stack (no branch).
+/// Counterpart to SAVE_EPOCH.
 template<typename P>
 struct HandlerTraits<VmOpcode::RESYNC, P> {
     static constexpr auto security_class = SecurityClass::A;
