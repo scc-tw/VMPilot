@@ -6,15 +6,8 @@
 #include <cstring>
 #include <unordered_map>
 
-// clang-format off
-// spdlog must be included before coffi. On Windows, spdlog transitively
-// pulls in <windows.h> which defines IMAGE_* macros via winnt.h. COFFI's
-// coffi_types.hpp defines the same constants with #ifndef guards, so if
-// winnt.h is included first the guards prevent C4005 (macro redefinition)
-// warnings. Reversing the order causes ~50 C4005 warnings on MSVC.
 #include <spdlog/spdlog.h>
 #include <coffi/coffi.hpp>
-// clang-format on
 
 using namespace VMPilot::SDK::Segmentator;
 
@@ -28,7 +21,6 @@ void registerPEHandler() {
 }  // namespace VMPilot::SDK::Segmentator
 
 namespace {
-constexpr uint32_t PE_DIRECTORY_IMPORT = 1;
 
 #pragma pack(push, 1)
 struct PE_IMPORT_DESCRIPTOR {
@@ -42,7 +34,7 @@ struct PE_IMPORT_DESCRIPTOR {
 }  // namespace
 
 struct PEFileHandlerStrategy::Impl {
-    COFFI::coffi reader;
+    coffi::coff_editor<coffi::pe32_traits> reader;
     uint64_t image_base = 0;
     bool is_pe32_plus = false;
 
@@ -58,15 +50,14 @@ struct PEFileHandlerStrategy::Impl {
 };
 
 const char* PEFileHandlerStrategy::rvaToPtr(uint32_t rva) const noexcept {
-    auto& sections = pImpl->reader.get_sections();
-    for (size_t i = 0; i < sections.get_count(); ++i) {
-        auto* sec = sections[i];
-        uint32_t sec_va = sec->get_virtual_address();
-        uint32_t sec_size = sec->get_data_size();
-        if (sec_size == 0 || !sec->get_data())
+    for (std::size_t i = 0; i < pImpl->reader.section_count(); ++i) {
+        auto& sec = pImpl->reader.sections()[i];
+        uint32_t sec_va = sec.virtual_address();
+        auto sec_size = static_cast<uint32_t>(sec.data_length());
+        if (sec_size == 0 || !sec.data_ptr())
             continue;
         if (rva >= sec_va && rva < sec_va + sec_size) {
-            return sec->get_data() + (rva - sec_va);
+            return sec.data_ptr() + (rva - sec_va);
         }
     }
     return nullptr;
@@ -77,16 +68,12 @@ void PEFileHandlerStrategy::parseImports() noexcept {
         return;
     pImpl->imports_parsed = true;
 
-    auto& dirs = pImpl->reader.get_directories();
-    if (dirs.get_count() <= PE_DIRECTORY_IMPORT)
-        return;
-
-    auto* import_dir = dirs[PE_DIRECTORY_IMPORT];
+    auto* import_dir = pImpl->reader.directory(coffi::DIR_IMPORT);
     if (!import_dir)
         return;
 
-    uint32_t import_rva = import_dir->get_virtual_address();
-    uint32_t import_size = import_dir->get_size();
+    uint32_t import_rva = import_dir->virtual_address;
+    uint32_t import_size = import_dir->size;
     if (import_rva == 0 || import_size == 0)
         return;
 
@@ -149,15 +136,22 @@ std::unique_ptr<PEFileHandlerStrategy::Impl>
 VMPilot::SDK::Segmentator::make_pe_impl(const std::string& file_name) {
     auto impl = std::make_unique<PEFileHandlerStrategy::Impl>();
 
-    if (!impl->reader.load(file_name)) {
-        throw std::runtime_error("Failed to parse PE file: " + file_name);
+    auto loaded = coffi::coff_editor<coffi::pe32_traits>::from_path(file_name);
+    if (!loaded) {
+        throw std::runtime_error("Failed to parse PE file: " + file_name +
+                                 " (" + std::string(coffi::to_string(loaded.error())) + ")");
+    }
+    impl->reader = std::move(*loaded);
+
+    // Detect PE32+ by checking optional header magic
+    auto* opt_hdr = impl->reader.optional_header();
+    if (opt_hdr) {
+        impl->is_pe32_plus = (opt_hdr->magic == coffi::OH_MAGIC_PE32PLUS);
     }
 
-    impl->is_pe32_plus = impl->reader.is_PE32_plus();
-
-    auto* win_hdr = impl->reader.get_win_header();
+    auto* win_hdr = impl->reader.win_header();
     if (win_hdr) {
-        impl->image_base = win_hdr->get_image_base();
+        impl->image_base = win_hdr->image_base;
     }
 
     return impl;
@@ -169,16 +163,13 @@ PEFileHandlerStrategy::PEFileHandlerStrategy(const std::string& file_name)
 PEFileHandlerStrategy::~PEFileHandlerStrategy() = default;
 
 std::vector<uint8_t> PEFileHandlerStrategy::doGetTextSection() noexcept {
-    auto& sections = pImpl->reader.get_sections();
-    for (size_t i = 0; i < sections.get_count(); ++i) {
-        auto* sec = sections[i];
-        if (sec->get_name() == ".text") {
-            auto size = sec->get_data_size();
-            const char* data = sec->get_data();
-            if (!data || size == 0)
-                return {};
-            return std::vector<uint8_t>(data, data + size);
-        }
+    auto* sec = pImpl->reader.find_section(".text");
+    if (sec) {
+        auto size = sec->data_length();
+        const char* data = sec->data_ptr();
+        if (!data || size == 0)
+            return {};
+        return std::vector<uint8_t>(data, data + size);
     }
     spdlog::error("Could not find .text section");
     return {};
@@ -189,14 +180,11 @@ uint64_t PEFileHandlerStrategy::doGetTextBaseAddr() noexcept {
         return pImpl->text_base_addr;
     }
 
-    auto& sections = pImpl->reader.get_sections();
-    for (size_t i = 0; i < sections.get_count(); ++i) {
-        auto* sec = sections[i];
-        if (sec->get_name() == ".text") {
-            pImpl->text_base_addr =
-                pImpl->image_base + sec->get_virtual_address();
-            return pImpl->text_base_addr;
-        }
+    auto* sec = pImpl->reader.find_section(".text");
+    if (sec) {
+        pImpl->text_base_addr =
+            pImpl->image_base + sec->virtual_address();
+        return pImpl->text_base_addr;
     }
 
     spdlog::error("Could not find .text section");
@@ -208,16 +196,15 @@ PEFileHandlerStrategy::doGetSections() noexcept {
     namespace Core = VMPilot::SDK::Core;
     std::vector<Core::Section> result;
 
-    auto& sections = pImpl->reader.get_sections();
-    for (size_t i = 0; i < sections.get_count(); ++i) {
-        auto* sec = sections[i];
-        if (!sec || sec->get_data_size() == 0)
+    for (std::size_t i = 0; i < pImpl->reader.section_count(); ++i) {
+        auto& sec = pImpl->reader.sections()[i];
+        if (sec.data_length() == 0)
             continue;
 
         Core::Section s;
-        s.base_addr = pImpl->image_base + sec->get_virtual_address();
-        s.size = sec->get_data_size();
-        s.name = sec->get_name();
+        s.base_addr = pImpl->image_base + sec.virtual_address();
+        s.size = sec.data_length();
+        s.name = std::string(sec.name());
 
         if (s.name == ".text")
             s.kind = Core::SectionKind::Text;
@@ -236,7 +223,7 @@ PEFileHandlerStrategy::doGetSections() noexcept {
         const bool skip_data =
             s.kind == Core::SectionKind::Text ||
             s.kind == Core::SectionKind::Bss;
-        const char* data = sec->get_data();
+        const char* data = sec.data_ptr();
         if (!skip_data && data) {
             s.data.assign(data, data + s.size);
         }
@@ -306,10 +293,10 @@ std::vector<CallTarget> PEFileHandlerStrategy::doGetStubCallTargets() noexcept {
 }
 
 std::string PEFileHandlerStrategy::doGetCompilerInfo() noexcept {
-    auto* opt_hdr = pImpl->reader.get_optional_header();
+    auto* opt_hdr = pImpl->reader.optional_header();
     if (!opt_hdr) return {};
-    uint8_t major = opt_hdr->get_major_linker_version();
-    uint8_t minor = opt_hdr->get_minor_linker_version();
+    uint8_t major = opt_hdr->major_linker_version;
+    uint8_t minor = opt_hdr->minor_linker_version;
     return "MSVC Linker " + std::to_string(major) + "." +
            std::to_string(minor);
 }

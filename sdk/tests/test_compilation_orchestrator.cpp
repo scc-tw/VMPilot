@@ -24,7 +24,7 @@ protected:
         for (int i = 0; i < count; ++i) {
             CompilationUnit unit;
             unit.name = "func_" + std::to_string(i);
-            unit.addr = 0x1000 + i * 0x100;
+            unit.addr = 0x1000 + static_cast<uint64_t>(i) * 0x100;
             unit.code = {0x55, 0x89, 0xe5,
                          static_cast<uint8_t>(i), 0xc3};
             unit.size = unit.code.size();

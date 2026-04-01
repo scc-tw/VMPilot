@@ -8,7 +8,7 @@
 
 namespace VMPilot::Loader {
 
-/// PE binary editor using COFFI. Pimpl to keep coffi out of the header.
+/// PE binary editor using coffi-modern. Pimpl to keep coffi out of the header.
 class PEEditor : public EditorBase<PEEditor> {
     friend class EditorBase<PEEditor>;
 

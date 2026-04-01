@@ -27,8 +27,14 @@
 
 #include <string_view>
 
-// Forward declaration — avoid pulling ELFIO into every TU
-namespace ELFIO { class elfio; }
+// Forward declaration — avoid pulling elfio into every TU
+namespace elfio {
+struct elf32_traits;
+struct elf64_traits;
+template <typename Traits> class elf_editor;
+}  // namespace elfio
+
+#include <variant>
 
 namespace VMPilot::Loader::strategies {
 
@@ -42,13 +48,18 @@ namespace VMPilot::Loader::strategies {
 ///
 /// Advantages: no section growth, no ELFIO relayout, minimal mutation.
 /// Fails if: no .dynamic, no spare DT_NULL, or malformed .dynamic.
+using ElfEditorVariant = std::variant<
+    elfio::elf_editor<elfio::elf32_traits>,
+    elfio::elf_editor<elfio::elf64_traits>
+>;
+
 struct StealDtNull {
     static constexpr const char* name = "StealDtNull";
     using result_type = tl::expected<void, Common::DiagnosticCode>;
 
     static result_type try_execute(
         Common::DiagnosticCollector& diag,
-        ELFIO::elfio& reader,
+        ElfEditorVariant& editor,
         std::string_view soname) noexcept;
 };
 
@@ -56,10 +67,10 @@ struct StealDtNull {
 ///
 /// Overwrites the current DT_NULL with a DT_NEEDED entry, then appends a
 /// fresh DT_NULL as the new terminator.  This grows .dynamic by one entry;
-/// ELFIO recalculates all file offsets on save().
+/// elfio-modern recalculates all file offsets on save().
 ///
 /// Advantages: always works if .dynamic has a DT_NULL terminator.
-/// Disadvantages: modifies section size, requires ELFIO relayout.
+/// Disadvantages: modifies section size, requires elfio-modern relayout.
 /// Fails if: no .dynamic, no DT_NULL terminator, or missing .dynstr.
 struct GrowDynamic {
     static constexpr const char* name = "GrowDynamic";
@@ -67,7 +78,7 @@ struct GrowDynamic {
 
     static result_type try_execute(
         Common::DiagnosticCollector& diag,
-        ELFIO::elfio& reader,
+        ElfEditorVariant& editor,
         std::string_view soname) noexcept;
 };
 

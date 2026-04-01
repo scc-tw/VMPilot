@@ -1,22 +1,27 @@
 #include <ELFEditor.hpp>
+#include <coffi_adapter.hpp>
 
 #include <elfio/elfio.hpp>
 
 #include <algorithm>
 #include <cstring>
+#include <fstream>
 #include <vector>
 
-using ELFIO::PT_LOAD;
-using ELFIO::SHT_PROGBITS;
-using ELFIO::SHT_DYNAMIC;
-using ELFIO::SHF_ALLOC;
-using ELFIO::SHF_EXECINSTR;
-using ELFIO::SHF_WRITE;
-using ELFIO::PF_R;
-using ELFIO::PF_W;
-using ELFIO::PF_X;
-using ELFIO::DT_NULL;
-using ELFIO::DT_NEEDED;
+using elfio::PT_LOAD;
+using elfio::PT_DYNAMIC;
+using elfio::PT_PHDR;
+using elfio::SHT_NULL;
+using elfio::SHT_PROGBITS;
+using elfio::SHT_DYNAMIC;
+using elfio::SHF_ALLOC;
+using elfio::SHF_EXECINSTR;
+using elfio::SHF_WRITE;
+using elfio::PF_R;
+using elfio::PF_W;
+using elfio::PF_X;
+using elfio::DT_NULL;
+using elfio::DT_NEEDED;
 
 namespace VMPilot::Loader {
 
@@ -29,14 +34,33 @@ static tl::unexpected<DC> fail(Common::DiagnosticCollector& diag, DC code,
 }
 
 // ---------------------------------------------------------------------------
+// Helper: append a NUL-terminated string to a section_entry's data,
+// returning the offset at which the string begins (i.e. the old size).
+// Replaces the non-existent section_entry::append_string().
+// ---------------------------------------------------------------------------
+template <typename Traits>
+static size_t append_string_to_section(elfio::section_entry<Traits>& sec,
+                                       const std::string& str) {
+    const size_t offset = sec.data().size();
+    // Build a temporary buffer: existing data + str + NUL
+    std::vector<char> buf(sec.data().begin(), sec.data().end());
+    buf.insert(buf.end(), str.begin(), str.end());
+    buf.push_back('\0');
+    sec.set_data(std::move(buf));
+    return offset;
+}
+
+// ---------------------------------------------------------------------------
 // Impl
 // ---------------------------------------------------------------------------
 
 struct ELFEditor::Impl {
-    ELFIO::elfio reader;
-    ELFIO::section* text_sec = nullptr;
+    ElfEditorVariant editor;
+    // Index of the .text section within the editor's section list.
+    std::size_t text_sec_idx = 0;
     uint64_t text_va   = 0;
     uint64_t text_size = 0;
+    bool is_64 = true;
 };
 
 ELFEditor::ELFEditor() : impl_(std::make_unique<Impl>()) {}
@@ -51,22 +75,98 @@ ELFEditor& ELFEditor::operator=(ELFEditor&&) noexcept = default;
 tl::expected<ELFEditor, DC>
 ELFEditor::open(const std::string& path,
                 Common::DiagnosticCollector& diag) noexcept {
+    // Read entire file into memory.
+    std::ifstream ifs(path, std::ios::binary | std::ios::ate);
+    if (!ifs.good())
+        return fail(diag, DC::PatchBinaryReadFailed, "cannot open ELF: " + path);
+
+    const auto file_size = ifs.tellg();
+    ifs.seekg(0);
+    std::vector<char> file_buf(static_cast<size_t>(file_size));
+    ifs.read(file_buf.data(), file_size);
+    ifs.close();
+
+    if (file_buf.size() < 5)
+        return fail(diag, DC::PatchBinaryReadFailed, "file too small: " + path);
+
+    // Detect ELF class (32/64) from EI_CLASS byte at offset 4.
+    const uint8_t ei_class = static_cast<uint8_t>(file_buf[4]);
+
     ELFEditor ed;
-    if (!ed.impl_->reader.load(path))
-        return fail(diag, DC::PatchBinaryReadFailed, "failed to load ELF: " + path);
+    const bool is64 = (ei_class != 1);  // ELFCLASS32 = 1
+    ed.impl_->is_64 = is64;
 
-    for (auto& sec : ed.impl_->reader.sections) {
-        if (sec->get_name() == ".text") {
-            ed.impl_->text_sec  = sec.get();
-            ed.impl_->text_va   = sec->get_address();
-            ed.impl_->text_size = sec->get_size();
-            break;
+    // Load the file into an elf_file (zero-copy reader), then copy all
+    // sections and segments into an elf_editor (mutable).
+    auto open_impl = [&](auto traits_tag) -> tl::expected<ELFEditor, DC> {
+        using Traits = decltype(traits_tag);
+        elfio::byte_view view{file_buf.data(), file_buf.size()};
+        auto parsed = elfio::elf_file<Traits>::from_view(view);
+        if (!parsed)
+            return fail(diag, DC::PatchBinaryReadFailed,
+                        "failed to parse ELF: " + path + " (" +
+                        std::string(elfio::to_string(parsed.error())) + ")");
+
+        auto& file = *parsed;
+
+        // Build mutable editor and populate from parsed file.
+        elfio::elf_editor<Traits> editor;
+        editor.create(file.encoding(), file.type(), file.machine());
+        editor.set_os_abi(file.os_abi());
+        editor.set_entry(file.entry());
+        editor.set_flags(file.flags());
+
+        // Copy sections (skip index 0 — the null section is already in the editor).
+        for (auto sec_ref : file.sections()) {
+            if (sec_ref.index() == 0) continue;
+            auto& sec = editor.add_section(std::string(sec_ref.name()),
+                                           sec_ref.type(), sec_ref.flags());
+            sec.set_address(sec_ref.address());
+            sec.set_link(sec_ref.link());
+            sec.set_info(sec_ref.info());
+            sec.set_addr_align(sec_ref.addr_align());
+            sec.set_entry_size(sec_ref.entry_size());
+
+            auto sec_data = sec_ref.data();
+            if (!sec_data.empty()) {
+                sec.set_data(reinterpret_cast<const char*>(sec_data.data()),
+                             static_cast<std::size_t>(sec_data.size()));
+            }
         }
-    }
-    if (!ed.impl_->text_sec)
-        return fail(diag, DC::PatchBinaryReadFailed, "no .text section");
 
-    return ed;
+        // Copy segments.
+        for (auto seg_ref : file.segments()) {
+            auto& seg = editor.add_segment(seg_ref.type(), seg_ref.flags());
+            seg.set_vaddr(seg_ref.virtual_address());
+            seg.set_paddr(seg_ref.physical_address());
+            seg.set_filesz(seg_ref.file_size());
+            seg.set_memsz(seg_ref.memory_size());
+            seg.set_align(seg_ref.align());
+        }
+
+        // Find .text section in the editor.
+        bool found = false;
+        for (std::size_t i = 0; i < editor.sections().size(); ++i) {
+            auto& sec = editor.sections()[i];
+            if (sec.name() == ".text") {
+                ed.impl_->text_sec_idx = i;
+                ed.impl_->text_va     = sec.address();
+                ed.impl_->text_size   = sec.size();
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            return fail(diag, DC::PatchBinaryReadFailed, "no .text section");
+
+        ed.impl_->editor = std::move(editor);
+        return {std::move(ed)};
+    };
+
+    if (is64)
+        return open_impl(elfio::elf64_traits{});
+    else
+        return open_impl(elfio::elf32_traits{});
 }
 
 // ---------------------------------------------------------------------------
@@ -84,19 +184,22 @@ TextSectionInfo ELFEditor::text_section_impl() const noexcept {
 tl::expected<void, DC>
 ELFEditor::overwrite_text_impl(uint64_t va, const uint8_t* data, size_t len,
                                Common::DiagnosticCollector& diag) noexcept {
-    auto* sec = impl_->text_sec;
-    const uint64_t sec_addr = sec->get_address();
-    const uint64_t sec_size = sec->get_size();
+    const uint64_t sec_addr = impl_->text_va;
+    const uint64_t sec_size = impl_->text_size;
 
     if (va < sec_addr || va + len > sec_addr + sec_size)
         return fail(diag, DC::PatchSegmentCreationFailed, "VA outside .text");
 
     const size_t offset = static_cast<size_t>(va - sec_addr);
 
-    // ELFIO: get_data() is const; copy, patch, set_data.
-    std::vector<uint8_t> buf(sec->get_data(), sec->get_data() + sec->get_size());
-    std::memcpy(buf.data() + offset, data, len);
-    sec->set_data(reinterpret_cast<const char*>(buf.data()), buf.size());
+    visit_elf(impl_->editor, [&](auto& editor) {
+        auto& sec = editor.sections()[impl_->text_sec_idx];
+        const auto& sec_data = sec.data();
+        std::vector<uint8_t> buf(reinterpret_cast<const uint8_t*>(sec_data.data()),
+                                 reinterpret_cast<const uint8_t*>(sec_data.data()) + sec_data.size());
+        std::memcpy(buf.data() + offset, data, len);
+        sec.set_data(reinterpret_cast<const char*>(buf.data()), buf.size());
+    });
     return {};
 }
 
@@ -118,52 +221,51 @@ bool ELFEditor::cfi_enforced_impl() const noexcept {
     constexpr uint32_t GNU_PROPERTY_AARCH64_FEATURE_1_AND = 0xC0000000;
     constexpr uint32_t FEATURE_1_IBT_OR_BTI = 0x00000001;
 
-    for (const auto& sec : impl_->reader.sections) {
-        if (sec->get_name() != ".note.gnu.property") continue;
-        if (sec->get_size() < 16) continue;
+    return visit_elf(const_cast<ElfEditorVariant&>(impl_->editor), [&](auto& editor) -> bool {
+        for (std::size_t si = 0; si < editor.sections().size(); ++si) {
+            auto& sec = editor.sections()[si];
+            if (sec.name() != ".note.gnu.property") continue;
+            if (sec.data().size() < 16) continue;
 
-        const auto* data = reinterpret_cast<const uint8_t*>(sec->get_data());
-        size_t off = 0;
-        while (off + 12 <= sec->get_size()) {
-            uint32_t namesz, descsz, type;
-            std::memcpy(&namesz, data + off, 4);
-            std::memcpy(&descsz, data + off + 4, 4);
-            std::memcpy(&type,   data + off + 8, 4);
+            const auto* data = reinterpret_cast<const uint8_t*>(sec.data().data());
+            const size_t sec_size = sec.data().size();
+            size_t off = 0;
+            while (off + 12 <= sec_size) {
+                uint32_t namesz, descsz, type;
+                std::memcpy(&namesz, data + off, 4);
+                std::memcpy(&descsz, data + off + 4, 4);
+                std::memcpy(&type,   data + off + 8, 4);
 
-            // Align namesz to 4 bytes
-            const size_t name_pad = (namesz + 3) & ~3u;
-            const size_t desc_start = off + 12 + name_pad;
+                const size_t name_pad = (namesz + 3) & ~3u;
+                const size_t desc_start = off + 12 + name_pad;
 
-            if (type == NT_GNU_PROPERTY_TYPE_0 && namesz == 4 &&
-                desc_start + descsz <= sec->get_size()) {
-                // Parse property entries within the descriptor
-                size_t p = desc_start;
-                while (p + 8 <= desc_start + descsz) {
-                    uint32_t pr_type, pr_datasz;
-                    std::memcpy(&pr_type,   data + p, 4);
-                    std::memcpy(&pr_datasz, data + p + 4, 4);
-                    if (pr_datasz >= 4 &&
-                        (pr_type == GNU_PROPERTY_X86_FEATURE_1_AND ||
-                         pr_type == GNU_PROPERTY_AARCH64_FEATURE_1_AND)) {
-                        uint32_t features;
-                        std::memcpy(&features, data + p + 8, 4);
-                        if (features & FEATURE_1_IBT_OR_BTI)
-                            return true;
+                if (type == NT_GNU_PROPERTY_TYPE_0 && namesz == 4 &&
+                    desc_start + descsz <= sec_size) {
+                    size_t p = desc_start;
+                    while (p + 8 <= desc_start + descsz) {
+                        uint32_t pr_type, pr_datasz;
+                        std::memcpy(&pr_type,   data + p, 4);
+                        std::memcpy(&pr_datasz, data + p + 4, 4);
+                        if (pr_datasz >= 4 &&
+                            (pr_type == GNU_PROPERTY_X86_FEATURE_1_AND ||
+                             pr_type == GNU_PROPERTY_AARCH64_FEATURE_1_AND)) {
+                            uint32_t features;
+                            std::memcpy(&features, data + p + 8, 4);
+                            if (features & FEATURE_1_IBT_OR_BTI)
+                                return true;
+                        }
+                        const size_t entry_align = impl_->is_64 ? 8 : 4;
+                        p += 8 + ((pr_datasz + entry_align - 1) & ~(entry_align - 1));
                     }
-                    // Next property: 8 (header) + pr_datasz aligned to 4/8
-                    const size_t entry_align =
-                        (impl_->reader.get_class() == ELFIO::ELFCLASS64) ? 8 : 4;
-                    p += 8 + ((pr_datasz + entry_align - 1) & ~(entry_align - 1));
                 }
-            }
 
-            // Next note: 12 + aligned namesz + aligned descsz
-            const size_t desc_pad = (descsz + 3) & ~3u;
-            off = desc_start + desc_pad;
+                const size_t desc_pad = (descsz + 3) & ~3u;
+                off = desc_start + desc_pad;
+            }
+            break;
         }
-        break;
-    }
-    return false;
+        return false;
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -182,31 +284,31 @@ bool ELFEditor::cfi_enforced_impl() const noexcept {
 /// all non-stub indirect calls that lack ENDBR.
 ///
 /// What we DO: verify the note section still exists after mutations.
-/// If it was somehow lost (ELFIO bug, section reorder), rebuild it.
+/// If it was somehow lost (section reorder), rebuild it.
 void ELFEditor::ensure_cfi_note() noexcept {
     // Check if the binary originally had CFI enforcement.
     // cfi_enforced() reads the live section data — if it returns true,
     // the note survived all mutations and will be written by save().
     if (!cfi_enforced()) return;
 
-    // If we get here, the note exists and is intact.  ELFIO preserves
+    // If we get here, the note exists and is intact.  elfio-modern preserves
     // all sections during save(), so no reconstruction needed.
     //
     // Defense-in-depth: verify the section is still in the section list.
     bool found = false;
-    for (const auto& sec : impl_->reader.sections) {
-        if (sec->get_name() == ".note.gnu.property") {
-            found = true;
-            break;
+    visit_elf(impl_->editor, [&](auto& editor) {
+        for (std::size_t i = 0; i < editor.sections().size(); ++i) {
+            if (editor.sections()[i].name() == ".note.gnu.property") {
+                found = true;
+                break;
+            }
         }
-    }
+    });
 
     if (!found) {
-        // Section was lost — should never happen with ELFIO, but if it
-        // does, we rebuild the note from scratch.
+        // Section was lost — should never happen, but if it does,
+        // we rebuild the note from scratch.
         constexpr uint32_t NT_GNU_PROPERTY_TYPE_0 = 5;
-        const bool is_aarch64 =
-            (impl_->reader.get_machine() == 0xB7);  // EM_AARCH64
 
         std::vector<uint8_t> note;
         auto push32 = [&](uint32_t v) {
@@ -219,18 +321,21 @@ void ELFEditor::ensure_cfi_note() noexcept {
         push32(NT_GNU_PROPERTY_TYPE_0);
         note.push_back('G'); note.push_back('N');
         note.push_back('U'); note.push_back('\0');
-        // Property entry
-        push32(is_aarch64 ? 0xC0000000u : 0xC0000002u);  // AARCH64 or X86
-        push32(4);           // pr_datasz
-        push32(0x00000001);  // IBT or BTI
-        push32(0);           // alignment padding
 
-        auto* new_sec = impl_->reader.sections.add(".note.gnu.property");
-        new_sec->set_type(ELFIO::SHT_NOTE);
-        new_sec->set_flags(ELFIO::SHF_ALLOC);
-        new_sec->set_addr_align(8);
-        new_sec->set_data(reinterpret_cast<const char*>(note.data()),
-                          note.size());
+        visit_elf(impl_->editor, [&](auto& editor) {
+            const bool is_aarch64 = (editor.machine() == 0xB7);  // EM_AARCH64
+            // Property entry
+            push32(is_aarch64 ? 0xC0000000u : 0xC0000002u);
+            push32(4);           // pr_datasz
+            push32(0x00000001);  // IBT or BTI
+            push32(0);           // alignment padding
+
+            auto& new_sec = editor.add_section(".note.gnu.property",
+                                                elfio::SHT_NOTE, elfio::SHF_ALLOC);
+            new_sec.set_addr_align(8);
+            new_sec.set_data(reinterpret_cast<const char*>(note.data()),
+                              note.size());
+        });
     }
 }
 
@@ -246,11 +351,16 @@ void ELFEditor::ensure_cfi_note() noexcept {
 /// Returns gaps >= min_size, sorted by size descending.
 std::vector<TextGap>
 ELFEditor::find_text_gaps_impl(std::size_t min_size) const noexcept {
-    auto* sec = impl_->text_sec;
-    if (!sec || sec->get_size() == 0) return {};
+    if (impl_->text_size == 0) return {};
 
-    const auto* data = reinterpret_cast<const uint8_t*>(sec->get_data());
-    const size_t text_len = sec->get_size();
+    const uint8_t* data = nullptr;
+    size_t text_len = 0;
+    visit_elf(const_cast<ElfEditorVariant&>(impl_->editor), [&](auto& editor) {
+        auto& sec = editor.sections()[impl_->text_sec_idx];
+        data = reinterpret_cast<const uint8_t*>(sec.data().data());
+        text_len = sec.data().size();
+    });
+    if (!data || text_len == 0) return {};
     const uint64_t base_va = impl_->text_va;
 
     // Helper: is this byte a filler?
@@ -291,52 +401,52 @@ tl::expected<NewSegmentInfo, DC>
 ELFEditor::extend_text(const std::vector<uint8_t>& data,
                        uint64_t alignment,
                        Common::DiagnosticCollector& diag) noexcept {
-    auto& reader = impl_->reader;
-    auto* text_sec = impl_->text_sec;
-
-    if (!text_sec)
+    if (impl_->text_size == 0)
         return fail(diag, DC::PatchBinaryReadFailed, "no .text section for extend_text");
-
-    // 1. Find the PT_LOAD segment that contains .text
-    ELFIO::segment* text_seg = nullptr;
-    for (auto& seg : reader.segments) {
-        if (seg->get_type() != PT_LOAD)
-            continue;
-        const uint64_t seg_start = seg->get_virtual_address();
-        const uint64_t seg_end   = seg_start + seg->get_memory_size();
-        if (impl_->text_va >= seg_start && impl_->text_va < seg_end) {
-            text_seg = seg.get();
-            break;
-        }
-    }
-
-    if (!text_seg)
-        return fail(diag, DC::PatchSegmentCreationFailed,
-                    "no PT_LOAD segment contains .text; cannot extend");
 
     // 2. Compute the new data's VA = .text VA + current size, aligned
     const uint64_t orig_text_end_va = impl_->text_va + impl_->text_size;
     const uint64_t new_data_va = (orig_text_end_va + alignment - 1) & ~(alignment - 1);
     const uint64_t padding = new_data_va - orig_text_end_va;
-
-    // 3. Grow the .text section data: append padding + payload
-    const size_t orig_sec_size = text_sec->get_size();
-    const size_t new_sec_size = orig_sec_size + static_cast<size_t>(padding) + data.size();
-
-    std::vector<uint8_t> buf(new_sec_size, 0x00);
-    std::memcpy(buf.data(), text_sec->get_data(), orig_sec_size);
-    std::memcpy(buf.data() + orig_sec_size + static_cast<size_t>(padding),
-                data.data(), data.size());
-
-    text_sec->set_data(reinterpret_cast<const char*>(buf.data()), buf.size());
-
-    // 4. Update the PT_LOAD segment sizes to cover the growth
     const uint64_t growth = static_cast<uint64_t>(padding) + data.size();
-    text_seg->set_memory_size(text_seg->get_memory_size() + growth);
-    text_seg->set_file_size(text_seg->get_file_size() + growth);
 
-    // 5. Update cached .text size so overwrite_text() sees the extended range
-    impl_->text_size = new_sec_size;
+    bool found_seg = false;
+    visit_elf(impl_->editor, [&](auto& editor) {
+        auto& text_sec = editor.sections()[impl_->text_sec_idx];
+
+        // 3. Grow the .text section data: append padding + payload
+        const size_t orig_sec_size = text_sec.data().size();
+        const size_t new_sec_size = orig_sec_size + static_cast<size_t>(padding) + data.size();
+
+        std::vector<uint8_t> buf(new_sec_size, 0x00);
+        std::memcpy(buf.data(), text_sec.data().data(), orig_sec_size);
+        std::memcpy(buf.data() + orig_sec_size + static_cast<size_t>(padding),
+                    data.data(), data.size());
+
+        text_sec.set_data(reinterpret_cast<const char*>(buf.data()), buf.size());
+
+        // 1+4. Find the PT_LOAD segment that contains .text and update sizes
+        for (std::size_t si = 0; si < editor.segments().size(); ++si) {
+            auto& seg = editor.segments()[si];
+            if (seg.type() != PT_LOAD)
+                continue;
+            const uint64_t seg_start = seg.vaddr();
+            const uint64_t seg_end   = seg_start + seg.memsz();
+            if (impl_->text_va >= seg_start && impl_->text_va < seg_end) {
+                seg.set_memsz(seg.memsz() + growth);
+                seg.set_filesz(seg.filesz() + growth);
+                found_seg = true;
+                break;
+            }
+        }
+
+        // 5. Update cached .text size
+        impl_->text_size = new_sec_size;
+    });
+
+    if (!found_seg)
+        return fail(diag, DC::PatchSegmentCreationFailed,
+                    "no PT_LOAD segment contains .text; cannot extend");
 
     return NewSegmentInfo{new_data_va, data.size()};
 }
@@ -347,12 +457,15 @@ ELFEditor::extend_text(const std::vector<uint8_t>& data,
 
 uint64_t ELFEditor::next_segment_va_impl(uint64_t alignment) const noexcept {
     uint64_t highest = 0;
-    for (const auto& seg : impl_->reader.segments) {
-        if (seg->get_type() == PT_LOAD) {
-            uint64_t end = seg->get_virtual_address() + seg->get_memory_size();
-            if (end > highest) highest = end;
+    visit_elf(const_cast<ElfEditorVariant&>(impl_->editor), [&](auto& editor) {
+        for (std::size_t i = 0; i < editor.segments().size(); ++i) {
+            auto& seg = editor.segments()[i];
+            if (seg.type() == PT_LOAD) {
+                uint64_t end = seg.vaddr() + seg.memsz();
+                if (end > highest) highest = end;
+            }
         }
-    }
+    });
     return (highest + alignment - 1) & ~(alignment - 1);
 }
 
@@ -365,35 +478,34 @@ ELFEditor::add_segment_impl(std::string_view name,
                        const std::vector<uint8_t>& payload,
                        uint64_t alignment,
                        Common::DiagnosticCollector& /*diag*/) noexcept {
-    auto& reader = impl_->reader;
-
     // Next page-aligned VA after all existing PT_LOAD segments
     uint64_t highest = 0;
-    for (const auto& seg : reader.segments) {
-        if (seg->get_type() == PT_LOAD) {
-            uint64_t end = seg->get_virtual_address() + seg->get_memory_size();
-            if (end > highest) highest = end;
+    visit_elf(impl_->editor, [&](auto& editor) {
+        for (std::size_t i = 0; i < editor.segments().size(); ++i) {
+            auto& seg = editor.segments()[i];
+            if (seg.type() == PT_LOAD) {
+                uint64_t end = seg.vaddr() + seg.memsz();
+                if (end > highest) highest = end;
+            }
         }
-    }
+    });
     const uint64_t seg_va = (highest + alignment - 1) & ~(alignment - 1);
 
-    auto* new_sec = reader.sections.add(std::string{name});
-    new_sec->set_type(SHT_PROGBITS);
-    new_sec->set_flags(SHF_ALLOC | SHF_WRITE | SHF_EXECINSTR);
-    new_sec->set_addr_align(16);
-    new_sec->set_address(seg_va);
-    new_sec->set_data(reinterpret_cast<const char*>(payload.data()), payload.size());
+    visit_elf(impl_->editor, [&](auto& editor) {
+        auto& new_sec = editor.add_section(std::string{name}, SHT_PROGBITS,
+                                            SHF_ALLOC | SHF_WRITE | SHF_EXECINSTR);
+        new_sec.set_addr_align(16);
+        new_sec.set_address(seg_va);
+        new_sec.set_data(reinterpret_cast<const char*>(payload.data()), payload.size());
 
-    auto* new_seg = reader.segments.add();
-    new_seg->set_type(PT_LOAD);
-    // Initially RW (writable, NOT executable).  The runtime constructor
-    // writes &vm_stub_entry to call_slot (offset 0), then mprotects the
-    // entire section to RX.  This maintains W^X at all times.
-    new_seg->set_flags(PF_R | PF_W);
-    new_seg->set_align(alignment);
-    new_seg->set_virtual_address(seg_va);
-    new_seg->set_physical_address(seg_va);
-    new_seg->add_section_index(new_sec->get_index(), new_sec->get_addr_align());
+        auto& new_seg = editor.add_segment(PT_LOAD, PF_R | PF_W);
+        new_seg.set_align(alignment);
+        new_seg.set_vaddr(seg_va);
+        new_seg.set_paddr(seg_va);
+        // In elfio-modern, add_section_index takes just the index
+        auto sec_idx = static_cast<uint16_t>(editor.sections().size() - 1);  // just added
+        new_seg.add_section_index(sec_idx);
+    });
 
     // If the binary has CET/BTI enforcement, verify the .note.gnu.property
     // survives our mutations.  Our stubs have ENDBR/BTI c, so the note
@@ -411,161 +523,142 @@ ELFEditor::add_segment_impl(std::string_view name,
 ///
 /// Multi-layer fallback:
 ///   Layer 1: Steal a spare DT_NULL padding slot (no section growth).
-///   Layer 2: Append via ELFIO dynamic_section_accessor (grows .dynamic;
-///            ELFIO relayouts the file on save).
+///   Layer 2: Grow .dynamic by appending a new DT_NULL after the
+///            overwritten entry (elfio-modern relayouts on save).
 ///   Layer 3: Return PatchRuntimeDepFailed — the patched binary will NOT
 ///            auto-load the runtime.  Stubs will dereference null call_slot.
 tl::expected<void, DC>
 ELFEditor::add_runtime_dep_impl(std::string_view soname,
                            Common::DiagnosticCollector& diag) noexcept {
-    auto& reader = impl_->reader;
     const std::string soname_str(soname);
+    const bool is64 = impl_->is_64;
 
-    // -- Find .dynamic section --
-    // Without .dynamic, this is a statically linked binary.  The dynamic
-    // linker won't process it, so DT_NEEDED has no effect.
-    ELFIO::section* dyn_sec = nullptr;
-    for (auto& sec : reader.sections) {
-        if (sec->get_type() == SHT_DYNAMIC) {
-            dyn_sec = sec.get();
-            break;
-        }
-    }
-    if (!dyn_sec) {
-        return fail(diag, DC::PatchRuntimeDepFailed,
-                    "no .dynamic section — cannot inject DT_NEEDED for '"
-                    + soname_str + "' (static binary?)");
-    }
+    // We need to operate on raw dynamic section bytes.  Use a lambda
+    // dispatched through visit_elf to handle both 32/64-bit editors.
+    tl::expected<void, DC> result = {};
 
-    const size_t entry_size = dyn_sec->get_entry_size();
-    if (entry_size == 0) {
-        return fail(diag, DC::PatchRuntimeDepFailed,
-                    ".dynamic has entry_size 0 — malformed ELF");
-    }
-
-    // -- Locate .dynstr --
-    // DT_NEEDED stores an offset into .dynstr.  Without it, we cannot
-    // represent the soname string.
-    auto str_link = dyn_sec->get_link();
-    if (str_link == 0 || str_link >= reader.sections.size()) {
-        return fail(diag, DC::PatchRuntimeDepFailed,
-                    ".dynamic has no linked .dynstr — cannot inject DT_NEEDED");
-    }
-
-    // ================================================================
-    // Layer 1: Steal a spare DT_NULL slot (preferred — no section growth)
-    // ================================================================
-    const size_t total_slots = dyn_sec->get_size() / entry_size;
-    const auto* raw = reinterpret_cast<const uint8_t*>(dyn_sec->get_data());
-    const bool is64 = (reader.get_class() == ELFIO::ELFCLASS64);
-
-    if (raw && total_slots >= 2) {
-        size_t null_idx = total_slots;
-        for (size_t i = 0; i < total_slots; ++i) {
-            const uint8_t* ent = raw + i * entry_size;
-            int64_t tag = 0;
-            if (is64) {
-                ELFIO::Elf64_Dyn d;
-                std::memcpy(&d, ent, sizeof(d));
-                tag = static_cast<int64_t>(d.d_tag);
-            } else {
-                ELFIO::Elf32_Dyn d;
-                std::memcpy(&d, ent, sizeof(d));
-                tag = static_cast<int64_t>(d.d_tag);
-            }
-            if (tag == static_cast<int64_t>(DT_NULL)) {
-                null_idx = i;
+    visit_elf(impl_->editor, [&](auto& editor) {
+        // -- Find .dynamic section --
+        const std::size_t sec_count = editor.sections().size();
+        std::size_t dyn_idx = sec_count;
+        for (std::size_t i = 0; i < sec_count; ++i) {
+            if (editor.sections()[i].type() == SHT_DYNAMIC) {
+                dyn_idx = i;
                 break;
             }
         }
-
-        if (null_idx < total_slots && null_idx + 1 < total_slots) {
-            // Spare slot found — steal it.
-            ELFIO::string_section_accessor strsec(reader.sections[str_link]);
-            auto str_offset = strsec.add_string(soname_str);
-
-            std::vector<uint8_t> buf(raw, raw + dyn_sec->get_size());
-            uint8_t* target = buf.data() + null_idx * entry_size;
-
-            if (is64) {
-                ELFIO::Elf64_Dyn d{};
-                d.d_tag      = static_cast<ELFIO::Elf_Sxword>(DT_NEEDED);
-                d.d_un.d_val = static_cast<ELFIO::Elf_Xword>(str_offset);
-                std::memcpy(target, &d, sizeof(d));
-            } else {
-                ELFIO::Elf32_Dyn d{};
-                d.d_tag      = static_cast<ELFIO::Elf_Sword>(DT_NEEDED);
-                d.d_un.d_val = static_cast<ELFIO::Elf_Word>(str_offset);
-                std::memcpy(target, &d, sizeof(d));
-            }
-
-            dyn_sec->set_data(reinterpret_cast<const char*>(buf.data()), buf.size());
-            return {};  // Layer 1 success
+        if (dyn_idx == sec_count) {
+            result = fail(diag, DC::PatchRuntimeDepFailed,
+                        "no .dynamic section — cannot inject DT_NEEDED for '"
+                        + soname_str + "' (static binary?)");
+            return;
         }
 
-        diag.warn("loader", DC::None,
-                  "no spare DT_NULL in .dynamic — falling back to section growth");
-    }
+        auto& dyn_sec = editor.sections()[dyn_idx];
+        const size_t entry_size = dyn_sec.entry_size();
+        if (entry_size == 0) {
+            result = fail(diag, DC::PatchRuntimeDepFailed,
+                        ".dynamic has entry_size 0 — malformed ELF");
+            return;
+        }
 
-    // ================================================================
-    // Layer 2: Grow .dynamic by overwriting the DT_NULL terminator with
-    //          our DT_NEEDED entry, then appending a new DT_NULL.
-    //          ELFIO recalculates file layout on save().
-    // ================================================================
-    {
-        ELFIO::string_section_accessor strsec(reader.sections[str_link]);
-        auto str_offset = strsec.add_string(soname_str);
+        auto str_link = dyn_sec.link();
+        if (str_link == 0 || str_link >= sec_count) {
+            result = fail(diag, DC::PatchRuntimeDepFailed,
+                        ".dynamic has no linked .dynstr — cannot inject DT_NEEDED");
+            return;
+        }
 
-        // Find the DT_NULL terminator (must exist — dynamic section always has one)
+        const size_t total_slots = dyn_sec.data().size() / entry_size;
+        const auto* raw = reinterpret_cast<const uint8_t*>(dyn_sec.data().data());
+
+        // Helper to read tag from a dynamic entry
+        auto read_tag = [&](const uint8_t* ent) -> int64_t {
+            if (is64) {
+                elfio::Elf64_Dyn d;
+                std::memcpy(&d, ent, sizeof(d));
+                return static_cast<int64_t>(d.d_tag);
+            } else {
+                elfio::Elf32_Dyn d;
+                std::memcpy(&d, ent, sizeof(d));
+                return static_cast<int64_t>(d.d_tag);
+            }
+        };
+
+        // Helper to write DT_NEEDED at a slot
+        auto write_needed = [&](uint8_t* target, size_t str_offset) {
+            if (is64) {
+                elfio::Elf64_Dyn d{};
+                d.d_tag      = static_cast<elfio::Elf_Sxword>(DT_NEEDED);
+                d.d_un.d_val = static_cast<elfio::Elf_Xword>(str_offset);
+                std::memcpy(target, &d, sizeof(d));
+            } else {
+                elfio::Elf32_Dyn d{};
+                d.d_tag      = static_cast<elfio::Elf_Sword>(DT_NEEDED);
+                d.d_un.d_val = static_cast<elfio::Elf_Word>(str_offset);
+                std::memcpy(target, &d, sizeof(d));
+            }
+        };
+
+        // ================================================================
+        // Layer 1: Steal a spare DT_NULL slot (preferred — no section growth)
+        // ================================================================
+        if (raw && total_slots >= 2) {
+            size_t null_idx = total_slots;
+            for (size_t i = 0; i < total_slots; ++i) {
+                if (read_tag(raw + i * entry_size) == static_cast<int64_t>(DT_NULL)) {
+                    null_idx = i;
+                    break;
+                }
+            }
+
+            if (null_idx < total_slots && null_idx + 1 < total_slots) {
+                // Add soname to .dynstr
+                auto& strsec = editor.sections()[str_link];
+                auto str_offset = append_string_to_section(strsec, soname_str);
+
+                std::vector<uint8_t> buf(raw, raw + dyn_sec.data().size());
+                write_needed(buf.data() + null_idx * entry_size, str_offset);
+                dyn_sec.set_data(reinterpret_cast<const char*>(buf.data()), buf.size());
+                return;  // Layer 1 success
+            }
+
+            diag.warn("loader", DC::None,
+                      "no spare DT_NULL in .dynamic — falling back to section growth");
+        }
+
+        // ================================================================
+        // Layer 2: Grow .dynamic
+        // ================================================================
         size_t null_idx = total_slots;
         for (size_t i = 0; i < total_slots; ++i) {
-            const uint8_t* ent = raw + i * entry_size;
-            int64_t tag = 0;
-            if (is64) {
-                ELFIO::Elf64_Dyn d;
-                std::memcpy(&d, ent, sizeof(d));
-                tag = static_cast<int64_t>(d.d_tag);
-            } else {
-                ELFIO::Elf32_Dyn d;
-                std::memcpy(&d, ent, sizeof(d));
-                tag = static_cast<int64_t>(d.d_tag);
-            }
-            if (tag == static_cast<int64_t>(DT_NULL)) {
+            if (read_tag(raw + i * entry_size) == static_cast<int64_t>(DT_NULL)) {
                 null_idx = i;
                 break;
             }
         }
 
         if (null_idx >= total_slots) {
-            return fail(diag, DC::PatchRuntimeDepFailed,
+            result = fail(diag, DC::PatchRuntimeDepFailed,
                         "no DT_NULL terminator in .dynamic — cannot grow");
+            return;
         }
 
-        // Copy existing data, overwrite DT_NULL with DT_NEEDED, append new DT_NULL
-        std::vector<uint8_t> buf(raw, raw + dyn_sec->get_size());
-        buf.resize(buf.size() + entry_size, 0);  // grow by one entry (new DT_NULL)
+        auto& strsec = editor.sections()[str_link];
+        auto str_offset = append_string_to_section(strsec, soname_str);
 
-        uint8_t* target = buf.data() + null_idx * entry_size;
-        if (is64) {
-            ELFIO::Elf64_Dyn d{};
-            d.d_tag      = static_cast<ELFIO::Elf_Sxword>(DT_NEEDED);
-            d.d_un.d_val = static_cast<ELFIO::Elf_Xword>(str_offset);
-            std::memcpy(target, &d, sizeof(d));
-        } else {
-            ELFIO::Elf32_Dyn d{};
-            d.d_tag      = static_cast<ELFIO::Elf_Sword>(DT_NEEDED);
-            d.d_un.d_val = static_cast<ELFIO::Elf_Word>(str_offset);
-            std::memcpy(target, &d, sizeof(d));
-        }
-        // The appended bytes are already zero = DT_NULL terminator
+        std::vector<uint8_t> buf(raw, raw + dyn_sec.data().size());
+        buf.resize(buf.size() + entry_size, 0);
 
-        dyn_sec->set_data(reinterpret_cast<const char*>(buf.data()), buf.size());
-    }
+        write_needed(buf.data() + null_idx * entry_size, str_offset);
+        dyn_sec.set_data(reinterpret_cast<const char*>(buf.data()), buf.size());
 
-    diag.warn("loader", DC::None,
-              "DT_NEEDED injected via .dynamic growth for '" + soname_str
-              + "' — verify output with readelf -d");
-    return {};  // Layer 2 success (degraded)
+        diag.warn("loader", DC::None,
+                  "DT_NEEDED injected via .dynamic growth for '" + soname_str
+                  + "' — verify output with readelf -d");
+    });
+
+    return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -583,9 +676,29 @@ void ELFEditor::invalidate_signature_impl() noexcept {
 tl::expected<void, DC>
 ELFEditor::save_impl(const std::string& path,
                 Common::DiagnosticCollector& diag) noexcept {
-    if (!impl_->reader.save(path))
-        return fail(diag, DC::PatchBinaryWriteFailed, "failed to write ELF: " + path);
-    return {};
+    tl::expected<void, DC> result = {};
+    visit_elf(impl_->editor, [&](auto& editor) {
+        auto save_result = editor.save();
+        if (!save_result) {
+            result = fail(diag, DC::PatchBinaryWriteFailed,
+                          "failed to serialize ELF: " + path + " (" +
+                          std::string(elfio::to_string(save_result.error())) + ")");
+            return;
+        }
+        std::ofstream ofs(path, std::ios::binary | std::ios::trunc);
+        if (!ofs.good()) {
+            result = fail(diag, DC::PatchBinaryWriteFailed,
+                          "failed to open file for writing: " + path);
+            return;
+        }
+        ofs.write(save_result->data(),
+                  static_cast<std::streamsize>(save_result->size()));
+        if (!ofs.good()) {
+            result = fail(diag, DC::PatchBinaryWriteFailed,
+                          "failed to write ELF: " + path);
+        }
+    });
+    return result;
 }
 
 }  // namespace VMPilot::Loader

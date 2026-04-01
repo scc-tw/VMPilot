@@ -23,15 +23,14 @@ target_include_directories(${TARGET_NAME}
     PRIVATE
         ${CMAKE_SOURCE_DIR}/common/include
         ${CMAKE_SOURCE_DIR}/third_party/expected/include
-    SYSTEM PRIVATE
-        ${CMAKE_BINARY_DIR}/_deps/elfio-src/
-        ${CMAKE_BINARY_DIR}/_deps/coffi-src/
 )
 
 target_link_libraries(${TARGET_NAME}
     PRIVATE VMPilot_Common
             vmpilot_options
             vmpilot_sanitizer
+            coffi-modern
+            elfio-modern
 )
 
 # Suppress third-party warnings (ELFIO/COFFI headers)

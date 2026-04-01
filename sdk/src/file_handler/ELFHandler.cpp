@@ -4,12 +4,15 @@
 #include <utilities.hpp>
 
 #include <cstdint>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <variant>
 #include <vector>
 
+#include <elfio/elfio.hpp>
 #include <spdlog/spdlog.h>
 
 using namespace VMPilot::SDK::Segmentator;
@@ -23,8 +26,16 @@ void registerELFHandler() {
 }
 }  // namespace VMPilot::SDK::Segmentator
 
+using ElfFileVar = std::variant<
+    std::monostate,
+    elfio::elf_file<elfio::elf32_traits>,
+    elfio::elf_file<elfio::elf64_traits>
+>;
+
 struct ELFFileHandlerStrategy::Impl {
-    ELFIO::elfio reader;
+    std::vector<char> file_buf;          // owns the memory backing byte_view
+    ElfFileVar        file;
+    bool is_64 = true;
     std::unordered_map<std::string, ELFSectionViewer> section_table;
     uint64_t text_base_addr = static_cast<uint64_t>(-1);
 };
@@ -32,16 +43,48 @@ struct ELFFileHandlerStrategy::Impl {
 std::unique_ptr<ELFFileHandlerStrategy::Impl>
 VMPilot::SDK::Segmentator::make_elf_impl(const std::string& file_name) {
     auto impl = std::make_unique<ELFFileHandlerStrategy::Impl>();
-    if (!impl->reader.load(file_name)) {
-        throw std::runtime_error("File not found or it is not an ELF file");
+
+    // Read the entire file into memory
+    {
+        std::ifstream ifs(file_name, std::ios::binary | std::ios::ate);
+        if (!ifs.good())
+            throw std::runtime_error("File not found: " + file_name);
+        auto sz = static_cast<std::size_t>(ifs.tellg());
+        impl->file_buf.resize(sz);
+        ifs.seekg(0);
+        ifs.read(impl->file_buf.data(), static_cast<std::streamsize>(sz));
     }
 
-    // Cache all section accessors in the section_table
-    // This allows us to access the section_accessor by the section name directly
-    for (auto&& section : impl->reader.sections) {
-        impl->section_table[section->get_name()] =
-            ELFSectionViewer(section.get());
+    elfio::byte_view view{impl->file_buf.data(), impl->file_buf.size()};
+
+    // Detect ELF class from EI_CLASS byte
+    if (impl->file_buf.size() > 4) {
+        auto ei_class = static_cast<uint8_t>(impl->file_buf[4]);
+        impl->is_64 = (ei_class != 1);  // ELFCLASS32 = 1
     }
+
+    auto load_and_cache = [&](auto traits_tag) {
+        using Traits = decltype(traits_tag);
+        auto loaded = elfio::elf_file<Traits>::from_view(view);
+        if (!loaded) {
+            throw std::runtime_error("File not found or it is not an ELF file: " +
+                                     std::string(elfio::to_string(loaded.error())));
+        }
+        auto& elf = *loaded;
+        // Cache section name -> index
+        uint16_t sec_count = elf.section_count();
+        for (uint16_t i = 0; i < sec_count; ++i) {
+            auto sec = elf.sections()[i];
+            impl->section_table[std::string(sec.name())] =
+                ELFSectionViewer(i);
+        }
+        impl->file = std::move(elf);
+    };
+
+    if (impl->is_64)
+        load_and_cache(elfio::elf64_traits{});
+    else
+        load_and_cache(elfio::elf32_traits{});
 
     return impl;
 }
@@ -52,6 +95,26 @@ ELFFileHandlerStrategy::ELFFileHandlerStrategy(const std::string& file_name)
 ELFFileHandlerStrategy::~ELFFileHandlerStrategy() {
     pImpl->section_table.clear();
 }
+
+// Helper to visit the variant file (skips monostate)
+namespace {
+template <typename F>
+void visit_file(ElfFileVar& v, F&& f) {
+    std::visit([&](auto& alt) {
+        if constexpr (!std::is_same_v<std::decay_t<decltype(alt)>, std::monostate>) {
+            f(alt);
+        }
+    }, v);
+}
+template <typename F>
+void visit_file(const ElfFileVar& v, F&& f) {
+    std::visit([&](const auto& alt) {
+        if constexpr (!std::is_same_v<std::decay_t<decltype(alt)>, std::monostate>) {
+            f(alt);
+        }
+    }, v);
+}
+}  // namespace
 
 std::vector<uint8_t> ELFFileHandlerStrategy::doGetTextSection() noexcept {
     const auto& chunk = this->doGetTextSectionIntl();
@@ -70,8 +133,10 @@ uint64_t ELFFileHandlerStrategy::doGetTextBaseAddr() noexcept {
             return static_cast<uint64_t>(-1);
         }
 
-        pImpl->text_base_addr =
-            text_section->second.getSection()->get_address();
+        auto idx = text_section->second.getSectionIndex();
+        visit_file(pImpl->file, [&](auto& f) {
+            pImpl->text_base_addr = f.sections()[static_cast<uint16_t>(idx)].address();
+        });
     }
 
     return pImpl->text_base_addr;
@@ -83,47 +148,49 @@ ELFFileHandlerStrategy::doGetSections() noexcept {
     std::vector<Core::Section> result;
 
     for (auto& [name, viewer] : pImpl->section_table) {
-        auto sec = viewer.getSection();
-        if (!sec || sec->get_size() == 0)
-            continue;
+        auto idx = viewer.getSectionIndex();
+        visit_file(pImpl->file, [&](auto& f) {
+            auto sec = f.sections()[static_cast<uint16_t>(idx)];
+            if (sec.size() == 0)
+                return;
 
-        Core::Section s;
-        s.base_addr = sec->get_address();
-        s.size = sec->get_size();
-        s.name = name;
+            Core::Section s;
+            s.base_addr = sec.address();
+            s.size = sec.size();
+            s.name = name;
 
-        // Classify by name
-        if (name == ".text")
-            s.kind = Core::SectionKind::Text;
-        else if (name == ".rodata" || name == ".rodata.str1.1" ||
-                 name == ".rodata.str1.8" || name == ".rodata.cst4" ||
-                 name == ".rodata.cst8" || name == ".rodata.cst16")
-            s.kind = Core::SectionKind::Rodata;
-        else if (name == ".data" || name == ".data.rel.ro")
-            s.kind = Core::SectionKind::Data;
-        else if (name == ".bss")
-            s.kind = Core::SectionKind::Bss;
-        else if (name == ".tdata" || name == ".tbss")
-            s.kind = Core::SectionKind::Tls;
-        else if (name.substr(0, 4) == ".got")
-            s.kind = Core::SectionKind::Got;
-        else if (name.substr(0, 4) == ".plt")
-            s.kind = Core::SectionKind::Plt;
-        else
-            s.kind = Core::SectionKind::Unknown;
+            // Classify by name
+            if (name == ".text")
+                s.kind = Core::SectionKind::Text;
+            else if (name == ".rodata" || name == ".rodata.str1.1" ||
+                     name == ".rodata.str1.8" || name == ".rodata.cst4" ||
+                     name == ".rodata.cst8" || name == ".rodata.cst16")
+                s.kind = Core::SectionKind::Rodata;
+            else if (name == ".data" || name == ".data.rel.ro")
+                s.kind = Core::SectionKind::Data;
+            else if (name == ".bss")
+                s.kind = Core::SectionKind::Bss;
+            else if (name == ".tdata" || name == ".tbss")
+                s.kind = Core::SectionKind::Tls;
+            else if (name.substr(0, 4) == ".got")
+                s.kind = Core::SectionKind::Got;
+            else if (name.substr(0, 4) == ".plt")
+                s.kind = Core::SectionKind::Plt;
+            else
+                s.kind = Core::SectionKind::Unknown;
 
-        // Populate data bytes for all sections except:
-        // - .bss (zero-initialized, no file data)
-        // - .text (code bytes already in CompilationUnit.code)
-        // - sections with no raw data
-        if (s.kind != Core::SectionKind::Bss &&
-            s.kind != Core::SectionKind::Text &&
-            sec->get_data() != nullptr) {
-            s.data.resize(sec->get_size());
-            std::memcpy(s.data.data(), sec->get_data(), sec->get_size());
-        }
+            const bool skip_data =
+                s.kind == Core::SectionKind::Bss ||
+                s.kind == Core::SectionKind::Text;
+            auto sec_data = sec.data();
+            if (!skip_data && !sec_data.empty()) {
+                auto sz = static_cast<std::size_t>(sec.size());
+                s.data.resize(sz);
+                std::memcpy(s.data.data(), sec_data.data(), sz);
+            }
 
-        result.push_back(std::move(s));
+            result.push_back(std::move(s));
+        });
     }
 
     return result;
@@ -131,13 +198,15 @@ ELFFileHandlerStrategy::doGetSections() noexcept {
 
 uint64_t ELFFileHandlerStrategy::doGetImageBase() noexcept {
     uint64_t lowest = UINT64_MAX;
-    for (auto& seg : pImpl->reader.segments) {
-        if (seg->get_type() == ELFIO::PT_LOAD) {
-            uint64_t vaddr = seg->get_virtual_address();
-            if (vaddr < lowest)
-                lowest = vaddr;
+    visit_file(pImpl->file, [&](auto& f) {
+        for (auto seg : f.segments()) {
+            if (seg.type() == elfio::PT_LOAD) {
+                uint64_t vaddr = seg.virtual_address();
+                if (vaddr < lowest)
+                    lowest = vaddr;
+            }
         }
-    }
+    });
     return (lowest == UINT64_MAX) ? 0 : lowest;
 }
 
@@ -145,32 +214,33 @@ std::unordered_map<uint64_t, ELFFileHandlerStrategy::RelaInfo>
 ELFFileHandlerStrategy::buildRelocationMap() noexcept {
     std::unordered_map<uint64_t, RelaInfo> result;
 
-    const bool is_64_bit = pImpl->reader.get_class() == ELFIO::ELFCLASS64;
-    const char* rela_name = is_64_bit ? ".rela.plt" : ".rel.plt";
+    const char* rela_name = pImpl->is_64 ? ".rela.plt" : ".rel.plt";
     const auto& rela_it = pImpl->section_table.find(rela_name);
     if (rela_it == pImpl->section_table.end()) {
         return result;
     }
 
-    auto rela_sec = rela_it->second.getSection();
-    if (!rela_sec) {
-        return result;
-    }
+    auto rela_idx = rela_it->second.getSectionIndex();
 
-    const auto& reader = pImpl->reader;  // NOLINT
-    ELFIO::relocation_section_accessor accessor(reader, rela_sec);
-    const auto count = accessor.get_entries_num();
-    for (size_t i = 0; i < count; ++i) {
-        ELFIO::Elf64_Addr offset;
-        ELFIO::Elf_Word symbol;
-        ELFIO::Elf_Sxword addend;
-        unsigned int type;
+    visit_file(pImpl->file, [&](auto& f) {
+        auto rela_sec = f.sections()[static_cast<uint16_t>(rela_idx)];
 
-        if (!accessor.get_entry(i, offset, symbol, type, addend)) {
-            continue;
+        if (pImpl->is_64) {
+            // SHT_RELA sections
+            for (auto rel : f.relas(rela_sec)) {
+                uint64_t symbol = rel.symbol();
+                uint64_t offset = rel.r_offset();
+                result[symbol] = {result.size(), offset};
+            }
+        } else {
+            // SHT_REL sections
+            for (auto rel : f.rels(rela_sec)) {
+                uint64_t symbol = rel.symbol();
+                uint64_t offset = rel.r_offset();
+                result[symbol] = {result.size(), offset};
+            }
         }
-        result[symbol] = {i, offset};
-    }
+    });
 
     return result;
 }
@@ -178,68 +248,50 @@ ELFFileHandlerStrategy::buildRelocationMap() noexcept {
 NativeSymbolTable ELFFileHandlerStrategy::doGetSymbols() noexcept {
     NativeSymbolTable table;
 
-    // Read symbols from a given section into |table|.
-    // .dynsym covers dynamically-linked imports; .symtab covers everything
-    // including statically-linked library symbols.  We try both so that
-    // far-calls resolved through PLT *and* direct calls into static code
-    // are both discoverable.
     auto readSymbolSection = [&](const char* section_name) {
         const auto& it = pImpl->section_table.find(section_name);
         if (it == pImpl->section_table.end())
             return;
 
-        auto sec = it->second.getSection();
-        if (!sec)
-            return;
+        auto sec_idx = it->second.getSectionIndex();
 
-        ELFIO::elfio& reader = pImpl->reader;  // NOLINT
-        ELFIO::symbol_section_accessor accessor(reader, sec);
-        const auto count = accessor.get_symbols_num();
+        visit_file(pImpl->file, [&](auto& f) {
+            auto sec = f.sections()[static_cast<uint16_t>(sec_idx)];
 
-        for (size_t i = 0; i < count; ++i) {
-            std::string name;
-            ELFIO::Elf64_Addr value;
-            ELFIO::Elf_Xword sym_size;
-            unsigned char bind;
-            unsigned char type;
-            ELFIO::Elf_Half section_index;
-            unsigned char other;
+            // Get linked string table section
+            auto strtab_link = sec.link();
+            if (strtab_link >= f.section_count()) return;
+            auto strtab_sec = f.sections()[static_cast<uint16_t>(strtab_link)];
+            elfio::string_table_view strtab{strtab_sec.data()};
 
-            if (!accessor.get_symbol(i, name, value, sym_size, bind, type,
-                                     section_index, other)) {
-                continue;
+            for (auto sym : f.symbols_with_strtab(sec, strtab)) {
+                auto name_sv = sym.name();
+                if (name_sv.empty() || sym.value() == 0)
+                    continue;
+
+                SymbolType sym_type = SymbolType::NOTYPE;
+                if (sym.type() == elfio::STT_FUNC)
+                    sym_type = SymbolType::FUNC;
+                else if (sym.type() == elfio::STT_OBJECT)
+                    sym_type = SymbolType::OBJECT;
+                else if (sym.type() == elfio::STT_SECTION)
+                    sym_type = SymbolType::SECTION;
+                else if (sym.type() == elfio::STT_FILE)
+                    sym_type = SymbolType::FILE;
+
+                NativeSymbolTableEntry entry;
+                entry.name = std::string(name_sv);
+                entry.address = sym.value();
+                entry.size = sym.size();
+                entry.type = sym_type;
+                entry.isGlobal =
+                    (sym.bind() == elfio::STB_GLOBAL || sym.bind() == elfio::STB_WEAK);
+                table.push_back(std::move(entry));
             }
-
-            if (name.empty() || value == 0) {
-                continue;
-            }
-
-            SymbolType sym_type = SymbolType::NOTYPE;
-            if (type == ELFIO::STT_FUNC)
-                sym_type = SymbolType::FUNC;
-            else if (type == ELFIO::STT_OBJECT)
-                sym_type = SymbolType::OBJECT;
-            else if (type == ELFIO::STT_SECTION)
-                sym_type = SymbolType::SECTION;
-            else if (type == ELFIO::STT_FILE)
-                sym_type = SymbolType::FILE;
-
-            NativeSymbolTableEntry entry;
-            entry.name = name;
-            entry.address = value;
-            entry.size = sym_size;
-            entry.type = sym_type;
-            entry.isGlobal =
-                (bind == ELFIO::STB_GLOBAL || bind == ELFIO::STB_WEAK);
-            table.push_back(std::move(entry));
-        }
+        });
     };
 
-    // .dynsym: always present for dynamically-linked binaries
     readSymbolSection(".dynsym");
-
-    // .symtab: present in non-stripped binaries; covers statically-linked
-    // library symbols that are absent from .dynsym
     readSymbolSection(".symtab");
 
     if (table.empty()) {
@@ -258,13 +310,16 @@ ELFFileHandlerStrategy::doGetStubCallTargets() noexcept {
         return targets;
     }
 
-    auto plt_sec = plt_it->second.getSection();
-    if (!plt_sec) {
-        return targets;
-    }
+    auto plt_idx = plt_it->second.getSectionIndex();
+    uint64_t plt_base = 0;
+    uint64_t plt_align = 0;
 
-    const uint64_t plt_base = plt_sec->get_address();
-    const uint64_t plt_align = plt_sec->get_addr_align();
+    visit_file(pImpl->file, [&](auto& f) {
+        auto plt_sec = f.sections()[static_cast<uint16_t>(plt_idx)];
+        plt_base = plt_sec.address();
+        plt_align = plt_sec.addr_align();
+    });
+
     if (plt_base == 0 || plt_align == 0) {
         return targets;
     }
@@ -274,35 +329,39 @@ ELFFileHandlerStrategy::doGetStubCallTargets() noexcept {
         return targets;
     }
 
-    auto dynsym_sec = dynsym_it->second.getSection();
-    if (!dynsym_sec) {
-        return targets;
-    }
-
-    ELFIO::elfio& reader = pImpl->reader;  // NOLINT
-    ELFIO::symbol_section_accessor sym_accessor(reader, dynsym_sec);
+    auto dynsym_idx = dynsym_it->second.getSectionIndex();
     auto rela_map = buildRelocationMap();
 
-    for (auto& [dynsym_idx, info] : rela_map) {
-        std::string name;
-        ELFIO::Elf64_Addr value;
-        ELFIO::Elf_Xword sym_size;
-        unsigned char bind, type;
-        ELFIO::Elf_Half section_index;
-        unsigned char other;
+    visit_file(pImpl->file, [&](auto& f) {
+        auto dynsym_sec = f.sections()[static_cast<uint16_t>(dynsym_idx)];
 
-        if (!sym_accessor.get_symbol(dynsym_idx, name, value, sym_size, bind,
-                                     type, section_index, other)) {
-            continue;
+        auto strtab_link = dynsym_sec.link();
+        if (strtab_link >= f.section_count()) return;
+        auto strtab_sec = f.sections()[static_cast<uint16_t>(strtab_link)];
+        elfio::string_table_view strtab{strtab_sec.data()};
+
+        // Build a vector of symbols for indexed access
+        struct SymInfo {
+            std::string name;
+            unsigned char type;
+        };
+        std::vector<SymInfo> syms;
+        for (auto sym : f.symbols_with_strtab(dynsym_sec, strtab)) {
+            syms.push_back(SymInfo{std::string(sym.name()), sym.type()});
         }
 
-        if (name.empty() || type != ELFIO::STT_FUNC) {
-            continue;
-        }
+        for (auto& [dynsym_index, info] : rela_map) {
+            if (dynsym_index >= syms.size()) continue;
+            auto& sym = syms[dynsym_index];
 
-        uint64_t plt_addr = plt_base + plt_align * (info.rela_idx + 1);
-        targets.push_back({std::move(name), plt_addr, plt_align});
-    }
+            if (sym.name.empty() || sym.type != elfio::STT_FUNC) {
+                continue;
+            }
+
+            uint64_t plt_addr = plt_base + plt_align * (info.rela_idx + 1);
+            targets.push_back({std::move(sym.name), plt_addr, plt_align});
+        }
+    });
 
     return targets;
 }
@@ -311,42 +370,45 @@ std::vector<CallTarget>
 ELFFileHandlerStrategy::doGetPointerTableTargets() noexcept {
     std::vector<CallTarget> targets;
 
-    const bool is_64_bit = pImpl->reader.get_class() == ELFIO::ELFCLASS64;
-    const uint64_t ptr_size = is_64_bit ? 8 : 4;
+    const uint64_t ptr_size = pImpl->is_64 ? 8 : 4;
 
     const auto& dynsym_it = pImpl->section_table.find(".dynsym");
     if (dynsym_it == pImpl->section_table.end()) {
         return targets;
     }
 
-    auto dynsym_sec = dynsym_it->second.getSection();
-    if (!dynsym_sec) {
-        return targets;
-    }
-
-    ELFIO::elfio& reader = pImpl->reader;  // NOLINT
-    ELFIO::symbol_section_accessor sym_accessor(reader, dynsym_sec);
+    auto dynsym_idx = dynsym_it->second.getSectionIndex();
     auto rela_map = buildRelocationMap();
 
-    for (auto& [dynsym_idx, info] : rela_map) {
-        std::string name;
-        ELFIO::Elf64_Addr value;
-        ELFIO::Elf_Xword sym_size;
-        unsigned char bind, type;
-        ELFIO::Elf_Half section_index;
-        unsigned char other;
+    visit_file(pImpl->file, [&](auto& f) {
+        auto dynsym_sec = f.sections()[static_cast<uint16_t>(dynsym_idx)];
 
-        if (!sym_accessor.get_symbol(dynsym_idx, name, value, sym_size, bind,
-                                     type, section_index, other)) {
-            continue;
+        auto strtab_link = dynsym_sec.link();
+        if (strtab_link >= f.section_count()) return;
+        auto strtab_sec = f.sections()[static_cast<uint16_t>(strtab_link)];
+        elfio::string_table_view strtab{strtab_sec.data()};
+
+        // Build a vector of symbols for indexed access
+        struct SymInfo {
+            std::string name;
+            unsigned char type;
+        };
+        std::vector<SymInfo> syms;
+        for (auto sym : f.symbols_with_strtab(dynsym_sec, strtab)) {
+            syms.push_back(SymInfo{std::string(sym.name()), sym.type()});
         }
 
-        if (name.empty() || type != ELFIO::STT_FUNC) {
-            continue;
-        }
+        for (auto& [dynsym_index, info] : rela_map) {
+            if (dynsym_index >= syms.size()) continue;
+            auto& sym = syms[dynsym_index];
 
-        targets.push_back({std::move(name), info.got_addr, ptr_size});
-    }
+            if (sym.name.empty() || sym.type != elfio::STT_FUNC) {
+                continue;
+            }
+
+            targets.push_back({std::move(sym.name), info.got_addr, ptr_size});
+        }
+    });
 
     return targets;
 }
@@ -355,17 +417,24 @@ std::string ELFFileHandlerStrategy::doGetCompilerInfo() noexcept {
     const auto it = pImpl->section_table.find(".comment");
     if (it == pImpl->section_table.end())
         return {};
-    auto section = it->second.getSection();
-    if (!section || section->get_size() == 0)
-        return {};
 
-    // .comment contains null-terminated strings (e.g. "GCC: (Ubuntu 11.4.0) 11.4.0")
-    // Replace embedded nulls with spaces, then trim.
-    std::string info(section->get_data(), section->get_size());
+    auto idx = it->second.getSectionIndex();
+    std::string info;
+    visit_file(pImpl->file, [&](auto& f) {
+        auto section = f.sections()[static_cast<uint16_t>(idx)];
+        auto sec_data = section.data();
+        if (sec_data.empty())
+            return;
+
+        auto sz = static_cast<std::size_t>(section.size());
+        info.assign(sec_data.as_chars(), sz);
+    });
+
+    if (info.empty()) return {};
+
     for (char& c : info) {
         if (c == '\0') c = ' ';
     }
-    // Trim leading/trailing whitespace
     auto start = info.find_first_not_of(' ');
     if (start == std::string::npos) return {};
     auto end = info.find_last_not_of(' ');
@@ -377,68 +446,78 @@ ELFFileHandlerStrategy::doGetTextRelocations() noexcept {
     namespace Core = VMPilot::SDK::Core;
     std::vector<Core::RelocationEntry> result;
 
-    const bool is_64_bit = pImpl->reader.get_class() == ELFIO::ELFCLASS64;
-    const char* rela_name = is_64_bit ? ".rela.text" : ".rel.text";
+    const char* rela_name = pImpl->is_64 ? ".rela.text" : ".rel.text";
     const auto& rela_it = pImpl->section_table.find(rela_name);
     if (rela_it == pImpl->section_table.end())
         return result;
 
-    auto rela_sec = rela_it->second.getSection();
-    if (!rela_sec)
-        return result;
+    auto rela_idx = rela_it->second.getSectionIndex();
 
     // Find symbol table for name resolution
-    ELFIO::section* sym_sec = nullptr;
+    std::size_t sym_idx = 0;
+    bool has_symtab = false;
     auto symtab_it = pImpl->section_table.find(".symtab");
-    if (symtab_it != pImpl->section_table.end())
-        sym_sec = symtab_it->second.getSection();
-    if (!sym_sec) {
+    if (symtab_it != pImpl->section_table.end()) {
+        sym_idx = symtab_it->second.getSectionIndex();
+        has_symtab = true;
+    }
+    if (!has_symtab) {
         auto dynsym_it = pImpl->section_table.find(".dynsym");
-        if (dynsym_it != pImpl->section_table.end())
-            sym_sec = dynsym_it->second.getSection();
+        if (dynsym_it != pImpl->section_table.end()) {
+            sym_idx = dynsym_it->second.getSectionIndex();
+            has_symtab = true;
+        }
     }
 
-    const auto& reader = pImpl->reader;  // NOLINT
-    ELFIO::relocation_section_accessor accessor(reader, rela_sec);
-    const auto count = accessor.get_entries_num();
+    visit_file(pImpl->file, [&](auto& f) {
+        auto rela_sec = f.sections()[static_cast<uint16_t>(rela_idx)];
 
-    std::unique_ptr<ELFIO::symbol_section_accessor> sym_accessor;
-    if (sym_sec)
-        sym_accessor = std::make_unique<ELFIO::symbol_section_accessor>(
-            pImpl->reader, sym_sec);
-
-    for (size_t i = 0; i < count; ++i) {
-        ELFIO::Elf64_Addr offset;
-        ELFIO::Elf_Word symbol;
-        ELFIO::Elf_Sxword addend;
-        unsigned int type;
-
-        if (!accessor.get_entry(i, offset, symbol, type, addend))
-            continue;
-
-        Core::RelocationEntry entry;
-        entry.offset = offset;
-        entry.type = type;
-        entry.symbol_index = symbol;
-        entry.addend = addend;
-
-        // Resolve symbol name
-        if (sym_accessor && symbol > 0) {
-            std::string name;
-            ELFIO::Elf64_Addr value;
-            ELFIO::Elf_Xword sym_size;
-            unsigned char bind, sym_type;
-            ELFIO::Elf_Half section_index;
-            unsigned char other;
-
-            if (sym_accessor->get_symbol(symbol, name, value, sym_size, bind,
-                                          sym_type, section_index, other)) {
-                entry.symbol_name = std::move(name);
+        // Build symbol name lookup if we have a symbol table
+        std::vector<std::string> sym_names;
+        if (has_symtab) {
+            auto sym_sec = f.sections()[static_cast<uint16_t>(sym_idx)];
+            auto strtab_link = sym_sec.link();
+            if (strtab_link < f.section_count()) {
+                auto strtab_sec = f.sections()[static_cast<uint16_t>(strtab_link)];
+                elfio::string_table_view strtab{strtab_sec.data()};
+                for (auto sym : f.symbols_with_strtab(sym_sec, strtab)) {
+                    sym_names.push_back(std::string(sym.name()));
+                }
             }
         }
 
-        result.push_back(std::move(entry));
-    }
+        if (pImpl->is_64) {
+            for (auto rel : f.relas(rela_sec)) {
+                Core::RelocationEntry entry;
+                entry.offset = rel.r_offset();
+                entry.type = static_cast<unsigned int>(rel.type());
+                entry.symbol_index = static_cast<uint32_t>(rel.symbol());
+                entry.addend = rel.r_addend();
+
+                if (entry.symbol_index > 0 &&
+                    entry.symbol_index < sym_names.size()) {
+                    entry.symbol_name = sym_names[entry.symbol_index];
+                }
+
+                result.push_back(std::move(entry));
+            }
+        } else {
+            for (auto rel : f.rels(rela_sec)) {
+                Core::RelocationEntry entry;
+                entry.offset = rel.r_offset();
+                entry.type = static_cast<unsigned int>(rel.type());
+                entry.symbol_index = static_cast<uint32_t>(rel.symbol());
+                entry.addend = 0;
+
+                if (entry.symbol_index > 0 &&
+                    entry.symbol_index < sym_names.size()) {
+                    entry.symbol_name = sym_names[entry.symbol_index];
+                }
+
+                result.push_back(std::move(entry));
+            }
+        }
+    });
 
     return result;
 }
@@ -449,9 +528,15 @@ std::vector<uint8_t> ELFFileHandlerStrategy::doGetTextSectionIntl() noexcept {
         return {};
     }
 
-    auto section = text_section_iter->second.getSection();
-    std::vector<uint8_t> text_section(section->get_size());
-    std::memcpy(text_section.data(), section->get_data(), section->get_size());
+    auto idx = text_section_iter->second.getSectionIndex();
+    std::vector<uint8_t> text_section;
+    visit_file(pImpl->file, [&](auto& f) {
+        auto section = f.sections()[static_cast<uint16_t>(idx)];
+        auto sec_data = section.data();
+        auto sz = static_cast<std::size_t>(section.size());
+        text_section.resize(sz);
+        std::memcpy(text_section.data(), sec_data.data(), sz);
+    });
 
     return text_section;
 }

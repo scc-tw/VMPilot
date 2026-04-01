@@ -57,7 +57,7 @@ public:
         c.push_back(0x83); c.push_back(0xEC); c.push_back(0x20);  // sub esp, 32
         for (int i = 0; i < 8; ++i) {
             c.push_back(0x89);
-            c.push_back(0x44 | ((i & 7) << 3));  // ModRM [esp+disp8], reg
+            c.push_back(static_cast<uint8_t>(0x44 | ((i & 7) << 3)));  // ModRM [esp+disp8], reg
             c.push_back(0x24);                    // SIB base=esp
             c.push_back(static_cast<uint8_t>(i * 4));
         }

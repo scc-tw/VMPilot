@@ -68,7 +68,7 @@ TEST_F(SimpleBackendTest, BytecodesMatchInputCode) {
 
 TEST_F(SimpleBackendTest, LargerCode) {
     std::vector<uint8_t> code(256);
-    for (int i = 0; i < 256; ++i) code[i] = static_cast<uint8_t>(i);
+    for (size_t i = 0; i < 256; ++i) code[i] = static_cast<uint8_t>(i);
 
     auto unit = make_unit("large", code);
     auto result = backend->compile_unit(unit, config, diag);

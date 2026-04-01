@@ -471,7 +471,7 @@ MachOEditor::add_runtime_dep_impl(std::string_view install_name,
             auto seg = read_at<MO::segment_command_64>(lc_off);
             if (seg.fileoff >= old_first) {
                 seg.fileoff += shift;
-                seg.filesize += (seg.fileoff == old_first + shift) ? 0 : 0;
+                (void)old_first; // filesize unchanged regardless of position
                 write_at(lc_off, seg);
             }
             size_t sec_off = lc_off + sizeof(MO::segment_command_64);

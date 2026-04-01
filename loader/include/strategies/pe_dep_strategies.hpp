@@ -6,8 +6,8 @@
 /// @brief FallbackChain strategies for PE import injection.
 ///
 /// One strategy:
-///   1. CoffiImportInject — Use COFFI import_section_accessor to reconstruct
-///      the import directory and inject a new import entry.
+///   1. CoffiImportInject — Use coffi-modern coff_editor::imports() to
+///      inject a new import entry into the import directory.
 
 #include <fallback_chain.hpp>
 #include <diagnostic.hpp>
@@ -17,21 +17,24 @@
 
 #include <string_view>
 
-namespace COFFI { class coffi; }
+namespace coffi {
+struct pe32_traits;
+template <typename Traits> class coff_editor;
+}  // namespace coffi
 
 namespace VMPilot::Loader::strategies {
 
-/// PE import injection via COFFI import_section_accessor.
+/// PE import injection via coffi-modern coff_editor.
 ///
-/// Reconstructs the entire .idata section (IDT + ILT + IAT) with the
-/// new import entry appended.  Preserves all existing imports.
+/// Uses coff_editor::imports() builder to add a new import entry
+/// for the runtime DLL.  All existing imports are preserved.
 struct CoffiImportInject {
     static constexpr const char* name = "CoffiImportInject";
     using result_type = tl::expected<void, Common::DiagnosticCode>;
 
     static result_type try_execute(
         Common::DiagnosticCollector& diag,
-        COFFI::coffi& reader,
+        coffi::coff_editor<coffi::pe32_traits>& editor,
         std::string_view dll_name) noexcept;
 };
 

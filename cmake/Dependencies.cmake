@@ -1,7 +1,14 @@
 # cmake/Dependencies.cmake — ALL external dependencies in one place
 #
-# Everything that isn't a git submodule (third_party/) is declared here.
-# Git submodules: abseil-cpp, protobuf, capstone, botan, blake3, expected
+# Git submodules (third_party/):
+#   abseil-cpp, protobuf, capstone, botan, blake3, expected,
+#   coffi-modern, elfio-modern
+#
+# CPM (fetched at configure time):
+#   spdlog, toml++
+#
+# FetchContent (fetched at configure time, test-only):
+#   googletest
 
 # CPM package manager
 include(${CMAKE_CURRENT_LIST_DIR}/CPM.cmake)
@@ -10,19 +17,23 @@ include(${CMAKE_CURRENT_LIST_DIR}/CPM.cmake)
 set(CPM_USE_SHALLOW_CLONE ON)
 set(FETCHCONTENT_SHALLOW ON)
 
-# ── SDK dependencies (header-only / lightweight) ─────────────────────────────
+# ── Submodule-based header-only libraries ────────────────────────────────────
 
-CPMAddPackage(
-    NAME ELFIO
-    GITHUB_REPOSITORY "serge1/ELFIO"
-    GIT_TAG "Release_3.12"
-)
+# coffi-modern (PE/COFF parsing) — header-only INTERFACE target
+set(COFFI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(COFFI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+add_subdirectory(${CMAKE_SOURCE_DIR}/third_party/coffi-modern
+                 ${CMAKE_BINARY_DIR}/third_party/coffi-modern
+                 EXCLUDE_FROM_ALL)
 
-CPMAddPackage(
-    NAME COFFI
-    GITHUB_REPOSITORY "scc-tw/COFFI"
-    GIT_TAG "1.1.5"
-)
+# elfio-modern (ELF parsing) — header-only INTERFACE target
+set(ELFIO_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ELFIO_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+add_subdirectory(${CMAKE_SOURCE_DIR}/third_party/elfio-modern
+                 ${CMAKE_BINARY_DIR}/third_party/elfio-modern
+                 EXCLUDE_FROM_ALL)
+
+# ── CPM dependencies ────────────────────────────────────────────────────────
 
 CPMAddPackage("gh:gabime/spdlog@1.17.0")
 

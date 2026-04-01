@@ -588,7 +588,7 @@ TEST(JumpTable, BoundsCheckDetection) {
 
     // Create rodata with 10 valid entries but bounds check says 3
     std::vector<uint64_t> many_targets;
-    for (int i = 0; i < 10; ++i)
+    for (size_t i = 0; i < 10; ++i)
         many_targets.push_back(0x401100 + i * 0x10);
     auto rodata = makeRodataWithRelativeJumpTable(0x402000, many_targets);
     std::vector<Section> rodata_sections = {rodata};

@@ -22,6 +22,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <vector>
 
 using namespace VMPilot;
@@ -34,38 +35,46 @@ using DC = Common::DiagnosticCode;
 
 namespace {
 
+/// Read a file into a vector<char> for zero-copy ELF parsing.
+std::vector<char> read_file_to_vec(const std::string& path) {
+    std::ifstream ifs(path, std::ios::binary | std::ios::ate);
+    auto sz = static_cast<std::size_t>(ifs.tellg());
+    std::vector<char> buf(sz);
+    ifs.seekg(0);
+    ifs.read(buf.data(), static_cast<std::streamsize>(sz));
+    return buf;
+}
+
 constexpr uint64_t TEXT_VA   = 0x401000;
 constexpr uint64_t TEXT_SIZE = 0x1000;
 
 /// Build a minimal valid ELF64 binary with a .text section.
 std::string build_minimal_elf() {
-    ELFIO::elfio writer;
-    writer.create(ELFIO::ELFCLASS64, ELFIO::ELFDATA2LSB);
-    writer.set_os_abi(ELFIO::ELFOSABI_LINUX);
-    writer.set_type(ELFIO::ET_EXEC);
-    writer.set_machine(ELFIO::EM_X86_64);
-    writer.set_entry(TEXT_VA);
+    elfio::elf_editor<elfio::elf64_traits> ed;
+    ed.create(elfio::ELFDATA2LSB, elfio::ET_EXEC, elfio::EM_X86_64);
+    ed.set_os_abi(elfio::ELFOSABI_LINUX);
+    ed.set_entry(TEXT_VA);
 
     // .text filled with NOPs
-    auto* text_sec = writer.sections.add(".text");
-    text_sec->set_type(ELFIO::SHT_PROGBITS);
-    text_sec->set_flags(ELFIO::SHF_ALLOC | ELFIO::SHF_EXECINSTR);
-    text_sec->set_addr_align(16);
-    text_sec->set_address(TEXT_VA);
+    auto& text_sec = ed.add_section(".text", elfio::SHT_PROGBITS,
+                                     elfio::SHF_ALLOC | elfio::SHF_EXECINSTR);
+    text_sec.set_addr_align(16);
+    text_sec.set_address(TEXT_VA);
     std::vector<uint8_t> nops(TEXT_SIZE, 0x90);
-    text_sec->set_data(reinterpret_cast<const char*>(nops.data()), nops.size());
+    text_sec.set_data(reinterpret_cast<const char*>(nops.data()), nops.size());
+    auto text_idx = static_cast<uint16_t>(ed.sections().size() - 1);
 
     // PT_LOAD for .text (RX)
-    auto* text_seg = writer.segments.add();
-    text_seg->set_type(ELFIO::PT_LOAD);
-    text_seg->set_flags(ELFIO::PF_R | ELFIO::PF_X);
-    text_seg->set_align(0x1000);
-    text_seg->set_virtual_address(TEXT_VA);
-    text_seg->set_physical_address(TEXT_VA);
-    text_seg->add_section_index(text_sec->get_index(), text_sec->get_addr_align());
+    auto& text_seg = ed.add_segment(elfio::PT_LOAD, elfio::PF_R | elfio::PF_X);
+    text_seg.set_align(0x1000);
+    text_seg.set_vaddr(TEXT_VA);
+    text_seg.set_paddr(TEXT_VA);
+    text_seg.add_section_index(text_idx);
 
     std::string tmpname = VMPilot::Test::make_temp_file("vmpilot");
-    writer.save(tmpname);
+    auto save_result = ed.save();
+    std::ofstream ofs(tmpname, std::ios::binary | std::ios::trunc);
+    ofs.write(save_result->data(), static_cast<std::streamsize>(save_result->size()));
     return tmpname;
 }
 
@@ -115,24 +124,21 @@ TEST(ExtendText, ELF_BasicExtension) {
     ASSERT_TRUE(sv.has_value()) << "save() failed";
 
     // Reload and verify structure
-    ELFIO::elfio reader;
-    ASSERT_TRUE(reader.load(out_path)) << "Failed to reload extended ELF";
+    auto rbuf = read_file_to_vec(out_path);
+    elfio::byte_view rview{rbuf.data(), rbuf.size()};
+    auto file = elfio::elf_file<elfio::elf64_traits>::from_view(rview);
+    ASSERT_TRUE(file.has_value()) << "Failed to reload extended ELF";
 
     // Find .text section
-    const ELFIO::section* text_sec = nullptr;
-    for (const auto& sec : reader.sections) {
-        if (sec->get_name() == ".text") {
-            text_sec = sec.get();
-            break;
-        }
-    }
-    ASSERT_NE(text_sec, nullptr) << ".text section not found after extension";
+    auto text_opt = file->find_section(".text");
+    ASSERT_TRUE(text_opt.has_value()) << ".text section not found after extension";
+    auto text_sec_data = text_opt->data();
 
     // .text size should be larger
-    EXPECT_GT(text_sec->get_size(), TEXT_SIZE);
+    EXPECT_GT(text_sec_data.size(), TEXT_SIZE);
 
     // Original NOP content should be preserved at the start
-    const auto* data = reinterpret_cast<const uint8_t*>(text_sec->get_data());
+    const auto* data = reinterpret_cast<const uint8_t*>(text_sec_data.data());
     for (size_t i = 0; i < TEXT_SIZE; ++i) {
         EXPECT_EQ(data[i], 0x90) << "Original .text content corrupted at offset " << i;
     }
@@ -140,23 +146,23 @@ TEST(ExtendText, ELF_BasicExtension) {
     // Payload should appear at the end (after padding)
     const size_t padding = static_cast<size_t>(expected_va - (TEXT_VA + TEXT_SIZE));
     const size_t payload_start = TEXT_SIZE + padding;
-    ASSERT_LE(payload_start + payload.size(), text_sec->get_size());
+    ASSERT_LE(payload_start + payload.size(), text_sec_data.size());
     EXPECT_EQ(std::memcmp(data + payload_start, payload.data(), payload.size()), 0)
         << "Payload data not found at expected offset in extended .text";
 
     // Verify PT_LOAD segment was updated
     bool found_text_seg = false;
-    for (const auto& seg : reader.segments) {
-        if (seg->get_type() != ELFIO::PT_LOAD) continue;
-        if (seg->get_virtual_address() == TEXT_VA) {
+    for (auto seg : file->segments()) {
+        if (seg.type() != elfio::PT_LOAD) continue;
+        if (seg.virtual_address() == TEXT_VA) {
             found_text_seg = true;
-            EXPECT_GE(seg->get_memory_size(), TEXT_SIZE + padding + payload.size())
+            EXPECT_GE(seg.memory_size(), TEXT_SIZE + padding + payload.size())
                 << "PT_LOAD memsz not updated";
-            EXPECT_GE(seg->get_file_size(), TEXT_SIZE + padding + payload.size())
+            EXPECT_GE(seg.file_size(), TEXT_SIZE + padding + payload.size())
                 << "PT_LOAD filesz not updated";
             // Permissions should be preserved (original .text is RX)
-            EXPECT_TRUE(seg->get_flags() & ELFIO::PF_R) << "Missing PF_R";
-            EXPECT_TRUE(seg->get_flags() & ELFIO::PF_X) << "Missing PF_X";
+            EXPECT_TRUE(seg.flags() & elfio::PF_R) << "Missing PF_R";
+            EXPECT_TRUE(seg.flags() & elfio::PF_X) << "Missing PF_X";
             break;
         }
     }
@@ -233,20 +239,17 @@ TEST(ExtendText, ELF_MultipleExtensions) {
     auto sv = editor->save(out_path, diag);
     ASSERT_TRUE(sv.has_value());
 
-    ELFIO::elfio reader;
-    ASSERT_TRUE(reader.load(out_path));
+    auto rbuf2 = read_file_to_vec(out_path);
+    elfio::byte_view rview2{rbuf2.data(), rbuf2.size()};
+    auto file2 = elfio::elf_file<elfio::elf64_traits>::from_view(rview2);
+    ASSERT_TRUE(file2.has_value());
 
-    const ELFIO::section* text_sec = nullptr;
-    for (const auto& sec : reader.sections) {
-        if (sec->get_name() == ".text") {
-            text_sec = sec.get();
-            break;
-        }
-    }
-    ASSERT_NE(text_sec, nullptr);
+    auto text_opt2 = file2->find_section(".text");
+    ASSERT_TRUE(text_opt2.has_value());
+    auto text_sec_data2 = text_opt2->data();
 
-    const auto* data = reinterpret_cast<const uint8_t*>(text_sec->get_data());
-    const size_t sec_size = text_sec->get_size();
+    const auto* data = reinterpret_cast<const uint8_t*>(text_sec_data2.data());
+    const size_t sec_size = text_sec_data2.size();
 
     // First payload
     const size_t off1 = static_cast<size_t>(r1->va - TEXT_VA);
@@ -288,22 +291,20 @@ namespace {
 
 /// Build an ELF with a .text section containing known gap patterns.
 std::string build_elf_with_gaps() {
-    ELFIO::elfio writer;
-    writer.create(ELFIO::ELFCLASS64, ELFIO::ELFDATA2LSB);
-    writer.set_os_abi(ELFIO::ELFOSABI_LINUX);
-    writer.set_type(ELFIO::ET_EXEC);
-    writer.set_machine(ELFIO::EM_X86_64);
-    writer.set_entry(TEXT_VA);
+    elfio::elf_editor<elfio::elf64_traits> ed;
+    ed.create(elfio::ELFDATA2LSB, elfio::ET_EXEC, elfio::EM_X86_64);
+    ed.set_os_abi(elfio::ELFOSABI_LINUX);
+    ed.set_entry(TEXT_VA);
 
     // .text layout (256 bytes total):
     //   [0..31]    real code (0x55 = push rbp)
-    //   [32..63]   NOP sled (32 × 0x90)
+    //   [32..63]   NOP sled (32 x 0x90)
     //   [64..79]   real code (0x48)
-    //   [80..95]   INT3 padding (16 × 0xCC)
+    //   [80..95]   INT3 padding (16 x 0xCC)
     //   [96..111]  real code (0xC3)
-    //   [112..119] zero pad (8 × 0x00)
+    //   [112..119] zero pad (8 x 0x00)
     //   [120..127] real code (0x48)
-    //   [128..135] NOP sled (8 × 0x90)
+    //   [128..135] NOP sled (8 x 0x90)
     //   [136..255] real code (0x48)
     std::vector<uint8_t> text(256, 0x48);  // fill with 0x48
 
@@ -312,23 +313,23 @@ std::string build_elf_with_gaps() {
     std::memset(text.data() + 112, 0x00, 8);   // zero pad
     std::memset(text.data() + 128, 0x90, 8);   // small NOP sled
 
-    auto* text_sec = writer.sections.add(".text");
-    text_sec->set_type(ELFIO::SHT_PROGBITS);
-    text_sec->set_flags(ELFIO::SHF_ALLOC | ELFIO::SHF_EXECINSTR);
-    text_sec->set_addr_align(16);
-    text_sec->set_address(TEXT_VA);
-    text_sec->set_data(reinterpret_cast<const char*>(text.data()), text.size());
+    auto& text_sec = ed.add_section(".text", elfio::SHT_PROGBITS,
+                                     elfio::SHF_ALLOC | elfio::SHF_EXECINSTR);
+    text_sec.set_addr_align(16);
+    text_sec.set_address(TEXT_VA);
+    text_sec.set_data(reinterpret_cast<const char*>(text.data()), text.size());
+    auto text_idx = static_cast<uint16_t>(ed.sections().size() - 1);
 
-    auto* seg = writer.segments.add();
-    seg->set_type(ELFIO::PT_LOAD);
-    seg->set_flags(ELFIO::PF_R | ELFIO::PF_X);
-    seg->set_align(0x1000);
-    seg->set_virtual_address(TEXT_VA);
-    seg->set_physical_address(TEXT_VA);
-    seg->add_section_index(text_sec->get_index(), text_sec->get_addr_align());
+    auto& seg = ed.add_segment(elfio::PT_LOAD, elfio::PF_R | elfio::PF_X);
+    seg.set_align(0x1000);
+    seg.set_vaddr(TEXT_VA);
+    seg.set_paddr(TEXT_VA);
+    seg.add_section_index(text_idx);
 
     std::string tmpname = VMPilot::Test::make_temp_file("vmpilot");
-    writer.save(tmpname);
+    auto save_result = ed.save();
+    std::ofstream ofs(tmpname, std::ios::binary | std::ios::trunc);
+    ofs.write(save_result->data(), static_cast<std::streamsize>(save_result->size()));
     return tmpname;
 }
 
@@ -397,40 +398,42 @@ constexpr uint64_t PE_TEXT_VA    = PE_IMAGE_BASE + PE_TEXT_RVA;
 constexpr size_t   PE_TEXT_SIZE  = 0x200;
 
 std::string build_pe_for_extend() {
-    COFFI::coffi writer;
-    writer.create(COFFI::COFFI_ARCHITECTURE_PE);
-    writer.create_optional_header();
+    coffi::coff_editor<coffi::pe32_traits> ed;
+    ed.create_dos_header();
+    ed.create_optional_header();
+    ed.create_win_header();
+    ed.ensure_directories(16);
+    ed.coff_header().machine = coffi::MACHINE_I386;
 
-    auto* text_sec = writer.add_section(".text");
+    auto& text_sec = ed.add_section(".text",
+        coffi::SCN_MEM_EXECUTE | coffi::SCN_MEM_READ | coffi::SCN_CNT_CODE);
     std::vector<uint8_t> nops(PE_TEXT_SIZE, 0x90);
-    text_sec->set_data(reinterpret_cast<const char*>(nops.data()),
-                       static_cast<uint32_t>(nops.size()));
-    text_sec->set_virtual_address(PE_TEXT_RVA);
-    text_sec->set_virtual_size(static_cast<uint32_t>(PE_TEXT_SIZE));
-    text_sec->set_flags(IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ |
-                        IMAGE_SCN_CNT_CODE);
+    text_sec.set_data(reinterpret_cast<const char*>(nops.data()),
+                      static_cast<uint32_t>(nops.size()));
+    text_sec.set_virtual_address(PE_TEXT_RVA);
+    text_sec.set_virtual_size(static_cast<uint32_t>(PE_TEXT_SIZE));
 
-    writer.get_header()->set_flags(IMAGE_FILE_EXECUTABLE_IMAGE |
-                                   IMAGE_FILE_32BIT_MACHINE);
-    writer.get_optional_header()->set_entry_point_address(PE_TEXT_RVA);
-    writer.get_optional_header()->set_code_base(PE_TEXT_RVA);
-    writer.get_win_header()->set_image_base(PE_IMAGE_BASE);
-    writer.get_win_header()->set_section_alignment(0x1000);
-    writer.get_win_header()->set_file_alignment(0x200);
-    writer.get_win_header()->set_subsystem(3);
-    for (int i = 0; i < 16; ++i)
-        writer.add_directory(COFFI::image_data_directory{0, 0});
-    writer.layout();
+    ed.coff_header().flags = 0x0002 /*EXECUTABLE_IMAGE*/ |
+                             0x0100 /*32BIT_MACHINE*/;
+    ed.optional_header()->entry_point_address = PE_TEXT_RVA;
+    ed.optional_header()->code_base = PE_TEXT_RVA;
+    ed.win_header()->image_base = PE_IMAGE_BASE;
+    ed.win_header()->section_alignment = 0x1000;
+    ed.win_header()->file_alignment = 0x200;
+    ed.win_header()->subsystem = 3;
 
     std::string tmpname = VMPilot::Test::make_temp_file("vmpilot");
-    writer.save(tmpname);
+    (void)ed.save(tmpname);
     return tmpname;
 }
 
 std::string build_pe_with_gaps() {
-    COFFI::coffi writer;
-    writer.create(COFFI::COFFI_ARCHITECTURE_PE);
-    writer.create_optional_header();
+    coffi::coff_editor<coffi::pe32_traits> ed;
+    ed.create_dos_header();
+    ed.create_optional_header();
+    ed.create_win_header();
+    ed.ensure_directories(16);
+    ed.coff_header().machine = coffi::MACHINE_I386;
 
     // .text with known gap pattern:
     //   [0..31]    code (0x55)
@@ -444,28 +447,24 @@ std::string build_pe_with_gaps() {
     std::memset(text.data() + 64, 0x48, 16);
     std::memset(text.data() + 80, 0xCC, 16);
 
-    auto* text_sec = writer.add_section(".text");
-    text_sec->set_data(reinterpret_cast<const char*>(text.data()),
-                       static_cast<uint32_t>(text.size()));
-    text_sec->set_virtual_address(PE_TEXT_RVA);
-    text_sec->set_virtual_size(static_cast<uint32_t>(text.size()));
-    text_sec->set_flags(IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ |
-                        IMAGE_SCN_CNT_CODE);
+    auto& text_sec = ed.add_section(".text",
+        coffi::SCN_MEM_EXECUTE | coffi::SCN_MEM_READ | coffi::SCN_CNT_CODE);
+    text_sec.set_data(reinterpret_cast<const char*>(text.data()),
+                      static_cast<uint32_t>(text.size()));
+    text_sec.set_virtual_address(PE_TEXT_RVA);
+    text_sec.set_virtual_size(static_cast<uint32_t>(text.size()));
 
-    writer.get_header()->set_flags(IMAGE_FILE_EXECUTABLE_IMAGE |
-                                   IMAGE_FILE_32BIT_MACHINE);
-    writer.get_optional_header()->set_entry_point_address(PE_TEXT_RVA);
-    writer.get_optional_header()->set_code_base(PE_TEXT_RVA);
-    writer.get_win_header()->set_image_base(PE_IMAGE_BASE);
-    writer.get_win_header()->set_section_alignment(0x1000);
-    writer.get_win_header()->set_file_alignment(0x200);
-    writer.get_win_header()->set_subsystem(3);
-    for (int i = 0; i < 16; ++i)
-        writer.add_directory(COFFI::image_data_directory{0, 0});
-    writer.layout();
+    ed.coff_header().flags = 0x0002 /*EXECUTABLE_IMAGE*/ |
+                             0x0100 /*32BIT_MACHINE*/;
+    ed.optional_header()->entry_point_address = PE_TEXT_RVA;
+    ed.optional_header()->code_base = PE_TEXT_RVA;
+    ed.win_header()->image_base = PE_IMAGE_BASE;
+    ed.win_header()->section_alignment = 0x1000;
+    ed.win_header()->file_alignment = 0x200;
+    ed.win_header()->subsystem = 3;
 
     std::string tmpname = VMPilot::Test::make_temp_file("vmpilot");
-    writer.save(tmpname);
+    (void)ed.save(tmpname);
     return tmpname;
 }
 
@@ -503,16 +502,14 @@ TEST(ExtendText, PE_BasicExtension) {
     std::string out_path = pe_path + ".extended";
     ASSERT_TRUE(editor->save(out_path, diag).has_value());
 
-    COFFI::coffi reader;
-    ASSERT_TRUE(reader.load(out_path));
-    for (const auto& sec : reader.get_sections()) {
-        if (sec.get_name() != ".text") continue;
-        EXPECT_GT(sec.get_data_size(), PE_TEXT_SIZE);
-        // Original NOPs preserved at start
-        const auto* d = reinterpret_cast<const uint8_t*>(sec.get_data());
-        EXPECT_EQ(d[0], 0x90);
-        break;
-    }
+    auto reloaded = coffi::coff_editor<coffi::pe32_traits>::from_path(out_path);
+    ASSERT_TRUE(reloaded.has_value());
+    auto* text_reload = reloaded->find_section(".text");
+    ASSERT_NE(text_reload, nullptr);
+    EXPECT_GT(text_reload->data_length(), PE_TEXT_SIZE);
+    // Original NOPs preserved at start
+    const auto* d = reinterpret_cast<const uint8_t*>(text_reload->data_ptr());
+    EXPECT_EQ(d[0], 0x90);
 
     std::remove(pe_path.c_str());
     std::remove(out_path.c_str());

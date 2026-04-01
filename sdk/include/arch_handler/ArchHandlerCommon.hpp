@@ -49,8 +49,8 @@ struct ArchHandlerImplBase {
     uint64_t base_addr = static_cast<uint64_t>(-1);
     std::vector<Capstone::Instruction> instructions;
 
-    ArchHandlerImplBase(Capstone::Capstone&& cs, AddrToSymbol&& lookup)
-        : cs(std::move(cs)), addr_lookup(std::move(lookup)) {}
+    ArchHandlerImplBase(Capstone::Capstone&& cs_handle, AddrToSymbol&& lookup)
+        : cs(std::move(cs_handle)), addr_lookup(std::move(lookup)) {}
 };
 
 /// Find the function symbol that encloses the given address.

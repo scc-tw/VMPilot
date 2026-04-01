@@ -38,7 +38,7 @@ static void emit_mov_to_rsp_disp(std::vector<uint8_t>& c,
     if (reg >= 8) rex |= 0x04;          // REX.R
     c.push_back(rex);
     c.push_back(0x89);
-    c.push_back(0x84 | ((reg & 7) << 3));   // ModRM(10, reg&7, 100)
+    c.push_back(static_cast<uint8_t>(0x84 | ((reg & 7) << 3)));   // ModRM(10, reg&7, 100)
     c.push_back(0x24);                       // SIB(00, 100=rsp, 100=rsp)
     // disp32 little-endian
     c.push_back(static_cast<uint8_t>(disp));
@@ -54,7 +54,7 @@ static size_t emit_lea_rip(std::vector<uint8_t>& c, uint8_t reg) {
     if (reg >= 8) rex |= 0x04;          // REX.R
     c.push_back(rex);
     c.push_back(0x8D);
-    c.push_back(0x05 | ((reg & 7) << 3));   // ModRM(00, reg&7, 101=rip)
+    c.push_back(static_cast<uint8_t>(0x05 | ((reg & 7) << 3)));   // ModRM(00, reg&7, 101=rip)
     size_t off = c.size();
     c.insert(c.end(), 4, 0x00);              // placeholder disp32
     return off;

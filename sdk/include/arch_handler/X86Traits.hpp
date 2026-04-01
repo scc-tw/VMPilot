@@ -70,7 +70,7 @@ struct X86ArchTraits {
 
             // RIP-relative load: concrete address known at analysis time
             if (mem.isRipRelative()) {
-                uint64_t addr = insn.address + insn.size + mem.disp;
+                uint64_t addr = insn.address + insn.size + static_cast<uint64_t>(mem.disp);
                 return MemoryLoad{0, static_cast<int64_t>(addr),
                                   insn.operands[1].size};
             }

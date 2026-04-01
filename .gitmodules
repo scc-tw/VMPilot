@@ -16,3 +16,9 @@ url = ../VMPilot-crypto.git
 [submodule "third_party/abseil-cpp"]
 	path = third_party/abseil-cpp
 	url = https://github.com/abseil/abseil-cpp.git
+[submodule "third_party/coffi-modern"]
+	path = third_party/coffi-modern
+	url = https://github.com/scc-tw/coffi-modern.git
+[submodule "third_party/elfio-modern"]
+	path = third_party/elfio-modern
+	url = https://github.com/scc-tw/elfio-modern.git

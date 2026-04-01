@@ -39,6 +39,20 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/third_party/protobuf
 set(CMAKE_C_FLAGS "${_saved_c_flags}")
 set(CMAKE_CXX_FLAGS "${_saved_cxx_flags}")
 
+# Mark Google's include directories as SYSTEM so warnings from protobuf/abseil
+# headers don't fire when included transitively by our code under -Werror.
+# Note: protobuf::libprotobuf and absl::base are ALIAS targets — must resolve
+# to the real target before setting properties.
+foreach(_google_tgt libprotobuf absl_base)
+    if (TARGET ${_google_tgt})
+        get_target_property(_inc ${_google_tgt} INTERFACE_INCLUDE_DIRECTORIES)
+        if (_inc)
+            set_target_properties(${_google_tgt} PROPERTIES
+                INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${_inc}")
+        endif()
+    endif()
+endforeach()
+
 # Build capstone from submodule
 set(CAPSTONE_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(CAPSTONE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -57,8 +71,6 @@ set (INCLUDE_DIRS
 
 # Third-party header-only libs — mark SYSTEM to suppress warnings
 include_directories(SYSTEM
-    ${CMAKE_BINARY_DIR}/_deps/elfio-src/
-    ${CMAKE_BINARY_DIR}/_deps/coffi-src/
     ${spdlog_SOURCE_DIR}/include
 )
 

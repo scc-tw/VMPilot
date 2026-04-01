@@ -2,38 +2,30 @@
 #define __ELF_SECTION_VIEWER_HPP__
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
-
-#include <elfio/elf_types.hpp>
-#include <elfio/elfio.hpp>
-
-#include <memory>
-#include <string>
-#include <vector>
 
 namespace VMPilot::SDK::Segmentator {
 
 /**
- * @brief A viewer class for the ELFIO::section class.
- * 
- * we not take ownership of the section object.
- * This class is used to provide a more convenient way to access the section object.
+ * @brief Lightweight section reference: stores the index into the
+ *        elfio-modern editor's section list.
  */
 class ELFSectionViewer {
    public:
     ELFSectionViewer() = default;
-    ELFSectionViewer(ELFIO::section* sec) : section(sec) {}
+    explicit ELFSectionViewer(std::size_t idx) : section_idx(idx) {}
 
-    ELFSectionViewer(const ELFSectionViewer&) = delete;
-    ELFSectionViewer& operator=(const ELFSectionViewer&) = delete;
+    ELFSectionViewer(const ELFSectionViewer&) = default;
+    ELFSectionViewer& operator=(const ELFSectionViewer&) = default;
     ELFSectionViewer(ELFSectionViewer&&) = default;
     ELFSectionViewer& operator=(ELFSectionViewer&&) = default;
     ~ELFSectionViewer() = default;
 
-    ELFIO::section* getSection() noexcept { return section; }
+    std::size_t getSectionIndex() const noexcept { return section_idx; }
 
    private:
-    ELFIO::section* section = nullptr;
+    std::size_t section_idx = 0;
 };
 
 }  // namespace VMPilot::SDK::Segmentator

@@ -199,7 +199,7 @@ inline void detectX86JumpTablePatterns(
             bool resolved = false;
 
             if (is_64bit && mem.isRipRelative()) {
-                table_base = insn.address + insn.size + mem.disp;
+                table_base = insn.address + insn.size + static_cast<uint64_t>(mem.disp);
                 entry_size = static_cast<uint32_t>(mem.scale > 0 ? mem.scale
                                                                   : 8);
                 resolved = true;
@@ -244,7 +244,7 @@ inline void detectX86JumpTablePatterns(
                     prev.operands[1].type == Capstone::OpType::MEM &&
                     prev.operands[1].mem.isRipRelative()) {
                     uint64_t candidate =
-                        prev.address + prev.size + prev.operands[1].mem.disp;
+                        prev.address + prev.size + static_cast<uint64_t>(prev.operands[1].mem.disp);
                     if (sections.classify(candidate) ==
                         Core::SectionKind::Rodata) {
                         table_base = candidate;
@@ -529,7 +529,7 @@ std::vector<Core::DataReference> analyzePatterns(
                             prev.operands[1].type == Capstone::OpType::MEM &&
                             prev.operands[1].mem.isRipRelative()) {
                             ref.target_va = prev.address + prev.size +
-                                            prev.operands[1].mem.disp;
+                                            static_cast<uint64_t>(prev.operands[1].mem.disp);
                         }
                     }
 

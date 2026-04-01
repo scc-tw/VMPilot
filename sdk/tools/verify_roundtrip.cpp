@@ -173,7 +173,7 @@ int main(int argc, char* argv[]) {
     // Cleanup
     fs::remove_all(tmp);
 
-    printf("\n%zu/%zu units verified.\n", original_units.size() - failures,
+    printf("\n%zu/%zu units verified.\n", original_units.size() - static_cast<size_t>(failures),
            original_units.size());
 
     if (failures > 0) {

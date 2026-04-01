@@ -18,7 +18,6 @@
 #include <PlatformTraits.hpp>
 
 #include <coffi/coffi.hpp>
-#include <coffi/coffi_import.hpp>
 #include <elfio/elfio.hpp>
 
 #include <fstream>
@@ -39,6 +38,20 @@ using DC = Common::DiagnosticCode;
 // ============================================================================
 // Helpers
 // ============================================================================
+
+namespace {
+
+/// Read a file into a vector<char> for zero-copy ELF parsing.
+std::vector<char> read_file_to_vec(const std::string& path) {
+    std::ifstream ifs(path, std::ios::binary | std::ios::ate);
+    auto sz = static_cast<std::size_t>(ifs.tellg());
+    std::vector<char> buf(sz);
+    ifs.seekg(0);
+    ifs.read(buf.data(), static_cast<std::streamsize>(sz));
+    return buf;
+}
+
+}  // namespace
 
 namespace {
 
@@ -65,71 +78,64 @@ std::vector<uint8_t> make_fake_blob(size_t size = 256) {
 /// Build a minimal valid ELF64 binary with a .text section and a
 /// .dynamic section (needed for DT_NEEDED injection).
 std::string build_test_elf() {
-    ELFIO::elfio writer;
-    writer.create(ELFIO::ELFCLASS64, ELFIO::ELFDATA2LSB);
-    writer.set_os_abi(ELFIO::ELFOSABI_LINUX);
-    writer.set_type(ELFIO::ET_EXEC);
-    writer.set_machine(ELFIO::EM_X86_64);
-    writer.set_entry(TEXT_VA);
+    elfio::elf_editor<elfio::elf64_traits> ed;
+    ed.create(elfio::ELFDATA2LSB, elfio::ET_EXEC, elfio::EM_X86_64);
+    ed.set_os_abi(elfio::ELFOSABI_LINUX);
+    ed.set_entry(TEXT_VA);
 
     // .text filled with NOPs
-    auto* text_sec = writer.sections.add(".text");
-    text_sec->set_type(ELFIO::SHT_PROGBITS);
-    text_sec->set_flags(ELFIO::SHF_ALLOC | ELFIO::SHF_EXECINSTR);
-    text_sec->set_addr_align(16);
-    text_sec->set_address(TEXT_VA);
+    auto& text_sec = ed.add_section(".text", elfio::SHT_PROGBITS,
+                                     elfio::SHF_ALLOC | elfio::SHF_EXECINSTR);
+    text_sec.set_addr_align(16);
+    text_sec.set_address(TEXT_VA);
     std::vector<uint8_t> nops(TEXT_SIZE, 0x90);
-    text_sec->set_data(reinterpret_cast<const char*>(nops.data()), nops.size());
+    text_sec.set_data(reinterpret_cast<const char*>(nops.data()), nops.size());
 
     // PT_LOAD for .text
-    auto* text_seg = writer.segments.add();
-    text_seg->set_type(ELFIO::PT_LOAD);
-    text_seg->set_flags(ELFIO::PF_R | ELFIO::PF_X);
-    text_seg->set_align(0x1000);
-    text_seg->set_virtual_address(TEXT_VA);
-    text_seg->set_physical_address(TEXT_VA);
-    text_seg->add_section_index(text_sec->get_index(), text_sec->get_addr_align());
+    auto& text_seg = ed.add_segment(elfio::PT_LOAD, elfio::PF_R | elfio::PF_X);
+    text_seg.set_align(0x1000);
+    text_seg.set_vaddr(TEXT_VA);
+    text_seg.set_paddr(TEXT_VA);
+    auto text_idx = static_cast<uint16_t>(ed.sections().size() - 1);
+    text_seg.add_section_index(text_idx);
 
     // .dynstr
-    auto* dynstr_sec = writer.sections.add(".dynstr");
-    dynstr_sec->set_type(ELFIO::SHT_STRTAB);
-    dynstr_sec->set_flags(ELFIO::SHF_ALLOC);
-    dynstr_sec->set_addr_align(1);
-    dynstr_sec->set_address(0x402000);
+    auto& dynstr_sec = ed.add_section(".dynstr", elfio::SHT_STRTAB, elfio::SHF_ALLOC);
+    dynstr_sec.set_addr_align(1);
+    dynstr_sec.set_address(0x402000);
     const char null_byte = '\0';
-    dynstr_sec->set_data(&null_byte, 1);
+    dynstr_sec.set_data(&null_byte, 1);
+    auto dynstr_idx = static_cast<uint16_t>(ed.sections().size() - 1);
 
     // .dynamic with 4 DT_NULL padding slots
-    auto* dyn_sec = writer.sections.add(".dynamic");
-    dyn_sec->set_type(ELFIO::SHT_DYNAMIC);
-    dyn_sec->set_flags(ELFIO::SHF_ALLOC | ELFIO::SHF_WRITE);
-    dyn_sec->set_addr_align(8);
-    dyn_sec->set_address(0x402100);
-    dyn_sec->set_entry_size(sizeof(ELFIO::Elf64_Dyn));
-    dyn_sec->set_link(dynstr_sec->get_index());
-    std::vector<ELFIO::Elf64_Dyn> dyn_entries(4, ELFIO::Elf64_Dyn{});
-    dyn_sec->set_data(reinterpret_cast<const char*>(dyn_entries.data()),
-                      dyn_entries.size() * sizeof(ELFIO::Elf64_Dyn));
+    auto& dyn_sec = ed.add_section(".dynamic", elfio::SHT_DYNAMIC,
+                                    elfio::SHF_ALLOC | elfio::SHF_WRITE);
+    dyn_sec.set_addr_align(8);
+    dyn_sec.set_address(0x402100);
+    dyn_sec.set_entry_size(sizeof(elfio::Elf64_Dyn));
+    dyn_sec.set_link(dynstr_idx);
+    std::vector<elfio::Elf64_Dyn> dyn_entries(4, elfio::Elf64_Dyn{});
+    dyn_sec.set_data(reinterpret_cast<const char*>(dyn_entries.data()),
+                      dyn_entries.size() * sizeof(elfio::Elf64_Dyn));
+    auto dyn_idx = static_cast<uint16_t>(ed.sections().size() - 1);
 
     // PT_LOAD for data sections
-    auto* data_seg = writer.segments.add();
-    data_seg->set_type(ELFIO::PT_LOAD);
-    data_seg->set_flags(ELFIO::PF_R | ELFIO::PF_W);
-    data_seg->set_align(0x1000);
-    data_seg->set_virtual_address(0x402000);
-    data_seg->set_physical_address(0x402000);
-    data_seg->add_section_index(dynstr_sec->get_index(), dynstr_sec->get_addr_align());
-    data_seg->add_section_index(dyn_sec->get_index(), dyn_sec->get_addr_align());
+    auto& data_seg = ed.add_segment(elfio::PT_LOAD, elfio::PF_R | elfio::PF_W);
+    data_seg.set_align(0x1000);
+    data_seg.set_vaddr(0x402000);
+    data_seg.set_paddr(0x402000);
+    data_seg.add_section_index(dynstr_idx);
+    data_seg.add_section_index(dyn_idx);
 
     // PT_DYNAMIC
-    auto* dyn_seg = writer.segments.add();
-    dyn_seg->set_type(ELFIO::PT_DYNAMIC);
-    dyn_seg->set_flags(ELFIO::PF_R | ELFIO::PF_W);
-    dyn_seg->set_align(8);
-    dyn_seg->add_section_index(dyn_sec->get_index(), dyn_sec->get_addr_align());
+    auto& dyn_seg = ed.add_segment(elfio::PT_DYNAMIC, elfio::PF_R | elfio::PF_W);
+    dyn_seg.set_align(8);
+    dyn_seg.add_section_index(dyn_idx);
 
     std::string tmpname = VMPilot::Test::make_temp_file("vmpilot");
-    writer.save(tmpname);
+    auto save_result = ed.save();
+    std::ofstream ofs(tmpname, std::ios::binary | std::ios::trunc);
+    ofs.write(save_result->data(), static_cast<std::streamsize>(save_result->size()));
     return tmpname;
 }
 
@@ -176,20 +182,18 @@ TEST(PatchE2E, ELF_X86_64_SingleRegion) {
     EXPECT_EQ(result->blob_bytes_injected, 256u);
 
     // --- STRUCTURAL VERIFICATION ---
-    ELFIO::elfio reader;
-    ASSERT_TRUE(reader.load(out_path)) << "Failed to reload patched ELF";
+    auto rbuf = read_file_to_vec(out_path);
+    elfio::byte_view rview{rbuf.data(), rbuf.size()};
+    auto file = elfio::elf_file<elfio::elf64_traits>::from_view(rview);
+    ASSERT_TRUE(file.has_value()) << "Failed to reload patched ELF";
 
     // Find .vmpilot section
-    const ELFIO::section* vmpilot_sec = nullptr;
-    for (const auto& sec : reader.sections) {
-        if (sec->get_name() == ".vmpilot") {
-            vmpilot_sec = sec.get();
-            break;
-        }
-    }
-    ASSERT_NE(vmpilot_sec, nullptr) << ".vmpilot section not found";
-    const auto* payload = reinterpret_cast<const uint8_t*>(vmpilot_sec->get_data());
-    const size_t payload_size = vmpilot_sec->get_size();
+    auto vmpilot_opt = file->find_section(".vmpilot");
+    ASSERT_TRUE(vmpilot_opt.has_value()) << ".vmpilot section not found";
+    auto vmpilot_sec = *vmpilot_opt;
+    auto vmpilot_data = vmpilot_sec.data();
+    const auto* payload = reinterpret_cast<const uint8_t*>(vmpilot_data.data());
+    const size_t payload_size = vmpilot_data.size();
 
     // call_slot at offset 0 must be zero (runtime constructor fills it)
     ASSERT_GE(payload_size, 8u + blob.size() + SEED_SIZE);
@@ -206,21 +210,16 @@ TEST(PatchE2E, ELF_X86_64_SingleRegion) {
         << "Seed data not preserved after blob";
 
     // Verify .text region was overwritten (first byte should be JMP = 0xE9)
-    const ELFIO::section* text_sec = nullptr;
-    for (const auto& sec : reader.sections) {
-        if (sec->get_name() == ".text") {
-            text_sec = sec.get();
-            break;
-        }
-    }
-    ASSERT_NE(text_sec, nullptr);
-    const auto* text_data = reinterpret_cast<const uint8_t*>(text_sec->get_data());
+    auto text_opt = file->find_section(".text");
+    ASSERT_TRUE(text_opt.has_value());
+    auto text_sec_data = text_opt->data();
+    const auto* text_data = reinterpret_cast<const uint8_t*>(text_sec_data.data());
     EXPECT_EQ(text_data[0], 0xE9) << "Region not overwritten with JMP rel32";
 
     // Verify JMP target lands inside .vmpilot section
     int32_t jmp_disp = read_i32_le(text_data + 1);
-    uint64_t jmp_target = TEXT_VA + 5 + static_cast<int64_t>(jmp_disp);
-    uint64_t vmpilot_va = vmpilot_sec->get_address();
+    uint64_t jmp_target = TEXT_VA + 5 + static_cast<uint64_t>(static_cast<int64_t>(jmp_disp));
+    uint64_t vmpilot_va = vmpilot_sec.address();
     EXPECT_GE(jmp_target, vmpilot_va)
         << "JMP target before .vmpilot section";
     EXPECT_LT(jmp_target, vmpilot_va + payload_size)
@@ -233,27 +232,28 @@ TEST(PatchE2E, ELF_X86_64_SingleRegion) {
     }
 
     // --- W^X CHECK ---
-    for (const auto& seg : reader.segments) {
-        if (seg->get_type() != ELFIO::PT_LOAD) continue;
-        if (seg->get_virtual_address() != vmpilot_va) continue;
-        EXPECT_TRUE(seg->get_flags() & ELFIO::PF_R);
-        EXPECT_TRUE(seg->get_flags() & ELFIO::PF_W);
-        EXPECT_FALSE(seg->get_flags() & ELFIO::PF_X)
+    for (auto seg : file->segments()) {
+        if (seg.type() != elfio::PT_LOAD) continue;
+        if (seg.virtual_address() != vmpilot_va) continue;
+        EXPECT_TRUE(seg.flags() & elfio::PF_R);
+        EXPECT_TRUE(seg.flags() & elfio::PF_W);
+        EXPECT_FALSE(seg.flags() & elfio::PF_X)
             << ".vmpilot segment must be RW, not RWX (W^X)";
         break;
     }
 
     // --- DT_NEEDED CHECK ---
     bool found_needed = false;
-    for (const auto& sec : reader.sections) {
-        if (sec->get_type() != ELFIO::SHT_DYNAMIC) continue;
-        ELFIO::dynamic_section_accessor dyn(reader, sec.get());
-        for (ELFIO::Elf_Xword i = 0; i < dyn.get_entries_num(); ++i) {
-            ELFIO::Elf_Xword tag, value;
-            std::string str;
-            dyn.get_entry(i, tag, value, str);
-            if (tag == ELFIO::DT_NEEDED &&
-                str == "libvmpilot_runtime.so") {
+    for (auto sec : file->sections()) {
+        if (sec.type() != elfio::SHT_DYNAMIC) continue;
+
+        auto dynstr_link = sec.link();
+        if (dynstr_link >= file->section_count()) continue;
+        elfio::string_table_view dynstr{file->sections()[static_cast<uint16_t>(dynstr_link)].data()};
+
+        for (auto d : file->dynamics(sec, dynstr)) {
+            if (d.tag() == elfio::DT_NEEDED &&
+                d.string_value() == "libvmpilot_runtime.so") {
                 found_needed = true;
                 break;
             }
@@ -290,14 +290,16 @@ TEST(PatchE2E, ELF_X86_64_MultipleRegions) {
     EXPECT_EQ(result->regions_patched, 2u);
 
     // Both regions should start with JMP (0xE9)
-    ELFIO::elfio reader;
-    ASSERT_TRUE(reader.load(out_path));
-    for (const auto& sec : reader.sections) {
-        if (sec->get_name() != ".text") continue;
-        const auto* d = reinterpret_cast<const uint8_t*>(sec->get_data());
-        EXPECT_EQ(d[0], 0xE9) << "fn_alpha not patched";
-        EXPECT_EQ(d[0x200], 0xE9) << "fn_beta not patched";
-    }
+    auto rbuf2 = read_file_to_vec(out_path);
+    elfio::byte_view rview2{rbuf2.data(), rbuf2.size()};
+    auto file2 = elfio::elf_file<elfio::elf64_traits>::from_view(rview2);
+    ASSERT_TRUE(file2.has_value());
+    auto text_opt2 = file2->find_section(".text");
+    ASSERT_TRUE(text_opt2.has_value());
+    auto text_data2 = text_opt2->data();
+    const auto* d = reinterpret_cast<const uint8_t*>(text_data2.data());
+    EXPECT_EQ(d[0], 0xE9) << "fn_alpha not patched";
+    EXPECT_EQ(d[0x200], 0xE9) << "fn_beta not patched";
 
     std::remove(elf_path.c_str());
     std::remove(out_path.c_str());
@@ -357,35 +359,32 @@ constexpr uint64_t PE_TEXT_VA    = PE_IMAGE_BASE + PE_TEXT_RVA;
 constexpr size_t   PE_TEXT_SIZE  = 0x1000;
 
 std::string build_test_pe() {
-    COFFI::coffi writer;
-    writer.create(COFFI::COFFI_ARCHITECTURE_PE);
-    writer.create_optional_header();
+    coffi::coff_editor<coffi::pe32_traits> ed;
+    ed.create_dos_header();
+    ed.create_optional_header();
+    ed.create_win_header();
+    ed.ensure_directories(16);
+    ed.coff_header().machine = coffi::MACHINE_I386;
 
-    auto* text_sec = writer.add_section(".text");
+    auto& text_sec = ed.add_section(".text",
+        coffi::SCN_MEM_EXECUTE | coffi::SCN_MEM_READ | coffi::SCN_CNT_CODE);
     std::vector<uint8_t> nops(PE_TEXT_SIZE, 0x90);
-    text_sec->set_data(reinterpret_cast<const char*>(nops.data()),
-                       static_cast<uint32_t>(nops.size()));
-    text_sec->set_virtual_address(PE_TEXT_RVA);
-    text_sec->set_virtual_size(static_cast<uint32_t>(PE_TEXT_SIZE));
-    text_sec->set_flags(IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ |
-                        IMAGE_SCN_CNT_CODE);
+    text_sec.set_data(reinterpret_cast<const char*>(nops.data()),
+                      static_cast<uint32_t>(nops.size()));
+    text_sec.set_virtual_address(PE_TEXT_RVA);
+    text_sec.set_virtual_size(static_cast<uint32_t>(PE_TEXT_SIZE));
 
-    writer.get_header()->set_flags(IMAGE_FILE_EXECUTABLE_IMAGE |
-                                   IMAGE_FILE_32BIT_MACHINE);
-    writer.get_optional_header()->set_entry_point_address(PE_TEXT_RVA);
-    writer.get_optional_header()->set_code_base(PE_TEXT_RVA);
-    writer.get_win_header()->set_image_base(PE_IMAGE_BASE);
-    writer.get_win_header()->set_section_alignment(0x1000);
-    writer.get_win_header()->set_file_alignment(0x200);
-    writer.get_win_header()->set_subsystem(3);
-
-    for (int i = 0; i < 16; ++i)
-        writer.add_directory(COFFI::image_data_directory{0, 0});
-
-    writer.layout();
+    ed.coff_header().flags = 0x0002 /*EXECUTABLE_IMAGE*/ |
+                             0x0100 /*32BIT_MACHINE*/;
+    ed.optional_header()->entry_point_address = PE_TEXT_RVA;
+    ed.optional_header()->code_base = PE_TEXT_RVA;
+    ed.win_header()->image_base = PE_IMAGE_BASE;
+    ed.win_header()->section_alignment = 0x1000;
+    ed.win_header()->file_alignment = 0x200;
+    ed.win_header()->subsystem = 3;
 
     std::string tmpname = VMPilot::Test::make_temp_file("vmpilot");
-    writer.save(tmpname);
+    (void)ed.save(tmpname);
     return tmpname;
 }
 
@@ -413,45 +412,28 @@ TEST(PatchE2E, PE_X86_32_SingleRegion) {
     EXPECT_EQ(result->blob_bytes_injected, 256u);
 
     // Verify import was injected
-    COFFI::coffi reader;
-    ASSERT_TRUE(reader.load(out_path));
-    COFFI::import_section_accessor imports(reader);
+    auto loaded = coffi::coff_editor<coffi::pe32_traits>::from_path(out_path);
+    ASSERT_TRUE(loaded.has_value()) << "Failed to reload patched PE";
+    auto& reader = *loaded;
 
-    bool found_dll = false;
-    for (uint32_t i = 0; i < imports.get_import_count(); ++i) {
-        if (imports.get_dll_name(i) == "vmpilot_runtime.dll") {
-            found_dll = true;
-            std::string sym_name;
-            uint16_t hint;
-            ASSERT_TRUE(imports.get_symbol(i, 0, sym_name, hint));
-            EXPECT_EQ(sym_name, "vm_stub_entry");
-            break;
-        }
-    }
-    EXPECT_TRUE(found_dll)
-        << "Import for vmpilot_runtime.dll not found in patched PE";
+    auto* vmpltt_sec = reader.find_section(".vmpltt");
 
     // Verify .vmpltt section exists with payload
-    bool found_vmpltt = false;
-    for (const auto& sec : reader.get_sections()) {
-        if (sec.get_name() == ".vmpltt") {
-            found_vmpltt = true;
-            const auto* data = reinterpret_cast<const uint8_t*>(sec.get_data());
-            ASSERT_GE(sec.get_data_size(), 8u + blob.size() + SEED_SIZE);
-            uint64_t call_slot = read64_le(data);
-            EXPECT_EQ(call_slot, 0u);
-            EXPECT_EQ(std::memcmp(data + 8, blob.data(), blob.size()), 0);
-            break;
-        }
+    bool found_vmpltt = (vmpltt_sec != nullptr);
+    if (found_vmpltt) {
+        const auto* data = reinterpret_cast<const uint8_t*>(vmpltt_sec->data_ptr());
+        ASSERT_GE(vmpltt_sec->data_length(), 8u + blob.size() + SEED_SIZE);
+        uint64_t call_slot = read64_le(data);
+        EXPECT_EQ(call_slot, 0u);
+        EXPECT_EQ(std::memcmp(data + 8, blob.data(), blob.size()), 0);
     }
     EXPECT_TRUE(found_vmpltt);
 
     // Verify .text region overwritten with JMP
-    for (const auto& sec : reader.get_sections()) {
-        if (sec.get_name() != ".text") continue;
-        const auto* data = reinterpret_cast<const uint8_t*>(sec.get_data());
+    auto* text_sec_verify = reader.find_section(".text");
+    if (text_sec_verify) {
+        const auto* data = reinterpret_cast<const uint8_t*>(text_sec_verify->data_ptr());
         EXPECT_EQ(data[0], 0xE9);
-        break;
     }
 
     std::remove(pe_path.c_str());

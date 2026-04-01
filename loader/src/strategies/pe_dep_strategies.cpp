@@ -1,8 +1,8 @@
 /// @file strategies/pe_dep_strategies.cpp
 /// @brief PE import injection strategy implementation.
 ///
-/// Uses COFFI import_section_accessor to rebuild the import directory
-/// with a new entry for the runtime DLL.
+/// Uses coffi-modern coff_editor::imports() builder to add a new
+/// import entry for the runtime DLL.
 
 #include <strategies/pe_dep_strategies.hpp>
 
@@ -16,18 +16,12 @@ using DC = Common::DiagnosticCode;
 
 tl::expected<void, DC>
 CoffiImportInject::try_execute(
-    Common::DiagnosticCollector& diag,
-    COFFI::coffi& reader,
+    Common::DiagnosticCollector& /*diag*/,
+    coffi::coff_editor<coffi::pe32_traits>& editor,
     std::string_view dll_name) noexcept
 {
-    COFFI::import_section_accessor imports(reader);
-
-    if (!imports.add_import(std::string(dll_name), "vm_stub_entry")) {
-        diag.note("CoffiImportInject", DC::PatchRuntimeDepFailed,
-                  std::string("failed to inject PE import for '")
-                  + std::string(dll_name) + "'");
-        return tl::make_unexpected(DC::PatchRuntimeDepFailed);
-    }
+    editor.imports().add_symbol(
+        std::string(dll_name), "vm_stub_entry", 0);
 
     return {};
 }
