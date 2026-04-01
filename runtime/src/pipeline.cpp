@@ -1,17 +1,33 @@
 /// @file pipeline.cpp
-/// @brief Non-template pipeline function implementations for the new state model.
+/// @brief Non-template pipeline function implementations for doc 16 forward secrecy.
 ///
 /// Ports the fetch-decrypt-decode, resolve, advance, MAC verify, and BB
-/// transition logic from the old VMContext-based code to the 4-way split
-/// (VmImmutable, VmExecution, VmEpoch, VmOramState).
+/// transition logic to the doc 16 model:
+///
+///   - Register encoding: Speck64/128 XEX FPE (replaces per-BB LUT bijections)
+///   - Memory encoding:   GlobalMemTables LUT (replaces per-BB DomainTables)
+///   - Key evolution:     Per-instruction ratchet + per-BB chain state
+///
+/// Key changes from doc 15:
+///
+///   1. resolve_operands: MEM operands decode through imm.mem (GlobalMemTables)
+///      instead of epoch.dom (DomainTables).  REG operands are FPE-decoded
+///      into plain_a/plain_b using the current insn_fpe_key.
+///
+///   2. enter_basic_block: derives insn_fpe_key via BLAKE3_KEYED_128, re-encodes
+///      all live registers from old FPE key to new FPE key, sanitises dead regs.
+///      No longer derives RegTables or DomainTables (those are removed in doc 16).
+///
+///   3. derive_bb_fpe_key: new function for path-dependent key derivation.
 
 #include "pipeline.hpp"
 
 #include <vm/vm_crypto.hpp>
-#include <vm/vm_encoding.hpp>
 #include <vm/vm_insn.hpp>
 #include <vm/vm_blob.hpp>
 #include <vm/encoded_value.hpp>
+#include <vm/xex_speck64.hpp>
+#include <vm/secure_zero.hpp>
 
 #include <cstring>
 #include <vector>
@@ -20,11 +36,10 @@ namespace VMPilot::Runtime::pipeline {
 
 using namespace Common::VM;
 using namespace Common::VM::Crypto;
-using namespace Common::VM::Encoding;
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 // Internal helpers
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 
 /// Derive bb_enc_seed = BLAKE3_keyed(stored_seed, "enc" || bb_id_le32)[0:8]
 static void derive_bb_enc_seed(const uint8_t stored_seed[32],
@@ -48,7 +63,7 @@ static uint64_t update_enc_state_impl(uint64_t enc_state,
     return siphash_2_4(key, msg, 6);
 }
 
-/// Find BB index by bb_id (linear search — v1 simplicity).
+/// Find BB index by bb_id (linear search -- v1 simplicity).
 static int find_bb_index(const VmImmutable& imm, uint32_t bb_id) noexcept {
     for (size_t i = 0; i < imm.bb_metadata.size(); ++i) {
         if (imm.bb_metadata[i].bb_id == bb_id)
@@ -57,16 +72,16 @@ static int find_bb_index(const VmImmutable& imm, uint32_t bb_id) noexcept {
     return -1;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 // fetch_decrypt_decode (Steps 1-3)
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 
 tl::expected<DecodedInsn, DiagnosticCode>
 fetch_decrypt_decode(const VmImmutable& imm,
                      const VmExecution& exec,
                      const VmEpoch& epoch) noexcept {
 
-    // Step 1: FETCH — bounds check + read encrypted 8 bytes
+    // Step 1: FETCH -- bounds check + read encrypted 8 bytes
     auto insns = imm.blob.instructions();
     if (exec.vm_ip >= insns.size())
         return tl::make_unexpected(DiagnosticCode::InstructionDecryptFailed);
@@ -74,7 +89,7 @@ fetch_decrypt_decode(const VmImmutable& imm,
     uint64_t encrypted = 0;
     std::memcpy(&encrypted, &insns[exec.vm_ip], 8);
 
-    // Step 2: DECRYPT — SipHash keystream
+    // Step 2: DECRYPT -- SipHash keystream
     uint64_t keystream = siphash_keystream(
         imm.fast_key, exec.enc_state, exec.insn_index_in_bb);
     uint64_t plain_u64 = encrypted ^ keystream;
@@ -82,9 +97,9 @@ fetch_decrypt_decode(const VmImmutable& imm,
     VmInsn insn{};
     std::memcpy(&insn, &plain_u64, 8);
 
-    // Step 3: DECODE — two-layer PRP opcode resolution
+    // Step 3: DECODE -- two-layer PRP opcode resolution
     // PRP inverse FIRST (undo Layer 2), then alias LUT SECOND (undo Layer 1).
-    // This order preserves Shannon perfect secrecy (§11.6).
+    // This order preserves Shannon perfect secrecy (doc 11 section 6).
     uint8_t encrypted_alias = static_cast<uint8_t>(insn.opcode & 0xFF);
     uint8_t alias = epoch.opcode_perm_inv[encrypted_alias];
     uint8_t semantic_op = imm.alias_lut[alias];
@@ -106,22 +121,37 @@ fetch_decrypt_decode(const VmImmutable& imm,
     return decoded;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// resolve_operands (Step 4)
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// resolve_operands (Step 4) -- doc 16 version with FPE decode
+// ---------------------------------------------------------------------------
 
+/// Resolve a single operand to its raw value.
+///
+/// Doc 16 encoding model:
+///   REG  -> exec.regs[reg_x]  (FPE-encoded, caller will FPE_Decode)
+///   POOL -> constant_pool[aux] (plaintext after blob decryption)
+///   MEM  -> guest memory -> GlobalMemTables::decode -> plaintext
+///   NONE -> 0
+///
+/// WHY MEM uses GlobalMemTables directly (not DomainTables):
+///   Doc 16 removes per-BB DomainTables (store/load).  Memory encoding is
+///   a FIXED global LUT (derived once from stored_seed at blob load time).
+///   This simplifies BB transitions: no store/load table derivation needed.
+///   The security cost is acceptable because memory is already protected by
+///   ORAM (oblivious access patterns) -- the LUT only provides value encoding.
 static RegVal resolve_one(const VmImmutable& imm,
                           const VmExecution& exec,
-                          const VmEpoch& epoch,
                           uint8_t type, uint8_t reg_idx,
                           uint32_t aux) noexcept {
     switch (type) {
         case VM_OPERAND_REG:
+            // Return FPE-encoded value as-is.  The caller FPE_Decodes it.
             return exec.regs[reg_idx & 0x0F];
 
         case VM_OPERAND_POOL: {
-            // Constant pool: pre-encoded by compiler in target BB's domain.
-            // Read as RegVal directly (no domain conversion needed).
+            // Constant pool: decrypted at blob load time, values are PLAINTEXT.
+            // Doc 16 change: pool is no longer "pre-encoded in target BB's domain"
+            // because there are no per-BB LUT domains.  Pool values are plain.
             if (imm.decrypted_pool.empty() || aux * 8 >= imm.decrypted_pool.size())
                 return RegVal(0);
             uint64_t val = 0;
@@ -131,12 +161,21 @@ static RegVal resolve_one(const VmImmutable& imm,
 
         case VM_OPERAND_MEM: {
             // Guest external memory (Space 2, direct access).
-            // Read raw value → convert memory→register domain via LOAD_TABLE.
+            // Read raw value -> decode through GlobalMemTables -> plaintext.
+            //
+            // WHY decode to plaintext here (not FPE-encode into register domain):
+            //   Doc 16 handlers expect plain_a/plain_b as plaintext.  For MEM
+            //   operands, the GlobalMemTables LUT decode IS the final decode step.
+            //   There's no FPE involvement for memory -- memory uses LUT encoding,
+            //   registers use FPE encoding.  These are separate domains.
             uintptr_t guest_addr = static_cast<uintptr_t>(
                 static_cast<int64_t>(aux) + exec.load_base_delta);
             uint64_t mem_val = 0;
             std::memcpy(&mem_val, reinterpret_cast<const uint8_t*>(guest_addr), 8);
-            return load_convert(epoch.dom.load_lut(reg_idx & 0x0F), MemVal(mem_val));
+
+            // Decode through GlobalMemTables: MemVal -> PlainVal -> store as RegVal bits
+            PlainVal plain = decode_memory(imm.mem.decode_lut(), MemVal(mem_val));
+            return RegVal(plain.bits);
         }
 
         case VM_OPERAND_NONE:
@@ -147,18 +186,59 @@ static RegVal resolve_one(const VmImmutable& imm,
 
 void resolve_operands(const VmImmutable& imm,
                       const VmExecution& exec,
-                      const VmEpoch& epoch,
+                      const VmEpoch& /*epoch*/,
                       DecodedInsn& insn) noexcept {
-    // Always resolve BOTH operands — D3 uniform pipeline.
-    insn.resolved_a = resolve_one(imm, exec, epoch,
+
+    // Phase 1: resolve raw values (always both -- D3 uniform pipeline)
+    insn.resolved_a = resolve_one(imm, exec,
                                    insn.operand_a_type, insn.reg_a, insn.aux);
-    insn.resolved_b = resolve_one(imm, exec, epoch,
+    insn.resolved_b = resolve_one(imm, exec,
                                    insn.operand_b_type, insn.reg_b, insn.aux);
+
+    // Phase 2: FPE decode to plaintext.
+    //
+    // Pre-compute Speck key schedule + XEX tweaks ONCE for both operands.
+    // This avoids redundant key expansion (27-round Speck key schedule is
+    // ~100 cycles; doing it twice wastes ~3% of per-instruction budget).
+    //
+    // WHY we use exec.insn_fpe_key:
+    //   The per-instruction FPE key is derived from the BB chain state and
+    //   ratcheted after each instruction.  This key determines the Speck
+    //   permutation used to encode register values.  Only REG operands are
+    //   in this domain -- POOL, MEM, and NONE are already plaintext.
+    Speck64_RoundKeys rk;
+    Speck64_KeySchedule(exec.insn_fpe_key, rk);
+    XEX_Tweaks tw;
+    XEX_ComputeTweaks(rk, tw);
+
+    // Operand A: FPE decode if REG, passthrough otherwise
+    if (insn.operand_a_type == VM_OPERAND_REG) {
+        insn.plain_a = FPE_Decode(rk, tw, insn.reg_a, insn.resolved_a.bits);
+    } else {
+        // POOL, MEM, NONE: resolved value IS the plaintext
+        insn.plain_a = insn.resolved_a.bits;
+    }
+
+    // Operand B: same logic
+    if (insn.operand_b_type == VM_OPERAND_REG) {
+        insn.plain_b = FPE_Decode(rk, tw, insn.reg_b, insn.resolved_b.bits);
+    } else {
+        insn.plain_b = insn.resolved_b.bits;
+    }
+
+    // NOTE: rk and tw are stack-local and will be overwritten.
+    // The caller (step()) will re-derive them if needed for FPE_Encode
+    // of the handler result.  This is intentional -- the key may ratchet
+    // between decode and encode if the instruction has side effects.
+    //
+    // For paranoid cleanup we could secure_zero rk/tw here, but the
+    // key schedule is re-derivable from insn_fpe_key which is in exec,
+    // so there's no additional secret exposure from stack residue.
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 // advance_enc_state (Step 9)
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 
 void advance_enc_state(VmExecution& exec,
                        uint16_t plaintext_opcode,
@@ -168,9 +248,34 @@ void advance_enc_state(VmExecution& exec,
     ++exec.insn_index_in_bb;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// enter_basic_block
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// derive_bb_fpe_key
+// ---------------------------------------------------------------------------
+
+void derive_bb_fpe_key(const BBMetadata& bb,
+                       const uint8_t bb_chain_state[32],
+                       uint8_t out_key[16]) noexcept {
+    // key = BLAKE3_KEYED(epoch_seed_as_32byte_key, bb_chain_state)[0:16]
+    //
+    // WHY BLAKE3_KEYED (not BLAKE3_KDF):
+    //   BLAKE3_KEYED provides a PRF: for a random key (epoch_seed), the output
+    //   is indistinguishable from random for any input.  This is exactly what
+    //   we need -- the FPE key must be unpredictable given the chain state.
+    //
+    //   BLAKE3_KDF would also work but is semantically wrong: KDF is for
+    //   deriving keys from non-uniform entropy.  epoch_seed is already a
+    //   uniform 256-bit secret, so keyed hash is the correct primitive.
+    //
+    // OUTPUT SIZE = 16 bytes:
+    //   Matches Speck64/128's key size.  The FPE security level is 128 bits
+    //   (determined by the cipher), so 128 bits of key material is optimal --
+    //   more would be wasted, less would reduce the security level.
+    blake3_keyed_hash(bb.epoch_seed, bb_chain_state, 32, out_key, 16);
+}
+
+// ---------------------------------------------------------------------------
+// enter_basic_block -- doc 16 version with FPE re-encoding
+// ---------------------------------------------------------------------------
 
 tl::expected<void, DiagnosticCode>
 enter_basic_block(VmExecution& exec,
@@ -185,7 +290,7 @@ enter_basic_block(VmExecution& exec,
 
     const BBMetadata& target = imm.bb_metadata[static_cast<size_t>(bb_idx)];
 
-    // 2. Derive bb_enc_seed and reset enc_state
+    // 2. Derive bb_enc_seed and reset enc_state (unchanged from doc 15)
     uint8_t enc_seed_bytes[8];
     derive_bb_enc_seed(imm.stored_seed, target.bb_id, enc_seed_bytes);
 
@@ -197,30 +302,114 @@ enter_basic_block(VmExecution& exec,
     exec.insn_index_in_bb = 0;
     exec.vm_ip = target.entry_ip;
 
-    // 4. Re-encode all live registers + sanitize dead registers (doc 16 §5).
+    // 4. Derive opcode permutation for the new BB's epoch.
     //
-    //    Unconditional on normal branches: forward secrecy requires the
-    //    outgoing key domain to be destroyed on every BB transition.
+    // Doc 16 change: enter_bb() ONLY derives opcode permutations now.
+    // RegTables and DomainTables are no longer derived (FPE replaces LUTs,
+    // GlobalMemTables replaces DomainTables).
     //
-    //    Exception: RET_VM returns.  RET_VM restored the register snapshot
-    //    which is in the CALLER BB's encoding domain (saved at CALL_VM time).
-    //    The current epoch tables are the callee's — using them as the "old"
-    //    decode source would corrupt the snapshot.  Since the target IS the
-    //    caller BB and epoch_seed is deterministic, enter_bb() below will
-    //    re-derive the same tables the snapshot was encoded with.
+    // NOTE: epoch.enter_bb() derives opcode_perm and opcode_perm_inv
+    // which are needed by fetch_decrypt_decode().  This is the ONLY thing
+    // VmEpoch does now -- RegTables, DomainTables, and CompositionCache
+    // are removed (doc 16 replaces them with Speck-FPE).
+    epoch.enter_bb(target);
+
+    // 5. Evolve bb_chain_state BEFORE deriving the new key.
     //
-    //    Doc 16 FPE model: RET_VM should restore insn_fpe_key from the
-    //    checkpoint's saved_insn_fpe_key before re-encoding.  In the current
-    //    LUT model, skipping transition_regs is equivalent because same BB
-    //    always produces identical tables (epoch_seed is static).
-    if (exec.return_resume_ip == 0) {
-        epoch.transition_regs(exec, target, imm);
+    // chain_state_new = BLAKE3(stored_seed, chain_state_old || bb_id_le32)
+    //
+    // WHY evolve before key derivation:
+    //   The chain state must incorporate the target BB identity so that
+    //   entering the same BB via different paths yields different states.
+    //   We evolve first, then derive the key from the evolved state.
+    //   This ensures the FPE key depends on the full path including the
+    //   current BB, not just the path up to the previous BB.
+    //
+    // WHY stored_seed as the BLAKE3 key:
+    //   Using stored_seed (the root secret) as the hash key makes the
+    //   chain state evolution a keyed PRF.  An attacker who doesn't know
+    //   stored_seed cannot predict the chain state evolution, even if they
+    //   know the BB graph topology and the old chain state.
+    {
+        uint8_t evolve_msg[36];  // 32 (old chain state) + 4 (bb_id)
+        std::memcpy(evolve_msg, exec.bb_chain_state, 32);
+        std::memcpy(evolve_msg + 32, &target.bb_id, 4);
+
+        uint8_t new_chain_state[32];
+        blake3_keyed_hash(imm.stored_seed, evolve_msg, 36,
+                          new_chain_state, 32);
+        std::memcpy(exec.bb_chain_state, new_chain_state, 32);
     }
 
-    // 5. Derive new tables for this BB
-    epoch.enter_bb(target, imm);
+    // 6. Derive new insn_fpe_key from evolved chain state
+    //
+    // Save old key for register re-encoding (step 7).
+    uint8_t old_fpe_key[16];
+    std::memcpy(old_fpe_key, exec.insn_fpe_key, 16);
 
-    // 6. Update tracking
+    derive_bb_fpe_key(target, exec.bb_chain_state, exec.insn_fpe_key);
+
+    // 7. Re-encode all registers from old FPE key to new FPE key.
+    //
+    // For each register:
+    //   - Live: plain = FPE_Decode(old_key, old_tweak, reg, encoded)
+    //           encoded_new = FPE_Encode(new_key, new_tweak, reg, plain)
+    //   - Dead: encoded_new = FPE_Encode(new_key, new_tweak, reg, 0)
+    //
+    // WHY re-encode instead of just changing the key:
+    //   The register file stores FPE-encoded values.  If we change the key
+    //   without re-encoding, every subsequent FPE_Decode would produce garbage
+    //   because the ciphertext was encrypted under the old key.
+    //
+    // WHY sanitise dead registers:
+    //   Dead registers might hold stale encoded values from a previous BB.
+    //   Under the new key, those stale values decode to random garbage -- but
+    //   that garbage is PREDICTABLE if an attacker knows the old key.  By
+    //   explicitly encoding 0, we ensure dead registers hold a consistent
+    //   known-plaintext encoding, revealing no information about the old key.
+    //
+    // PLAINTEXT EXPOSURE:
+    //   Yes, plaintext values are transiently in CPU registers during re-encoding.
+    //   This is unavoidable -- FPE is a block cipher, so decode-then-encode
+    //   necessarily passes through plaintext.  The exposure is bounded to the
+    //   re-encoding loop (~16 iterations, ~microseconds).  Doc 16 accepts this
+    //   as the same threat model as the original LUT-based RE_TABLE (which also
+    //   computes encode_new(decode_old(x)) through intermediate values).
+    {
+        // Pre-compute key schedules + tweaks for both keys
+        Speck64_RoundKeys old_rk, new_rk;
+        Speck64_KeySchedule(old_fpe_key, old_rk);
+        Speck64_KeySchedule(exec.insn_fpe_key, new_rk);
+
+        XEX_Tweaks old_tw, new_tw;
+        XEX_ComputeTweaks(old_rk, old_tw);
+        XEX_ComputeTweaks(new_rk, new_tw);
+
+        for (uint8_t r = 0; r < VM_REG_COUNT; ++r) {
+            if (target.live_regs_bitmap & (1u << r)) {
+                // Live register: decode with old key, encode with new key
+                uint64_t plain = FPE_Decode(old_rk, old_tw, r,
+                                            exec.regs[r].bits);
+                exec.regs[r] = RegVal(FPE_Encode(new_rk, new_tw, r, plain));
+            } else {
+                // Dead register: encode zero with new key (sanitise)
+                exec.regs[r] = RegVal(FPE_Encode(new_rk, new_tw, r, 0));
+            }
+        }
+
+        // Erase old key material from stack.
+        // new_rk/new_tw are re-derivable from exec.insn_fpe_key, but old_rk/old_tw
+        // must not linger because old_fpe_key is about to be zeroed.
+        secure_zero(&old_rk, sizeof(old_rk));
+        secure_zero(&old_tw, sizeof(old_tw));
+    }
+
+    // Erase old FPE key -- forward secrecy requires that old keys are destroyed.
+    // After this point, the old FPE key cannot be recovered, and any register
+    // values from the old BB cannot be decoded without it.
+    secure_zero(old_fpe_key, sizeof(old_fpe_key));
+
+    // 8. Update BB tracking
     exec.current_bb_id    = target.bb_id;
     exec.current_bb_index = static_cast<uint32_t>(bb_idx);
     exec.current_epoch    = target.epoch;
@@ -228,9 +417,9 @@ enter_basic_block(VmExecution& exec,
     return {};
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 // verify_bb_mac (Step 11)
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 
 tl::expected<void, DiagnosticCode>
 verify_bb_mac(const VmImmutable& imm,
@@ -263,7 +452,7 @@ verify_bb_mac(const VmImmutable& imm,
 
         std::memcpy(plaintext_bytes.data() + j * 8, &plain, 8);
 
-        // Check for REKEY instruction — must replay its enc_state mutation
+        // Check for REKEY instruction -- must replay its enc_state mutation
         VmInsn vinst{};
         std::memcpy(&vinst, &plain, 8);
         {
@@ -307,9 +496,9 @@ verify_bb_mac(const VmImmutable& imm,
     return {};
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 // replay_enc_state (RET_VM resume)
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 
 void replay_enc_state(VmExecution& exec, const VmEpoch& epoch,
                       const VmImmutable& imm,
@@ -338,7 +527,7 @@ void replay_enc_state(VmExecution& exec, const VmEpoch& epoch,
         VmInsn vi{};
         std::memcpy(&vi, &plain_u64, 8);
 
-        // Check for REKEY — must replay its enc_state mutation
+        // Check for REKEY -- must replay its enc_state mutation
         uint8_t enc_alias = static_cast<uint8_t>(vi.opcode & 0xFF);
         uint8_t alias = epoch.opcode_perm_inv[enc_alias];
         uint8_t sem = imm.alias_lut[alias];
@@ -362,9 +551,9 @@ void replay_enc_state(VmExecution& exec, const VmEpoch& epoch,
     exec.enc_state = es;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 // current_bb_insn_count
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 
 uint32_t current_bb_insn_count(const VmImmutable& imm,
                                 const VmExecution& exec) noexcept {

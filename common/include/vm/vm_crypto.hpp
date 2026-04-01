@@ -182,6 +182,57 @@ void blake3_kdf(const uint8_t seed[32], const char* context, size_t context_len,
 void blake3_keyed_hash(const uint8_t key[32], const uint8_t* data, size_t data_len,
                        uint8_t* out, size_t out_len) noexcept;
 
+// -------------------------------------------------------------------------
+// BLAKE3_KEYED with 128-bit key  (doc 16 forward-secrecy extension)
+// -------------------------------------------------------------------------
+
+/// BLAKE3 keyed hash using a 128-bit (16-byte) key.
+///
+/// WHY 128-BIT KEY:
+///
+///   The Speck FPE key is 128 bits (matching Speck64/128's key size).
+///   Doc 16's key ratchet and fingerprint operations need a keyed hash
+///   using this 128-bit key.  BLAKE3's keyed mode requires 32 bytes.
+///
+///   Extension strategy: repeat the 16-byte key → [K || K] (32 bytes).
+///   This provides 128-bit security (not 256-bit), which is sufficient
+///   because the entire FPE chain is 128-bit security (Speck64/128).
+///   Doubling the key provides no additional entropy — the effective
+///   keyspace is still 2^128, matching the cipher's security level.
+///
+/// CLEANUP: The 32-byte extended key is zeroed after use to prevent
+///   the (redundant) copy from lingering in stack memory.
+///
+/// @param key128    16-byte key (Speck FPE key)
+/// @param data      input data
+/// @param data_len  length of input data
+/// @param out       output buffer for hash
+/// @param out_len   number of output bytes
+void blake3_keyed_128(const uint8_t key128[16],
+                      const uint8_t* data, size_t data_len,
+                      uint8_t* out, size_t out_len) noexcept;
+
+/// Fingerprint all 16 encoded registers using BLAKE3_KEYED_128.
+///
+/// WHY FINGERPRINT ALL REGISTERS:
+///
+///   Doc 16 §4, Phase F: after each instruction, the VM computes
+///   fingerprint = BLAKE3_KEYED_128(insn_fpe_key, encoded_regs[0..15]).
+///   This fingerprint feeds into the key ratchet (Phase G), entangling
+///   the next instruction's FPE key with ALL current register state.
+///
+///   Result: modifying any register value (even one not involved in the
+///   current instruction) alters the fingerprint, which alters the next
+///   key, which corrupts all subsequent decryptions.  This is the core
+///   of doc 16's "entanglement" property.
+///
+/// @param key128       16-byte FPE key
+/// @param encoded_regs array of 16 × uint64_t encoded register values
+/// @param out128       16-byte output fingerprint
+void blake3_keyed_fingerprint(const uint8_t key128[16],
+                              const uint64_t encoded_regs[16],
+                              uint8_t out128[16]) noexcept;
+
 }  // namespace VMPilot::Common::VM::Crypto
 
 #endif  // __COMMON_VM_CRYPTO_HPP__

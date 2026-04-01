@@ -3,13 +3,13 @@
 #define __RUNTIME_VM_STATE_HPP__
 
 /// @file vm_state.hpp
-/// @brief 4-way split VM state model for the redesigned architecture.
+/// @brief 4-way split VM state model for the doc 16 forward-secrecy architecture.
 ///
 /// Replaces the monolithic VMContext with four focused structs:
 ///
 ///   VmImmutable   — set once at blob load, shared across reentrant calls
-///   VmExecution   — hot-path mutable state (registers, IP, SP, flags)
-///   VmEpoch       — per-BB derived tables, rebuilt on every BB transition
+///   VmExecution   — hot-path mutable state (registers, IP, SP, flags, FPE key)
+///   VmEpoch       — per-BB opcode permutation, trivially copyable
 ///   VmOramState   — ORAM workspace, cache-isolated from execution state
 ///
 /// Design rationale:
@@ -24,21 +24,23 @@
 ///   3. Reentrancy: VmImmutable is shared (shared_ptr<const VmImmutable>)
 ///      across nested VM invocations via NATIVE_CALL.  Per-level state
 ///      (VmExecution on stack, VmEpoch + VmOramState on heap) keeps stack
-///      usage to ~600 bytes/level instead of ~138KB/level.
+///      usage low instead of ~138KB/level.
 ///
-///   4. Policy parameterization: VmOramState is accessed through the Oram
-///      template parameter, enabling compile-time selection between
-///      RollingKeyOram (full security) and DirectOram (fast testing).
+///   4. Forward secrecy (doc 16): per-register LUT tables are gone.
+///      Encoding is now Speck-FPE (format-preserving encryption), keyed by
+///      insn_fpe_key which ratchets every instruction.  VmEpoch holds only
+///      the D4 opcode permutation — no RegTables, DomainTables, or
+///      CompositionCache.  BB transitions derive new state from
+///      bb_chain_state via BLAKE3, providing forward secrecy: compromising
+///      the current key reveals nothing about past BB encodings.
 
 #include <vm/encoded_value.hpp>
 #include <vm/blob_view.hpp>
 #include <vm/vm_context.hpp>      // BBMetadata, EpochCheckpoint, constants
-#include <vm/vm_encoding.hpp>
 
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
-#include <memory>
 #include <vector>
 
 namespace VMPilot::Runtime {
@@ -46,40 +48,14 @@ namespace VMPilot::Runtime {
 using namespace Common::VM;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Table type aliases (non-owning views are ByteLaneLUT; these are storage)
+// GlobalMemTables — memory domain stays LUT-based (fixed for entire execution)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Per-register encoding/decoding tables: 16 registers × 8 lanes × 256 entries.
-struct RegTables {
-    uint8_t encode[VM_REG_COUNT][VM_BYTE_LANES][256];
-    uint8_t decode[VM_REG_COUNT][VM_BYTE_LANES][256];
-
-    /// Get a ByteLaneLUT view for encoding register `reg`.
-    [[nodiscard]] ByteLaneLUT encode_lut(uint8_t reg) const noexcept {
-        return ByteLaneLUT{encode[reg]};
-    }
-
-    /// Get a ByteLaneLUT view for decoding register `reg`.
-    [[nodiscard]] ByteLaneLUT decode_lut(uint8_t reg) const noexcept {
-        return ByteLaneLUT{decode[reg]};
-    }
-};
-
-/// Domain conversion tables: register ↔ memory encoding.
-struct DomainTables {
-    uint8_t store[VM_REG_COUNT][VM_BYTE_LANES][256];  // reg→mem
-    uint8_t load[VM_REG_COUNT][VM_BYTE_LANES][256];   // mem→reg
-
-    [[nodiscard]] ByteLaneLUT store_lut(uint8_t reg) const noexcept {
-        return ByteLaneLUT{store[reg]};
-    }
-
-    [[nodiscard]] ByteLaneLUT load_lut(uint8_t reg) const noexcept {
-        return ByteLaneLUT{load[reg]};
-    }
-};
-
-/// Global memory encoding tables (fixed for entire execution).
+/// Global memory encoding tables (derived once from stored_seed at load time).
+///
+/// Unlike register encoding (which moved to Speck-FPE in doc 16), the memory
+/// domain remains LUT-based because memory values are long-lived across BB
+/// boundaries and do not benefit from per-instruction ratcheting.
 struct GlobalMemTables {
     uint8_t encode[VM_BYTE_LANES][256];
     uint8_t decode[VM_BYTE_LANES][256];
@@ -148,8 +124,9 @@ struct VmImmutable {
 
 /// Mutable execution state for one VM invocation.
 ///
-/// Stack-allocated (~600 bytes) to keep per-level stack cost low.
-/// Contains registers, instruction pointer, flags, and branch state.
+/// Stack-allocated to keep per-level stack cost low.
+/// Contains registers, instruction pointer, flags, branch state,
+/// and the per-instruction FPE key + BB forward-secrecy chain state.
 struct alignas(64) VmExecution {
     // ── Hot data (first cache line) ──────────────────────────────────────
 
@@ -204,6 +181,25 @@ struct alignas(64) VmExecution {
     // ── GSS chaff (trash register file, fake taint) ─────────────────────
 
     uint64_t trash_regs[VM_REG_COUNT] = {};
+
+    // ── Doc 16 forward-secrecy state ────────────────────────────────────
+
+    /// Current Speck-FPE key for register encoding/decoding.
+    ///
+    /// Doc 16 §C1: this key is ratcheted (BLAKE3 one-way derivation) after
+    /// every instruction.  Because ratcheting is one-way, compromising the
+    /// current key reveals nothing about past per-instruction encodings.
+    /// This replaces the per-BB RegTables/DomainTables LUT approach.
+    uint8_t insn_fpe_key[16] = {};
+
+    /// BB-level forward-secrecy chain state.
+    ///
+    /// Doc 16 §B: on each BB transition, the new BB's encoding material
+    /// (opcode_perm, initial insn_fpe_key) is derived from this chain state
+    /// via BLAKE3, then the chain state itself is ratcheted.  The old chain
+    /// state is securely erased, so even a full memory dump after BB N
+    /// cannot reconstruct the encoding used in BB N-1.
+    uint8_t bb_chain_state[32] = {};
 };
 
 // Verify VmExecution starts with regs at offset 0 for cache-line alignment.
@@ -213,37 +209,22 @@ static_assert(offsetof(VmExecution, regs) == 0,
               "regs must be at offset 0 (first cache line)");
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VmEpoch — per-BB derived state, heap-allocated, rebuilt on BB transitions
+// VmEpoch — per-BB opcode permutation, trivially copyable
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Forward declaration — full definition in composition_cache.hpp.
-// CompositionCache is ~8MB worst case (16 × 512KB binary entries +
-// 8 × 2KB unary + 8 × 8KB MBA).  It lives behind a unique_ptr in
-// VmEpoch so that (a) VmEpoch itself stays ~131KB and (b) cache memory
-// is only allocated when handlers first need it.
-struct CompositionCache;
-
-/// Per-BB encoding tables and composition cache.
+/// Per-BB opcode permutation and identity.
 ///
-/// Heap-allocated (unique_ptr from VmEngine) because encoding tables are
-/// ~131KB total.  Rebuilt on every BB transition via enter_bb().
+/// Doc 16 stripped VmEpoch down to just the D4 opcode permutation.
+/// Register encoding tables (RegTables, DomainTables) and the
+/// CompositionCache are gone — register encoding is now handled by
+/// Speck-FPE keyed from VmExecution::insn_fpe_key, which ratchets
+/// per-instruction for forward secrecy.
+///
+/// VmEpoch is now trivially copyable and small (~514 bytes), so it
+/// can live on the stack alongside VmExecution if desired.
 struct VmEpoch {
-    VmEpoch() noexcept;
-    ~VmEpoch();
-    VmEpoch(VmEpoch&&) noexcept;
-    VmEpoch& operator=(VmEpoch&&) noexcept;
-
-    // Non-copyable (owns unique_ptr)
-    VmEpoch(const VmEpoch&) = delete;
-    VmEpoch& operator=(const VmEpoch&) = delete;
-
-    /// Per-register encoding/decoding bijections.
-    RegTables reg;
-
-    /// Register↔Memory domain conversion tables.
-    DomainTables dom;
-
-    /// D4: opcode permutation for this epoch.
+    /// D4: opcode permutation for this epoch (doc 15 §3.4).
+    /// Derived from bb_chain_state on BB entry.
     uint8_t opcode_perm[256];
     uint8_t opcode_perm_inv[256];
 
@@ -252,69 +233,19 @@ struct VmEpoch {
     uint32_t epoch    = 0;
     uint16_t live_regs_bitmap = 0;
 
-    /// Lazily-built composition tables for Class A (bitwise) and Class B
-    /// (MBA) operations.  Allocated on first handler use, cleared on every
-    /// BB transition.  nullptr until first Class A/B handler executes.
+    /// Derive opcode permutation from BB metadata.
     ///
-    /// Owned by VmEpoch but heap-allocated separately because the cache
-    /// can grow to ~8MB while VmEpoch itself is ~131KB.
-    std::unique_ptr<CompositionCache> cache;
-
-    /// Derive all tables from BB metadata + immutable state.
+    /// Doc 16: this is the ONLY derivation that remains in VmEpoch.
+    /// Register encoding is handled by Speck-FPE (keyed from
+    /// VmExecution::insn_fpe_key), and domain conversion is folded
+    /// into the FPE encrypt/decrypt path.  The opcode permutation
+    /// still uses a full 256-byte LUT because opcodes are single-byte
+    /// indices — FPE on a 1-byte domain is just a permutation anyway.
     ///
-    /// Called on every BB transition.  If epoch changes from the previous BB,
-    /// the caller must first call transition_regs() with the OLD tables
-    /// before this method overwrites them.
-    void enter_bb(const BBMetadata& bb, const VmImmutable& imm) noexcept {
-        bb_id = bb.bb_id;
-        epoch = bb.epoch;
-        live_regs_bitmap = bb.live_regs_bitmap;
-
-        // Derive per-register encoding tables from epoch_seed
-        Encoding::derive_register_tables(
-            bb.epoch_seed, bb.live_regs_bitmap,
-            reg.encode, reg.decode);
-
-        // Derive store/load domain conversion tables
-        Encoding::derive_store_load_tables(
-            reg.encode, reg.decode,
-            imm.mem.encode, imm.mem.decode,
-            bb.live_regs_bitmap,
-            dom.store, dom.load);
-
-        // Derive opcode permutation for this epoch
-        Encoding::derive_opcode_permutation(
-            bb.epoch_seed, opcode_perm, opcode_perm_inv);
-    }
-
-    /// Apply RE_TABLE to live registers on epoch change.
-    ///
-    /// Must be called BEFORE enter_bb() overwrites the old tables.
-    /// RE_TABLE[r] = encode_new ∘ decode_old — no plaintext intermediate.
-    void transition_regs(VmExecution& exec,
-                         const BBMetadata& new_bb,
-                         const VmImmutable& /*imm*/) noexcept {
-        // Derive the NEW encoding tables into a temporary
-        uint8_t new_encode[VM_REG_COUNT][VM_BYTE_LANES][256];
-        uint8_t new_decode[VM_REG_COUNT][VM_BYTE_LANES][256];
-        Encoding::derive_register_tables(
-            new_bb.epoch_seed, new_bb.live_regs_bitmap,
-            new_encode, new_decode);
-
-        // Derive RE_TABLE = new_encode ∘ old_decode
-        uint8_t re_tables[VM_REG_COUNT][VM_BYTE_LANES][256];
-        Encoding::derive_re_tables(
-            reg.decode, new_encode,
-            new_bb.live_regs_bitmap, re_tables);
-
-        // Apply RE_TABLE to each live register (no plaintext intermediate)
-        for (uint8_t r = 0; r < VM_REG_COUNT; ++r) {
-            if (new_bb.live_regs_bitmap & (1u << r)) {
-                ByteLaneLUT re_lut{re_tables[r]};
-                exec.regs[r] = reencode(re_lut, exec.regs[r]);
-            }
-        }
-    }
+    /// Note: the actual derivation call (Encoding::derive_opcode_permutation)
+    /// is in the .cpp file, not inlined here, to avoid pulling in
+    /// vm_encoding.hpp.
+    void enter_bb(const BBMetadata& bb) noexcept;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

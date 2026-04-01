@@ -140,6 +140,18 @@ public:
         // ---- 8. Clean up cdecl arg: add esp, 4 ----
         c.push_back(0x83); c.push_back(0xC4); c.push_back(0x04);
 
+        // ---- 8b. Zero the 32-byte seed in payload (doc 16 E1) ----
+        //   mov edi, [esp + off_stored_seed]  ; seed pointer from VmStubArgs
+        //   xor eax, eax
+        //   mov ecx, 32
+        //   rep stosb
+        c.push_back(0x8B); c.push_back(0x7C); c.push_back(0x24);
+        c.push_back(static_cast<uint8_t>(Layout::off_stored_seed));
+        c.push_back(0x31); c.push_back(0xC0);                     // xor eax, eax
+        c.push_back(0xB9); c.push_back(32); c.push_back(0);
+        c.push_back(0); c.push_back(0);                            // mov ecx, 32
+        c.push_back(0xF3); c.push_back(0xAA);                     // rep stosb
+
         // ---- 9. Deallocate VmStubArgs: add esp, 64 ----
         c.push_back(0x83); c.push_back(0xC4);
         c.push_back(static_cast<uint8_t>(Layout::total_size));

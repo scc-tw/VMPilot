@@ -171,4 +171,12 @@ if(ENABLE_TESTS)
         )
         gtest_discover_tests(${TEST_NAME})
     endforeach()
+    add_executable(test_doc16_crypto
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_doc16_crypto.cpp
+    )
+    target_link_libraries(test_doc16_crypto
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+    )
+    gtest_discover_tests(test_doc16_crypto)
 endif()

@@ -270,43 +270,26 @@ inline std::vector<uint8_t> build_test_blob(
 
     // ── Encrypt constant pool ────────────────────────────────────────────
     //
-    // Constants are pre-encoded by the compiler using the target BB's
-    // register encoding tables (spec §1.1, §11.7). This eliminates the
-    // plaintext-to-encoded conversion at runtime: LOAD_CONST can write
-    // the pool value directly into the encoded register without any
-    // observable encoding step, closing the SyntIA/QSynth I/O sampling
-    // attack vector on constant loads.
+    // Doc 16 change: pool values are stored as PLAINTEXT (not pre-encoded
+    // with per-BB LUT tables).  The runtime FPE-encodes them at LOAD_CONST
+    // time using the per-instruction FPE key.
     //
-    // For test simplicity, all constants are associated with BB[0] and
-    // register 0 (LOAD_CONST always loads into reg_a).
+    // WHY plaintext pool:  Per-instruction FPE keys depend on execution
+    // history (RDRAND nonce + BLAKE3 chain), so the compiler cannot predict
+    // the key at pool encode time.  Storing plaintext is the only option.
+    // The SipHash encryption layer (D1) still protects pool values at rest.
 
     const uint32_t pool_offset = blob_section_pool(header);
-
-    // Derive BB[0]'s register encoding tables for pre-encoding constants
-    uint8_t pool_encode_tables[VM_REG_COUNT][VM_BYTE_LANES][256];
-    uint8_t pool_decode_tables[VM_REG_COUNT][VM_BYTE_LANES][256];
-    if (pool_count > 0 && !bbs.empty()) {
-        derive_register_tables(bbs[0].epoch_seed, bbs[0].live_regs_bitmap,
-                               pool_encode_tables, pool_decode_tables);
-    }
 
     for (uint32_t i = 0; i < pool_count; ++i) {
         uint64_t plain = constant_pool_plaintext[i];
 
-        // Pre-encode using BB[0], register 0's encoding (per-byte-lane bijection)
-        uint64_t encoded = 0;
-        for (int k = 0; k < 8; ++k) {
-            uint8_t lane = static_cast<uint8_t>(plain >> (k * 8));
-            encoded |= static_cast<uint64_t>(pool_encode_tables[0][k][lane])
-                       << (k * 8);
-        }
-
-        // Then encrypt the encoded value with SipHash keystream
+        // Pool stores plaintext, encrypted only with SipHash keystream (D1)
         uint64_t idx = static_cast<uint64_t>(i);
         uint8_t idx_bytes[8];
         std::memcpy(idx_bytes, &idx, 8);
         uint64_t keystream = siphash_2_4(pool_key, idx_bytes, 8);
-        uint64_t encrypted = encoded ^ keystream;
+        uint64_t encrypted = plain ^ keystream;
         std::memcpy(blob.data() + pool_offset + i * 8, &encrypted, 8);
     }
 
@@ -528,49 +511,21 @@ inline std::vector<uint8_t> build_test_blob_ex(
         }
     }
 
-    // ── Encrypt constant pool (per-register encoding) ────────────────────
+    // ── Encrypt constant pool ────────────────────────────────────────────
+    // Doc 16: pool values are PLAINTEXT, encrypted only with SipHash (D1).
+    // No per-register LUT pre-encoding — the runtime FPE-encodes at LOAD_CONST.
     const uint32_t pool_offset = blob_section_pool(header);
-
-    // Cache derived encoding tables per BB index to avoid re-deriving
-    // for every pool entry. Map from bb_index to encode tables.
-    struct BBEncodeTables {
-        uint8_t tables[VM_REG_COUNT][VM_BYTE_LANES][256];
-        bool derived = false;
-    };
-    std::vector<BBEncodeTables> bb_encode_cache(bb_count);
 
     for (uint32_t i = 0; i < pool_count; ++i) {
         const auto& pe = pool_entries[i];
-        uint32_t bb_idx = pe.target_bb_index;
-        uint8_t  reg    = pe.target_reg;
+        uint64_t plain = pe.plaintext;
 
-        // Derive encoding tables for this BB if not cached
-        if (bb_idx < bb_count && !bb_encode_cache[bb_idx].derived) {
-            uint8_t decode_tables[VM_REG_COUNT][VM_BYTE_LANES][256];
-            derive_register_tables(bbs[bb_idx].epoch_seed,
-                                   bbs[bb_idx].live_regs_bitmap,
-                                   bb_encode_cache[bb_idx].tables,
-                                   decode_tables);
-            bb_encode_cache[bb_idx].derived = true;
-        }
-
-        // Pre-encode using the target BB's, target register's encoding
-        uint64_t encoded = 0;
-        if (bb_idx < bb_count) {
-            for (int k = 0; k < 8; ++k) {
-                uint8_t lane = static_cast<uint8_t>(pe.plaintext >> (k * 8));
-                encoded |= static_cast<uint64_t>(
-                    bb_encode_cache[bb_idx].tables[reg & 0x0F][k][lane])
-                    << (k * 8);
-            }
-        }
-
-        // Encrypt with SipHash keystream
+        // Encrypt plaintext with SipHash keystream (D1 layer)
         uint64_t idx = static_cast<uint64_t>(i);
         uint8_t idx_bytes[8];
         std::memcpy(idx_bytes, &idx, 8);
         uint64_t keystream = siphash_2_4(pool_key, idx_bytes, 8);
-        uint64_t enc_val = encoded ^ keystream;
+        uint64_t enc_val = plain ^ keystream;
         std::memcpy(blob.data() + pool_offset + i * 8, &enc_val, 8);
     }
 

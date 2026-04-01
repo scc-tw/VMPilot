@@ -261,6 +261,27 @@ X86_64StubEmitter::emit_entry_stub() noexcept {
     s.call_slot_fixup_offset = emit_lea_rip(c, 0 /* rax */);
     emit_call_rax_indirect(c);
 
+    // ---- 7b. Zero the 32-byte seed in the payload section (doc 16 E1) ----
+    //
+    // WHY: Forward secrecy requires that stored_seed not persist after use.
+    // The runtime copied it into VmImmutable::stored_seed; the payload copy
+    // must be destroyed.  This prevents a post-execution memory dump from
+    // recovering the root secret from the injected payload section.
+    //
+    // HOW: reload the seed pointer from VmStubArgs (still on stack at rsp+24),
+    // then rep stosb 32 zero bytes through it.
+    //
+    //   mov rdi, [rsp + 24]   ; stored_seed pointer
+    //   xor eax, eax          ; zero byte
+    //   mov ecx, 32           ; count
+    //   rep stosb             ; zero 32 bytes
+    c.push_back(0x48); c.push_back(0x8B); c.push_back(0x7C);
+    c.push_back(0x24); c.push_back(Layout::off_stored_seed);  // mov rdi, [rsp+24]
+    c.push_back(0x31); c.push_back(0xC0);                     // xor eax, eax
+    c.push_back(0xB9); c.push_back(32); c.push_back(0);
+    c.push_back(0); c.push_back(0);                            // mov ecx, 32
+    c.push_back(0xF3); c.push_back(0xAA);                     // rep stosb
+
     // ---- 8. Deallocate VmStubArgs ----
     emit_add_rsp_imm32(c, args_frame);
 

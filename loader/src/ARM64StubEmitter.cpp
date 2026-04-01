@@ -338,6 +338,14 @@ ARM64StubEmitter::emit_entry_stub() noexcept {
     emit32(c, arm64_ldr_uoff(9, 9, 0));        // ldr x9, [x9]
     emit32(c, arm64_blr(9));                    // blr x9
 
+    // ---- 7b. Zero the 32-byte seed in payload (doc 16 E1) ----
+    //   ldr x9, [sp, #off_stored_seed]  ; reload seed pointer from VmStubArgs
+    //   stp xzr, xzr, [x9]             ; zero bytes 0-15
+    //   stp xzr, xzr, [x9, #16]        ; zero bytes 16-31
+    emit32(c, arm64_ldr_uoff(9, sp, static_cast<uint16_t>(Layout::off_stored_seed)));
+    emit32(c, 0xA9000120u | (31u << 10) | 9u);  // stp xzr, xzr, [x9, #0]
+    emit32(c, 0xA9010120u | (31u << 10) | 9u);  // stp xzr, xzr, [x9, #16]
+
     // ---- 8. Deallocate VmStubArgs ----
     emit32(c, arm64_add_imm(sp, sp, args_frame));
 

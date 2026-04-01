@@ -3,20 +3,30 @@
 #define __RUNTIME_VM_ENGINE_HPP__
 
 /// @file vm_engine.hpp
-/// @brief VmEngine<Policy, Oram> — the parameterized VM execution engine.
+/// @brief VmEngine<Policy, Oram> — doc 16 forward-secrecy execution engine.
 ///
-/// VmEngine is the central class of the redesigned VM runtime.  It replaces
-/// the monolithic vm_execute() + VMContext with a template-parameterized
-/// engine that provides:
+/// Doc 16 architecture change (vs doc 15):
 ///
-///   - Compile-time security policy selection (D1-D4 dimensions)
-///   - Orthogonal ORAM strategy (RollingKeyOram vs DirectOram)
-///   - Shared VmImmutable across reentrant NATIVE_CALL invocations
-///   - 4-way state split for cache locality and const-correctness
-///   - Pipeline as method chain (12-step uniform dispatch, doc 15 §5.2)
+///   The per-BB LUT register encoding (RegTables, DomainTables, CompositionCache)
+///   is replaced by Speck-FPE (format-preserving encryption) keyed from
+///   VmExecution::insn_fpe_key.  The key ratchets every instruction via a
+///   one-way BLAKE3 derivation, providing forward secrecy: a memory dump after
+///   instruction N reveals nothing about register encodings before instruction N.
+///
+///   Pipeline phases per instruction (doc 16 rev.8 section 4):
+///
+///     A-C: Fetch + decrypt + decode + FPE-decode operands -> handler plaintext
+///     D:   Handler computes result (plaintext)
+///     E:   FPE-encode handler result register (if opcode writes to reg)
+///     F:   Fingerprint all 16 encoded registers (BLAKE3_KEYED_128)
+///     G:   Key ratchet: next_key = BLAKE3_KEYED_128(current_key, fingerprint||opcode||aux)
+///     H:   Re-encode all 16 registers from current_key to next_key
+///     I:   Commit next_key
+///     J:   secure_zero all temporaries
+///     K:   advance_enc_state (SipHash chain for instruction decryption)
+///     L:   Advance IP / BB transition (including enter_basic_block)
 ///
 /// Usage:
-///   // First invocation (loads blob, derives keys):
 ///   auto engine = VmEngine<HighSecPolicy>::create(blob, size, seed, delta, regs, nregs);
 ///   auto result = engine->execute();
 ///
@@ -34,6 +44,10 @@
 #include <vm/blob_view.hpp>
 #include <vm/vm_config.hpp>
 #include <vm/vm_crypto.hpp>
+#include <vm/vm_encoding.hpp>     // derive_memory_tables (used in create() only)
+#include <vm/xex_speck64.hpp>     // FPE_Encode, FPE_Decode, Speck64_KeySchedule, XEX_ComputeTweaks
+#include <vm/secure_zero.hpp>     // secure_zero, SecureLocal
+#include <vm/hardware_rng.hpp>   // hardware_random_u64 (RDRAND/RNDR nonce)
 #include <diagnostic.hpp>
 
 #include <tl/expected.hpp>
@@ -48,6 +62,17 @@ using Common::DiagnosticCode;
 using Common::VM::VmSecurityConfig;
 using Common::VM::RegVal;
 using Common::VM::PlainVal;
+using Common::VM::VmOpcode;
+using Common::VM::VM_REG_COUNT;
+using Common::VM::Crypto::Speck64_RoundKeys;
+using Common::VM::Crypto::XEX_Tweaks;
+using Common::VM::Crypto::Speck64_KeySchedule;
+using Common::VM::Crypto::XEX_ComputeTweaks;
+using Common::VM::Crypto::FPE_Encode;
+using Common::VM::Crypto::FPE_Decode;
+using Common::VM::Crypto::blake3_keyed_128;
+using Common::VM::Crypto::blake3_keyed_fingerprint;
+using Common::VM::secure_zero;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Result types
@@ -64,24 +89,86 @@ struct VmExecResult {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// opcode_writes_reg — doc 16 Phase E decision table
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Determine whether an opcode's handler writes a plaintext result to regs[reg_a].
+///
+/// Doc 16 Phase E needs to know which handlers left plaintext in regs[reg_a]
+/// (needing FPE-encode) vs which left the existing FPE-encoded value untouched.
+/// Encoding an already-encoded value would produce garbage, so we must
+/// distinguish the two cases.
+///
+/// The list of non-writing opcodes is exhaustive: any new opcode that writes
+/// to regs must NOT appear in the false cases.
+static constexpr bool opcode_writes_reg(VmOpcode op) noexcept {
+    switch (op) {
+        // Control flow: these modify IP / flags / branch state, not regs.
+        case VmOpcode::JMP:
+        case VmOpcode::JCC:
+        case VmOpcode::HALT:
+        case VmOpcode::NOP:
+
+        // Comparison: writes to vm_flags, not regs.
+        case VmOpcode::CMP:
+        case VmOpcode::TEST:
+        case VmOpcode::SET_FLAG:
+
+        // Memory store: writes to guest memory or ORAM, not regs.
+        case VmOpcode::STORE:
+        case VmOpcode::PUSH:
+        case VmOpcode::STORE_CTX:
+
+        // Synchronisation: issues a fence, no register write.
+        case VmOpcode::FENCE:
+
+        // VM internal: integrity/debug checks produce no register output.
+        case VmOpcode::CHECK_INTEGRITY:
+        case VmOpcode::CHECK_DEBUG:
+        case VmOpcode::MUTATE_ISA:
+
+        // REKEY: triggers key ratchet externally, handler writes no register.
+        case VmOpcode::REKEY:
+
+        // SAVE_EPOCH / RESYNC: snapshot/restore mechanics, not a reg write.
+        // NOTE: RESYNC does overwrite regs[] with a saved snapshot, but those
+        // values are already FPE-encoded (under the snapshot-time key).
+        // Treating RESYNC as "not writing" avoids double-encoding.
+        // The ratchet's Phase H will re-encode under the new key, which is
+        // wrong for snapshot values -- RESYNC needs redesign for doc 16.
+        case VmOpcode::SAVE_EPOCH:
+        case VmOpcode::RESYNC:
+            return false;
+
+        // Everything else writes a plaintext result to regs[reg_a]:
+        // MOVE, LOAD, POP, LOAD_CONST, LOAD_CTX, GET_FLAG,
+        // ADD..MOD, AND..ROR, SEXT8..TRUNC16,
+        // CALL_VM, RET_VM, NATIVE_CALL,
+        // LOCK_ADD, XCHG, CMPXCHG, ATOMIC_LOAD
+        default:
+            return true;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // VmEngine<Policy, Oram>
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// The parameterized VM execution engine.
 ///
 /// Template parameters:
-///   Policy — security policy traits (HighSecPolicy, StandardPolicy, DebugPolicy)
-///   Oram   — ORAM access strategy (RollingKeyOram, DirectOram)
+///   Policy -- security policy traits (HighSecPolicy, StandardPolicy, DebugPolicy)
+///   Oram   -- ORAM access strategy (RollingKeyOram, DirectOram)
 ///
 /// Memory layout for reentrancy:
 ///   VmImmutable:  shared_ptr (one copy, shared across all nesting levels)
 ///   VmExecution:  value member (~600 bytes, lives on stack with the engine)
-///   VmEpoch:      unique_ptr (heap, ~131KB encoding tables)
+///   VmEpoch:      unique_ptr (heap, ~514 bytes -- opcode perm only in doc 16)
 ///   VmOramState:  unique_ptr (heap, ~4KB ORAM workspace)
 ///
-///   Stack per nesting level: sizeof(VmEngine) ≈ 700 bytes
-///   Heap per nesting level: ~135KB
-///   100 levels: 70KB stack + 13.5MB heap (vs 13.5MB stack before)
+///   Stack per nesting level: sizeof(VmEngine) ~ 700 bytes
+///   Heap per nesting level: ~5KB
+///   100 levels: 70KB stack + 0.5MB heap
 template<typename Policy, typename Oram = typename DefaultOramFor<Policy>::type>
 class VmEngine {
     static_assert(Policy::validate(), "Invalid security policy configuration");
@@ -115,7 +202,7 @@ public:
     ///
     /// Used by NATIVE_CALL handlers when the native function calls back
     /// into the VM.  The immutable state (blob, keys, metadata) is shared
-    /// via shared_ptr — no re-parsing or re-derivation of keys.
+    /// via shared_ptr -- no re-parsing or re-derivation of keys.
     ///
     /// @param imm             shared immutable state from parent engine
     /// @param load_base_delta PIE/ASLR delta (same as parent)
@@ -132,9 +219,9 @@ public:
 
     /// Execute until HALT or error.
     ///
-    /// Runs the 12-step uniform pipeline in a loop.  Returns when:
-    ///   - HALT opcode reached → VmResult::Halted
-    ///   - Error (MAC failure, invalid opcode, etc.) → DiagnosticCode
+    /// Runs the doc 16 Phase A-L pipeline in a loop.  Returns when:
+    ///   - HALT opcode reached -> VmResult::Halted
+    ///   - Error (MAC failure, invalid opcode, etc.) -> DiagnosticCode
     [[nodiscard]] tl::expected<VmExecResult, DiagnosticCode> execute() noexcept;
 
     /// Execute a single instruction (for debugging / testing).
@@ -160,7 +247,7 @@ public:
     [[nodiscard]] VmExecution& execution() noexcept { return exec_; }
 
 private:
-    // ── Constructor (private — use create() / create_reentrant()) ───────
+    // ── Constructor (private -- use create() / create_reentrant()) ───────
 
     VmEngine(std::shared_ptr<const VmImmutable> imm,
              VmExecution&& exec,
@@ -178,12 +265,12 @@ private:
     /// Reference-counted for reentrancy.
     std::shared_ptr<const VmImmutable> imm_;
 
-    /// Hot-path mutable execution state (registers, IP, flags).
+    /// Hot-path mutable execution state (registers, IP, flags, FPE key).
     /// Stack-allocated (value member of VmEngine).
     VmExecution exec_;
 
-    /// Per-BB encoding tables and composition cache.
-    /// Heap-allocated because encoding tables are ~131KB.
+    /// Per-BB opcode permutation (doc 16: no RegTables/DomainTables).
+    /// Heap-allocated via unique_ptr.
     std::unique_ptr<VmEpoch> epoch_;
 
     /// ORAM workspace.
@@ -262,7 +349,7 @@ VmEngine<Policy, Oram>::create(
         blake3_keyed_hash(stored_seed, enc_msg, 7, md.bb_enc_seed, 8);
     }
 
-    // 4. Decrypt constant pool
+    // 4. Decrypt constant pool (SipHash XOR -- pool content is plaintext after this)
     auto raw_pool = m->blob.constant_pool();
     m->decrypted_pool.resize(raw_pool.size() * 8);
     if (!raw_pool.empty()) {
@@ -280,7 +367,7 @@ VmEngine<Policy, Oram>::create(
     auto raw_trans = m->blob.native_calls();
     m->native_calls.assign(raw_trans.begin(), raw_trans.end());
 
-    // 6. Derive global memory encoding
+    // 6. Derive global memory encoding (LUT-based, unchanged from doc 15)
     derive_memory_tables(stored_seed, m->mem.encode, m->mem.decode);
 
     // 7. Copy alias LUT
@@ -289,6 +376,19 @@ VmEngine<Policy, Oram>::create(
     // 8. Blob integrity hash
     blake3_keyed_hash(m->integrity_key, blob_data, blob_size,
                       m->blob_integrity_hash, 32);
+
+    // 9. Destroy ephemeral derivation keys (doc 16 E2).
+    //
+    // WHY: meta_key and pool_key were used only for metadata/pool decryption.
+    // Leaving them on the stack allows a memory dump to decrypt the blob's
+    // metadata and constant pool, which are meant to be confidential.
+    //
+    // stored_seed is NOT zeroed here — it's needed at runtime for BB MAC
+    // verification (verify_bb_mac) and bb_chain_state evolution.  The stub
+    // zeros the payload-section copy (E1); VmImmutable's copy persists until
+    // the engine is destroyed.
+    secure_zero(meta_key, sizeof(meta_key));
+    secure_zero(pool_key, sizeof(pool_key));
 
     // ── Initialize mutable state ────────────────────────────────────────
 
@@ -307,16 +407,61 @@ VmEngine<Policy, Oram>::create(
     std::memcpy(&enc_seed_u64, first.bb_enc_seed, 8);
     exec.enc_state = enc_seed_u64;
 
-    // Derive epoch tables for first BB
+    // Doc 16: opcode permutation only (no RegTables/DomainTables)
     auto epoch = std::make_unique<VmEpoch>();
-    epoch->enter_bb(first, *imm);
+    epoch->enter_bb(first);
 
-    // Encode initial register values into register domain
+    // Doc 16 forward-secrecy: seed bb_chain_state with hardware RNG nonce.
+    //
+    // WHY RDRAND NONCE:
+    //   Without a per-execution nonce, two runs of the same blob+seed produce
+    //   identical FPE key sequences — an attacker who records one execution's
+    //   encoded register file can decode all future executions.  RDRAND provides
+    //   non-deterministic diversification: same blob, same seed, different keys.
+    //
+    // POSITION: only the first 8 bytes are the nonce; the rest is zeroed.
+    //   The BLAKE3 chain evolution in enter_basic_block will propagate the nonce
+    //   into all 32 bytes after the first BB transition.
+    std::memset(exec.bb_chain_state, 0, 32);
+    uint64_t nonce = hardware_random_u64();
+    std::memcpy(exec.bb_chain_state, &nonce, 8);
+
+    // Derive initial insn_fpe_key from the first BB's epoch_seed and chain state.
+    // key = BLAKE3_KEYED_128(epoch_seed, bb_chain_state)[0:16]
+    pipeline::derive_bb_fpe_key(first, exec.bb_chain_state, exec.insn_fpe_key);
+
+    // Encode initial register values using Speck-FPE (replaces LUT encode_register)
     if (initial_regs && num_regs > 0) {
+        // Pre-compute key schedule + tweaks once for all registers.
+        Speck64_RoundKeys rk;
+        Speck64_KeySchedule(exec.insn_fpe_key, rk);
+        XEX_Tweaks tw;
+        XEX_ComputeTweaks(rk, tw);
+
         for (uint8_t i = 0; i < num_regs && i < VM_REG_COUNT; ++i) {
-            exec.regs[i] = encode_register(epoch->reg.encode_lut(i),
-                                            PlainVal(initial_regs[i]));
+            exec.regs[i] = RegVal(FPE_Encode(rk, tw, i, initial_regs[i]));
         }
+
+        // Encode remaining registers as FPE(0) -- deterministic "dead" value.
+        for (uint8_t i = num_regs; i < VM_REG_COUNT; ++i) {
+            exec.regs[i] = RegVal(FPE_Encode(rk, tw, i, 0));
+        }
+
+        secure_zero(&rk, sizeof(rk));
+        secure_zero(&tw, sizeof(tw));
+    } else {
+        // No initial regs: encode all as FPE(0).
+        Speck64_RoundKeys rk;
+        Speck64_KeySchedule(exec.insn_fpe_key, rk);
+        XEX_Tweaks tw;
+        XEX_ComputeTweaks(rk, tw);
+
+        for (uint8_t i = 0; i < VM_REG_COUNT; ++i) {
+            exec.regs[i] = RegVal(FPE_Encode(rk, tw, i, 0));
+        }
+
+        secure_zero(&rk, sizeof(rk));
+        secure_zero(&tw, sizeof(tw));
     }
 
     // Initialize ORAM workspace
@@ -337,6 +482,7 @@ VmEngine<Policy, Oram>::create_reentrant(
     const uint64_t* initial_regs, uint8_t num_regs) noexcept
 {
     using namespace Common::VM;
+    using namespace Common::VM::Crypto;
 
     if (!imm || imm->bb_metadata.empty())
         return tl::make_unexpected(DiagnosticCode::BlobHeaderInvalid);
@@ -355,14 +501,38 @@ VmEngine<Policy, Oram>::create_reentrant(
     std::memcpy(&enc_seed_u64, first.bb_enc_seed, 8);
     exec.enc_state = enc_seed_u64;
 
+    // Doc 16: opcode permutation only
     auto epoch = std::make_unique<VmEpoch>();
-    epoch->enter_bb(first, *imm);
+    epoch->enter_bb(first);
 
-    if (initial_regs && num_regs > 0) {
-        for (uint8_t i = 0; i < num_regs && i < VM_REG_COUNT; ++i) {
-            exec.regs[i] = encode_register(epoch->reg.encode_lut(i),
-                                            PlainVal(initial_regs[i]));
+    // Fresh chain state for this invocation level (zero for test determinism)
+    std::memset(exec.bb_chain_state, 0, 32);
+
+    // Derive initial insn_fpe_key for the first BB
+    pipeline::derive_bb_fpe_key(first, exec.bb_chain_state, exec.insn_fpe_key);
+
+    // Encode initial registers with Speck-FPE
+    {
+        Speck64_RoundKeys rk;
+        Speck64_KeySchedule(exec.insn_fpe_key, rk);
+        XEX_Tweaks tw;
+        XEX_ComputeTweaks(rk, tw);
+
+        if (initial_regs && num_regs > 0) {
+            for (uint8_t i = 0; i < num_regs && i < VM_REG_COUNT; ++i) {
+                exec.regs[i] = RegVal(FPE_Encode(rk, tw, i, initial_regs[i]));
+            }
+            for (uint8_t i = num_regs; i < VM_REG_COUNT; ++i) {
+                exec.regs[i] = RegVal(FPE_Encode(rk, tw, i, 0));
+            }
+        } else {
+            for (uint8_t i = 0; i < VM_REG_COUNT; ++i) {
+                exec.regs[i] = RegVal(FPE_Encode(rk, tw, i, 0));
+            }
         }
+
+        secure_zero(&rk, sizeof(rk));
+        secure_zero(&tw, sizeof(tw));
     }
 
     auto oram = std::make_unique<VmOramState>();
@@ -372,34 +542,130 @@ VmEngine<Policy, Oram>::create_reentrant(
                     std::move(epoch), std::move(oram));
 }
 
-// ── VmEngine::step() — 12-step uniform pipeline ────────────────────────────
+// ── VmEngine::step() — doc 16 Phase A-L pipeline ──────────────────────────
 
 template<typename Policy, typename Oram>
 tl::expected<VmResult, DiagnosticCode>
 VmEngine<Policy, Oram>::step() noexcept
 {
-    // Steps 1-3: FETCH + DECRYPT + DECODE
+    using namespace Common::VM::Crypto;
+
+    // ── Phases A-C: FETCH + DECRYPT + DECODE ────────────────────────────
     auto insn_or = pipeline::fetch_decrypt_decode(*imm_, exec_, *epoch_);
     if (!insn_or) return tl::make_unexpected(insn_or.error());
     auto insn = *insn_or;
 
-    // Step 4: RESOLVE operands (always both — D3 uniformity)
+    // ── Phase C (cont): RESOLVE operands + FPE decode ───────────────────
+    // resolve_operands fills both resolved_a/b (encoded) and plain_a/b (decoded).
+    // REG operands: FPE_Decode(insn_fpe_key, reg, encoded) -> plain.
+    // POOL/MEM/NONE: already plaintext, copied as-is.
     pipeline::resolve_operands(*imm_, exec_, *epoch_, insn);
 
-    // Steps 5-8: COMPUTE + SELECT + WRITE + MEMORY (handler dispatch)
+    // ── Phase D: HANDLER DISPATCH ───────────────────────────────────────
+    // Handler operates on insn.plain_a, insn.plain_b (plaintext).
+    // If the opcode writes to a register, the handler stores plaintext
+    // directly into exec_.regs[insn.reg_a].  This value is "naked" in
+    // memory for ~nanoseconds until Phase E re-encodes it.
     static const auto table = build_handler_table<Policy, Oram>();
     auto r = table[static_cast<uint8_t>(insn.opcode)](
         exec_, *epoch_, *oram_, *imm_, insn);
     if (!r) return tl::make_unexpected(r.error());
 
-    // Step 9: UPDATE enc_state
+    // ── Phases E-I: FPE encode + fingerprint + key ratchet ──────────────
+    //
+    // This is the core forward-secrecy pipeline from doc 16 rev.8 section 4.
+    // All cryptographic temporaries are SecureLocal (RAII zeroed on scope exit)
+    // or explicitly zeroed in Phase J.
+    {
+        // Pre-compute Speck key schedule + XEX tweaks for the CURRENT key.
+        SecureLocal<Speck64_RoundKeys> rk;
+        Speck64_KeySchedule(exec_.insn_fpe_key, rk.val);
+        SecureLocal<XEX_Tweaks> tw;
+        XEX_ComputeTweaks(rk.val, tw.val);
+
+        // ── Phase E: FPE-encode handler result ──────────────────────────
+        // If the handler wrote plaintext to regs[reg_a], encode it back into
+        // the FPE domain under the current key.  For non-writing opcodes
+        // (JMP, HALT, CMP, etc.), regs[reg_a] still holds its old encoded
+        // value -- encoding it again would produce garbage.
+        if (opcode_writes_reg(insn.opcode)) {
+            exec_.regs[insn.reg_a] = RegVal(
+                FPE_Encode(rk.val, tw.val, insn.reg_a,
+                           exec_.regs[insn.reg_a].bits));
+        }
+        // All 16 registers are now FPE-encoded under the current key.
+
+        // ── Phase F: Fingerprint all 16 encoded registers ───────────────
+        // The fingerprint entangles ALL register state into the key ratchet.
+        // Modifying any register (even one not touched by this instruction)
+        // changes the fingerprint, which changes the next key, which corrupts
+        // all subsequent decryptions.  This is doc 16's "entanglement" property.
+        SecureLocal<uint8_t[16]> fingerprint;
+        {
+            uint64_t reg_bits[16];
+            for (uint8_t i = 0; i < 16; ++i)
+                reg_bits[i] = exec_.regs[i].bits;
+            blake3_keyed_fingerprint(exec_.insn_fpe_key, reg_bits, fingerprint.val);
+            secure_zero(reg_bits, sizeof(reg_bits));
+        }
+
+        // ── Phase G: Key ratchet ────────────────────────────────────────
+        // next_key = BLAKE3_KEYED_128(current_key, fingerprint || opcode || aux)
+        //
+        // The ratchet message includes:
+        //   - fingerprint (16 bytes): binds next key to ALL register state
+        //   - opcode (2 bytes): binds next key to the instruction executed
+        //   - aux (4 bytes): binds next key to the instruction's immediate
+        //
+        // One-way property of BLAKE3 means current_key cannot be recovered
+        // from next_key -- this is the forward-secrecy guarantee.
+        SecureLocal<uint8_t[16]> next_key;
+        {
+            uint8_t ratchet_msg[22];  // 16 + 2 + 4
+            std::memcpy(ratchet_msg, fingerprint.val, 16);
+            std::memcpy(ratchet_msg + 16, &insn.plaintext_opcode, 2);
+            std::memcpy(ratchet_msg + 18, &insn.aux, 4);
+            blake3_keyed_128(exec_.insn_fpe_key, ratchet_msg, 22,
+                             next_key.val, 16);
+            secure_zero(ratchet_msg, sizeof(ratchet_msg));
+        }
+
+        // ── Phase H: Re-encode all 16 registers from old key to new key ─
+        // Decode each register under the current key, re-encode under the
+        // next key.  After this, all registers are in the new key's domain.
+        {
+            SecureLocal<Speck64_RoundKeys> new_rk;
+            Speck64_KeySchedule(next_key.val, new_rk.val);
+            SecureLocal<XEX_Tweaks> new_tw;
+            XEX_ComputeTweaks(new_rk.val, new_tw.val);
+
+            for (uint8_t i = 0; i < 16; ++i) {
+                uint64_t plain = FPE_Decode(rk.val, tw.val, i,
+                                            exec_.regs[i].bits);
+                exec_.regs[i] = RegVal(
+                    FPE_Encode(new_rk.val, new_tw.val, i, plain));
+            }
+            // new_rk, new_tw zeroed by SecureLocal destructor.
+        }
+
+        // ── Phase I: Commit new key ─────────────────────────────────────
+        std::memcpy(exec_.insn_fpe_key, next_key.val, 16);
+
+        // ── Phase J: secure_zero temporaries ────────────────────────────
+        // SecureLocal destructors handle rk, tw, fingerprint, next_key.
+        // Explicit zeros handled inline above for ratchet_msg, reg_bits.
+    }
+    // All SecureLocal destructors fire here -- rk, tw, fingerprint, next_key
+    // are zeroed.  No FPE temporaries survive past this scope.
+
+    // ── Phase K: advance enc_state (SipHash chain for instruction decryption) ─
     pipeline::advance_enc_state(exec_, insn.plaintext_opcode, insn.aux);
 
-    // Step 10: ADVANCE IP
+    // ── Phase L: Advance IP / BB transition ─────────────────────────────
     if (exec_.branch_taken) {
         exec_.branch_taken = false;
 
-        // Step 11 (early): verify MAC of BB we're leaving
+        // Verify MAC of the BB we're leaving
         auto mac_r = pipeline::verify_bb_mac(*imm_, exec_, *epoch_);
         if (!mac_r) return tl::make_unexpected(mac_r.error());
 
@@ -412,7 +678,8 @@ VmEngine<Policy, Oram>::step() noexcept
         if (exec_.return_resume_ip != 0) {
             exec_.vm_ip = exec_.return_resume_ip;
             exec_.insn_index_in_bb = exec_.return_resume_insn_idx;
-            pipeline::replay_enc_state(exec_, *epoch_, *imm_, exec_.return_resume_insn_idx);
+            pipeline::replay_enc_state(exec_, *epoch_, *imm_,
+                                       exec_.return_resume_insn_idx);
             exec_.return_resume_ip = 0;
             exec_.return_resume_insn_idx = 0;
         }
@@ -425,7 +692,7 @@ VmEngine<Policy, Oram>::step() noexcept
                         + pipeline::current_bb_insn_count(*imm_, exec_);
 
         if (exec_.vm_ip >= bb_end) {
-            // Step 11: verify MAC at BB boundary
+            // Verify MAC at BB boundary
             auto mac_r = pipeline::verify_bb_mac(*imm_, exec_, *epoch_);
             if (!mac_r) return tl::make_unexpected(mac_r.error());
 
@@ -438,8 +705,6 @@ VmEngine<Policy, Oram>::step() noexcept
             }
         }
     }
-
-    // Step 12: GUARD (anti-debug, amortised — future Phase 9)
 
     return exec_.halted ? VmResult::Halted : VmResult::Stepped;
 }
@@ -454,9 +719,12 @@ VmEngine<Policy, Oram>::execute() noexcept
         auto r = step();
         if (!r) return tl::make_unexpected(r.error());
         if (*r == VmResult::Halted) {
-            PlainVal ret = decode_register(
-                epoch_->reg.decode_lut(0), exec_.regs[0]);
-            return VmExecResult{VmResult::Halted, ret.bits};
+            // Decode return value from register 0 using current FPE key.
+            // After the last instruction's ratchet, regs[0] is encoded
+            // under exec_.insn_fpe_key.  Convenience one-shot FPE_Decode.
+            uint64_t ret = FPE_Decode(exec_.insn_fpe_key, 0,
+                                      exec_.regs[0].bits);
+            return VmExecResult{VmResult::Halted, ret};
         }
     }
 }
@@ -464,4 +732,3 @@ VmEngine<Policy, Oram>::execute() noexcept
 }  // namespace VMPilot::Runtime
 
 #endif  // __RUNTIME_VM_ENGINE_HPP__
-

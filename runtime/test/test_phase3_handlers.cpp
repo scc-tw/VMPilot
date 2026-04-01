@@ -1,14 +1,15 @@
 /// @file test_phase3_handlers.cpp
-/// @brief Tests for Phase 3: traits-based handler system.
+/// @brief Tests for Phase 3: traits-based handler system (doc 16).
 ///
 /// Validates:
-///   1. build_handler_table compiles for all policy × ORAM combinations
+///   1. build_handler_table compiles for all policy x ORAM combinations
 ///   2. Handler table has non-null entries for all 55 opcodes
-///   3. MOVE handler: same-domain register copy with phantom types
-///   4. XOR handler: Class A composition table with zero plaintext
+///   3. MOVE handler: plain_b -> regs[dst]
+///   4. XOR handler: plain_a ^ plain_b -> regs[dst]
 ///   5. HALT handler: sets halted flag
-///   6. NOP handler: writes to trash registers (GSS chaff)
-///   7. DecodedInsn carries phantom-typed RegVal operands
+///   6. NOP handler: writes plain_b to trash registers (GSS chaff)
+///   7. DecodedInsn carries plain_a/plain_b fields
+///   8. NATIVE_CALL returns NativeCallBridgeFailed when no entries exist
 
 #include "handler_impls.hpp"
 #include "decoded_insn.hpp"
@@ -17,7 +18,6 @@
 #include "oram_strategy.hpp"
 
 #include <vm/encoded_value.hpp>
-#include <vm/vm_encoding.hpp>
 #include <vm/vm_opcode.hpp>
 
 #include <gtest/gtest.h>
@@ -26,30 +26,6 @@
 
 using namespace VMPilot::Runtime;
 using namespace VMPilot::Common::VM;
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-/// Create a minimal VmImmutable with memory tables derived from seed.
-static VmImmutable make_test_immutable(const uint8_t seed[32]) {
-    VmImmutable imm{};
-    std::memcpy(imm.stored_seed, seed, 32);
-    Encoding::derive_memory_tables(seed, imm.mem.encode, imm.mem.decode);
-    return imm;
-}
-
-/// Create a VmEpoch with tables derived for a test BB.
-static void setup_epoch(VmEpoch& epoch, const VmImmutable& imm,
-                         const uint8_t epoch_seed[32],
-                         uint16_t live_bitmap = 0xFFFF) {
-    BBMetadata bb{};
-    bb.bb_id = 1;
-    bb.epoch = 0;
-    bb.live_regs_bitmap = live_bitmap;
-    std::memcpy(bb.epoch_seed, epoch_seed, 32);
-    epoch.enter_bb(bb, imm);
-}
 
 // ============================================================================
 // 1. Table Build Tests
@@ -83,113 +59,70 @@ TEST(Phase3Table, OpcodeCountMatches) {
 // 2. MOVE Handler
 // ============================================================================
 
-TEST(Phase3Move, CopiesRegValSameDomain) {
-    uint8_t seed[32];
-    for (int i = 0; i < 32; ++i) seed[i] = static_cast<uint8_t>(i + 1);
-
-    VmImmutable imm = make_test_immutable(seed);
+TEST(Phase3Move, CopiesPlaintextToDst) {
     VmExecution exec{};
     VmEpoch epoch;
-
-    uint8_t eseed[32];
-    for (int i = 0; i < 32; ++i) eseed[i] = static_cast<uint8_t>(0xBB + i);
-    setup_epoch(epoch, imm, eseed);
-
     VmOramState oram{};
+    VmImmutable imm{};
 
-    // Encode a value into r1
-    PlainVal plain(0xCAFEBABE);
-    exec.regs[1] = encode_register(epoch.reg.encode_lut(1), plain);
-
-    // MOVE r0 = r1
+    // MOVE r0 = plain_b
     DecodedInsn insn{};
     insn.opcode = VmOpcode::MOVE;
     insn.reg_a = 0;
     insn.reg_b = 1;
+    insn.plain_b = 0xCAFEBABE;
 
     auto table = build_handler_table<HighSecPolicy, RollingKeyOram>();
     auto result = table[uint8_t(VmOpcode::MOVE)](exec, epoch, oram, imm, insn);
     ASSERT_TRUE(result.has_value());
 
-    // r0 should now hold the same encoded bits as r1
-    EXPECT_EQ(exec.regs[0], exec.regs[1]);
-
-    // The value was encoded with r1's table, so decode with r1's table.
-    // (Per-register encoding: each register has independent bijections.
-    //  MOVE copies the encoded bits; downstream handlers must track
-    //  which register's encoding applies to the value.)
-    PlainVal decoded = decode_register(epoch.reg.decode_lut(1), exec.regs[0]);
-    EXPECT_EQ(decoded.bits, 0xCAFEBABEu);
+    // Handler stores plain_b directly into regs[reg_a]
+    EXPECT_EQ(exec.regs[0].bits, 0xCAFEBABEu);
 }
 
 // ============================================================================
-// 3. XOR Handler (Class A — zero plaintext)
+// 3. XOR Handler
 // ============================================================================
 
-TEST(Phase3Xor, ClassAZeroPlaintext) {
-    uint8_t seed[32];
-    for (int i = 0; i < 32; ++i) seed[i] = static_cast<uint8_t>(i + 0x42);
-
-    VmImmutable imm = make_test_immutable(seed);
+TEST(Phase3Xor, PlaintextXor) {
     VmExecution exec{};
     VmEpoch epoch;
-
-    uint8_t eseed[32];
-    for (int i = 0; i < 32; ++i) eseed[i] = static_cast<uint8_t>(0xCC + i);
-    setup_epoch(epoch, imm, eseed);
-
     VmOramState oram{};
+    VmImmutable imm{};
 
-    // Encode two known values into r0 and r1
-    PlainVal a(0x00FF00FF00FF00FFull);
-    PlainVal b(0xFF00FF00FF00FF00ull);
-    exec.regs[0] = encode_register(epoch.reg.encode_lut(0), a);
-    exec.regs[1] = encode_register(epoch.reg.encode_lut(1), b);
-
-    // XOR r0, r1 (r0 = r0 ^ r1)
     DecodedInsn insn{};
     insn.opcode = VmOpcode::XOR;
     insn.reg_a = 0;
     insn.reg_b = 1;
+    insn.plain_a = 0x00FF00FF00FF00FFull;
+    insn.plain_b = 0xFF00FF00FF00FF00ull;
 
     auto table = build_handler_table<HighSecPolicy, RollingKeyOram>();
     auto result = table[uint8_t(VmOpcode::XOR)](exec, epoch, oram, imm, insn);
     ASSERT_TRUE(result.has_value());
 
-    // Decode r0 — should be a ^ b = 0xFFFFFFFFFFFFFFFF
-    PlainVal decoded = decode_register(epoch.reg.decode_lut(0), exec.regs[0]);
-    EXPECT_EQ(decoded.bits, 0xFFFFFFFFFFFFFFFFull);
+    // plain_a ^ plain_b = 0xFFFFFFFFFFFFFFFF
+    EXPECT_EQ(exec.regs[0].bits, 0xFFFFFFFFFFFFFFFFull);
 }
 
 TEST(Phase3Xor, SelfXorIsZero) {
-    uint8_t seed[32];
-    for (int i = 0; i < 32; ++i) seed[i] = static_cast<uint8_t>(i + 0x77);
-
-    VmImmutable imm = make_test_immutable(seed);
     VmExecution exec{};
     VmEpoch epoch;
-
-    uint8_t eseed[32];
-    for (int i = 0; i < 32; ++i) eseed[i] = static_cast<uint8_t>(0xDD + i);
-    setup_epoch(epoch, imm, eseed);
-
     VmOramState oram{};
-
-    // XOR r0, r0 should produce encoded(0)
-    PlainVal val(0xDEADBEEFu);
-    exec.regs[0] = encode_register(epoch.reg.encode_lut(0), val);
+    VmImmutable imm{};
 
     DecodedInsn insn{};
     insn.opcode = VmOpcode::XOR;
     insn.reg_a = 0;
     insn.reg_b = 0;  // self-XOR
+    insn.plain_a = 0xDEADBEEFu;
+    insn.plain_b = 0xDEADBEEFu;
 
     auto table = build_handler_table<StandardPolicy, DirectOram>();
     auto result = table[uint8_t(VmOpcode::XOR)](exec, epoch, oram, imm, insn);
     ASSERT_TRUE(result.has_value());
 
-    PlainVal decoded = decode_register(epoch.reg.decode_lut(0), exec.regs[0]);
-    EXPECT_EQ(decoded.bits, 0u);
+    EXPECT_EQ(exec.regs[0].bits, 0u);
 }
 
 // ============================================================================
@@ -223,12 +156,10 @@ TEST(Phase3Nop, WritesToTrashRegs) {
     VmOramState oram{};
     VmImmutable imm{};
 
-    exec.regs[3] = RegVal(0xBEEF);
-
     DecodedInsn insn{};
     insn.opcode = VmOpcode::NOP;
-    insn.reg_a = 2;   // trash destination
-    insn.reg_b = 3;   // source
+    insn.reg_a = 2;        // trash destination
+    insn.plain_b = 0xBEEF; // plaintext value from pipeline
 
     auto table = build_handler_table<HighSecPolicy, RollingKeyOram>();
     auto result = table[uint8_t(VmOpcode::NOP)](exec, epoch, oram, imm, insn);
@@ -241,21 +172,24 @@ TEST(Phase3Nop, WritesToTrashRegs) {
 // 6. DecodedInsn Layout
 // ============================================================================
 
-TEST(Phase3DecodedInsn, CarriesPhantomTypedOperands) {
+TEST(Phase3DecodedInsn, CarriesPlaintextOperands) {
     DecodedInsn insn{};
-    insn.resolved_a = RegVal(42);
-    insn.resolved_b = RegVal(99);
+    insn.plain_a = 42;
+    insn.plain_b = 99;
 
-    // Phantom-typed: these are RegVal, not raw uint64_t
-    EXPECT_EQ(insn.resolved_a.bits, 42u);
-    EXPECT_EQ(insn.resolved_b.bits, 99u);
+    // Doc 16: plain_a/plain_b are uint64_t plaintext values
+    EXPECT_EQ(insn.plain_a, 42u);
+    EXPECT_EQ(insn.plain_b, 99u);
 
-    // Cannot assign MemVal to resolved_a:
-    // insn.resolved_a = MemVal(42);  // COMPILE ERROR — domain mismatch
+    // resolved_a/resolved_b still exist (FPE-encoded, used by pipeline)
+    insn.resolved_a = RegVal(0xFF);
+    insn.resolved_b = RegVal(0xAA);
+    EXPECT_EQ(insn.resolved_a.bits, 0xFFu);
+    EXPECT_EQ(insn.resolved_b.bits, 0xAAu);
 }
 
 // ============================================================================
-// 7. Stub handlers return NotImplemented
+// 7. NATIVE_CALL returns error when no entries exist
 // ============================================================================
 
 TEST(Phase3Stubs, NativeCallReturnsNotImplemented) {
@@ -265,9 +199,10 @@ TEST(Phase3Stubs, NativeCallReturnsNotImplemented) {
     VmImmutable imm{};
     DecodedInsn insn{};
 
-    auto table = build_handler_table<DebugPolicy, DirectOram>();
+    // aux=0 but native_calls is empty -> NativeCallBridgeFailed
+    insn.aux = 0;
 
-    // NATIVE_CALL bridge is not yet ported (returns NativeCallBridgeFailed)
+    auto table = build_handler_table<DebugPolicy, DirectOram>();
     auto result = table[uint8_t(VmOpcode::NATIVE_CALL)](exec, epoch, oram, imm, insn);
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error(), DiagnosticCode::NativeCallBridgeFailed);

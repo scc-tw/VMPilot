@@ -7,10 +7,10 @@
 ///
 /// Sections:
 ///   1. Blob loading & validation (replaces test_blob_loader)
-///   2. Encoding & domain conversion (replaces test_encoding)
+///   2. Encoding & domain conversion (FPE-based, replaces test_encoding)
 ///   3. Pipeline: fetch-decrypt-decode, MAC, BB transition (replaces test_decoder)
 ///   4. Handler correctness: all categories (replaces test_handlers)
-///   5. MBA arithmetic properties (replaces test_mba_property)
+///   5. Arithmetic across all policies (doc 16 uniform handlers, replaces test_mba_property)
 ///   6. ORAM operations (replaces test_oram)
 ///   7. Cross-BB & CFG patterns (replaces test_cross_bb, test_cfg_patterns)
 ///   8. Security: PRP, REKEY, anti-tamper (replaces test_full_prp, test_rekey, test_anti_tamper)
@@ -30,6 +30,7 @@
 #include <vm/vm_encoding.hpp>
 #include <vm/vm_crypto.hpp>
 #include <vm/blob_view.hpp>
+#include <vm/xex_speck64.hpp>
 
 #include <gtest/gtest.h>
 
@@ -148,27 +149,34 @@ TEST(EngineBlob, KeyDerivationCorrect) {
 }
 
 // ============================================================================
-// 2. Encoding & Domain Conversion
+// 2. Encoding & Domain Conversion (doc 16: FPE replaces per-register LUT)
 // ============================================================================
 
-TEST(EngineEncoding, EncodeDecodeRoundtrip) {
-    uint8_t seed[32]; fill_seed(seed);
-    TestBB bb{}; bb.bb_id = 1; bb.epoch = 0; bb.live_regs_bitmap = 0xFFFF;
-    fill_epoch(bb.epoch_seed, 0xCC);
-    bb.instructions = {{VmOpcode::HALT, none(), 0, 0, 0}};
+TEST(EngineEncoding, FpeEncodeDecodeRoundtrip) {
+    // Verify FPE_Encode/FPE_Decode roundtrip for all 256 low values.
+    // Uses a deterministic key derived from a seed.
+    using namespace VMPilot::Common::VM::Crypto;
 
-    auto engine = make_engine(seed, {bb});
-    ASSERT_TRUE(engine.has_value());
-
-    auto& ep = engine->epoch();
+    uint8_t key[16] = {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16};
     for (uint64_t v = 0; v < 256; ++v) {
-        RegVal enc = encode_register(ep.reg.encode_lut(0), PlainVal(v));
-        PlainVal dec = decode_register(ep.reg.decode_lut(0), enc);
-        EXPECT_EQ(dec.bits, v);
+        uint64_t enc = FPE_Encode(key, 0, v);
+        uint64_t dec = FPE_Decode(key, 0, enc);
+        EXPECT_EQ(dec, v) << "FPE roundtrip failed for v=" << v;
     }
 }
 
-TEST(EngineEncoding, StoreLoadRoundtrip) {
+TEST(EngineEncoding, FpeNonTrivial) {
+    // Verify FPE encoding changes the value (plaintext 42 != ciphertext).
+    using namespace VMPilot::Common::VM::Crypto;
+
+    uint8_t key[16] = {0xAA,0xBB,0xCC,0xDD,0xEE,0xFF,1,2,3,4,5,6,7,8,9,10};
+    uint64_t enc = FPE_Encode(key, 0, 42);
+    EXPECT_NE(enc, 42u) << "FPE encoding should change the value";
+}
+
+TEST(EngineEncoding, MemLutRoundtrip) {
+    // Memory domain stays LUT-based (GlobalMemTables).
+    // Verify encode_memory / decode_memory roundtrip via VmImmutable.
     uint8_t seed[32]; fill_seed(seed);
     TestBB bb{}; bb.bb_id = 1; bb.epoch = 0; bb.live_regs_bitmap = 0xFFFF;
     fill_epoch(bb.epoch_seed, 0xDD);
@@ -177,27 +185,13 @@ TEST(EngineEncoding, StoreLoadRoundtrip) {
     auto engine = make_engine(seed, {bb});
     ASSERT_TRUE(engine.has_value());
 
-    auto& ep = engine->epoch();
+    auto imm = engine->shared_immutable();
     for (uint64_t v = 0; v < 100; ++v) {
-        RegVal rv(v * 0x0101010101010101ull);
-        MemVal stored = store_convert(ep.dom.store_lut(0), rv);
-        RegVal loaded = load_convert(ep.dom.load_lut(0), stored);
-        EXPECT_EQ(loaded, rv);
+        PlainVal pv(v * 0x0101010101010101ull);
+        MemVal encoded = encode_memory(imm->mem.encode_lut(), pv);
+        PlainVal decoded = decode_memory(imm->mem.decode_lut(), encoded);
+        EXPECT_EQ(decoded.bits, pv.bits) << "MemLUT roundtrip failed for v=" << v;
     }
-}
-
-TEST(EngineEncoding, EncodingIsNonTrivial) {
-    uint8_t seed[32]; fill_seed(seed);
-    TestBB bb{}; bb.bb_id = 1; bb.epoch = 0; bb.live_regs_bitmap = 0xFFFF;
-    fill_epoch(bb.epoch_seed, 0xEE);
-    bb.instructions = {{VmOpcode::HALT, none(), 0, 0, 0}};
-
-    auto engine = make_engine(seed, {bb});
-    ASSERT_TRUE(engine.has_value());
-
-    auto& ep = engine->epoch();
-    RegVal enc = encode_register(ep.reg.encode_lut(0), PlainVal(42));
-    EXPECT_NE(enc.bits, 42u);  // encoding should change the value
 }
 
 // ============================================================================
@@ -226,12 +220,11 @@ TEST(EngineHandlers, MovePreservesValue) {
     ASSERT_TRUE(engine.has_value());
     auto r = engine->execute();
     ASSERT_TRUE(r.has_value());
-    // MOVE copies encoded bits; decode r0 with r1's table
-    // Actually in the dispatcher, after MOVE r0=r1, r0 holds r1's encoding.
-    // The execute() return decodes r0 with r0's table, which gives wrong value.
-    // This is expected — MOVE is a bit copy. The test validates the dispatcher works.
-    // For a meaningful check, we verify r0 and r1 have the same encoded bits.
-    EXPECT_EQ(engine->execution().regs[0], engine->execution().regs[1]);
+    // Doc 16: MOVE copies the PLAINTEXT value of r1 into r0, then the pipeline
+    // FPE-encodes r0 with r0's tweak.  Since XEX tweaks are per-register,
+    // regs[0] and regs[1] have DIFFERENT encoded bits even for the same plaintext.
+    // The correct check is that the DECODED value is preserved.
+    EXPECT_EQ(r->return_value, 99u);
 }
 
 TEST(EngineHandlers, XorComputation) {
@@ -440,16 +433,20 @@ TEST(EngineHandlers, SetGetFlag) {
 
 TEST(EngineHandlers, NopWritesTrash) {
     uint8_t seed[32]; fill_seed(seed);
+    // NOP writes plain_b to trash_regs[reg_a].  Use operand_b_type=REG so
+    // the pipeline FPE-decodes r3 to get the plaintext (0xBEEF).
+    // flags byte: operand_a_type=0 (NONE), operand_b_type=1 (REG), cond=0
+    // → flags = (0 << 6) | (1 << 4) | 0 = 0x10
     auto engine = single_bb_engine(seed, 0xAC,
         {{VmOpcode::LOAD_CONST, pool_none(), 3, 0, 0},
-         {VmOpcode::NOP, none(), 2, 3, 0},
+         {VmOpcode::NOP, 0x10, 2, 3, 0},
          {VmOpcode::HALT, none(), 0, 0, 0}},
         {{0xBEEF, 0, 3}});
     ASSERT_TRUE(engine.has_value());
     auto r = engine->execute();
     ASSERT_TRUE(r.has_value());
-    // NOP writes encoded r3 bits to trash_regs[2]
-    EXPECT_NE(engine->execution().trash_regs[2], 0u);
+    // NOP writes the FPE-decoded plaintext of r3 (0xBEEF) to trash_regs[2]
+    EXPECT_EQ(engine->execution().trash_regs[2], 0xBEEFu);
 }
 
 TEST(EngineHandlers, FenceDoesNotCrash) {
@@ -463,86 +460,63 @@ TEST(EngineHandlers, FenceDoesNotCrash) {
 }
 
 // ============================================================================
-// 4. MBA Arithmetic Properties (HighSec policy)
+// 4. Arithmetic Across All Policies (doc 16: handlers are uniform, no MBA)
+//
+// In doc 16, MBA decomposition is gone.  ADD/SUB handlers operate on
+// plaintext uniformly across all policies.  These tests verify that ADD
+// produces the correct result under HighSecPolicy, StandardPolicy, and
+// DebugPolicy — exercising the same handler code path for all three.
 // ============================================================================
 
-TEST(EngineMba, AddRandomPairs) {
+TEST(EngineArithmetic, AddHighSecPolicy) {
     uint8_t seed[32]; fill_seed(seed);
-    std::mt19937_64 rng(42);
-
-    for (int trial = 0; trial < 100; ++trial) {
-        uint64_t a = rng(), b = rng();
-        uint64_t expected = a + b;
-
-        auto engine = single_bb_engine<HighSecPolicy>(seed, 0xF0,
-            {{VmOpcode::LOAD_CONST, pool_none(), 0, 0, 0},
-             {VmOpcode::LOAD_CONST, pool_none(), 1, 0, 1},
-             {VmOpcode::ADD, rr(), 0, 1, 0},
-             {VmOpcode::HALT, none(), 0, 0, 0}},
-            {{a, 0, 0}, {b, 0, 1}});
-        ASSERT_TRUE(engine.has_value()) << "trial=" << trial;
-        auto r = engine->execute();
-        ASSERT_TRUE(r.has_value()) << "trial=" << trial;
-        EXPECT_EQ(r->return_value, expected)
-            << "trial=" << trial << " a=" << a << " b=" << b;
-    }
+    auto engine = single_bb_engine<HighSecPolicy>(seed, 0xF0,
+        {{VmOpcode::LOAD_CONST, pool_none(), 0, 0, 0},
+         {VmOpcode::LOAD_CONST, pool_none(), 1, 0, 1},
+         {VmOpcode::ADD, rr(), 0, 1, 0},
+         {VmOpcode::HALT, none(), 0, 0, 0}},
+        {{30, 0, 0}, {12, 0, 1}});
+    ASSERT_TRUE(engine.has_value());
+    auto r = engine->execute();
+    ASSERT_TRUE(r.has_value());
+    EXPECT_EQ(r->return_value, 42u);
 }
 
-TEST(EngineMba, AddEdgeCases) {
+TEST(EngineArithmetic, AddStandardPolicy) {
+    uint8_t seed[32]; fill_seed(seed);
+    auto engine = single_bb_engine<StandardPolicy>(seed, 0xF1,
+        {{VmOpcode::LOAD_CONST, pool_none(), 0, 0, 0},
+         {VmOpcode::LOAD_CONST, pool_none(), 1, 0, 1},
+         {VmOpcode::ADD, rr(), 0, 1, 0},
+         {VmOpcode::HALT, none(), 0, 0, 0}},
+        {{30, 0, 0}, {12, 0, 1}});
+    ASSERT_TRUE(engine.has_value());
+    auto r = engine->execute();
+    ASSERT_TRUE(r.has_value());
+    EXPECT_EQ(r->return_value, 42u);
+}
+
+TEST(EngineArithmetic, SubAllPoliciesConsistent) {
     uint8_t seed[32]; fill_seed(seed);
 
-    struct Case { uint64_t a, b, expected; };
-    Case cases[] = {
-        {0, 0, 0},
-        {0, 1, 1},
-        {1, 0, 1},
-        {UINT64_MAX, 1, 0},  // overflow wraps
-        {UINT64_MAX, UINT64_MAX, UINT64_MAX - 1},
-        {0x00FF00FF00FF00FFull, 0xFF00FF00FF00FF00ull, 0xFFFFFFFFFFFFFFFFull},
-        {0x0101010101010101ull, 0x0101010101010101ull, 0x0202020202020202ull},
+    auto make_sub = [&](auto tag) {
+        using P = std::decay_t<decltype(tag)>;
+        return single_bb_engine<P, DirectOram>(seed, 0xF2,
+            {{VmOpcode::LOAD_CONST, pool_none(), 0, 0, 0},
+             {VmOpcode::LOAD_CONST, pool_none(), 1, 0, 1},
+             {VmOpcode::SUB, rr(), 0, 1, 0},
+             {VmOpcode::HALT, none(), 0, 0, 0}},
+            {{100, 0, 0}, {58, 0, 1}});
     };
 
-    for (auto& c : cases) {
-        auto engine = single_bb_engine<HighSecPolicy>(seed, 0xF1,
-            {{VmOpcode::LOAD_CONST, pool_none(), 0, 0, 0},
-             {VmOpcode::LOAD_CONST, pool_none(), 1, 0, 1},
-             {VmOpcode::ADD, rr(), 0, 1, 0},
-             {VmOpcode::HALT, none(), 0, 0, 0}},
-            {{c.a, 0, 0}, {c.b, 0, 1}});
-        ASSERT_TRUE(engine.has_value());
-        auto r = engine->execute();
-        ASSERT_TRUE(r.has_value());
-        EXPECT_EQ(r->return_value, c.expected)
-            << "a=" << c.a << " b=" << c.b;
-    }
-}
+    auto r1 = make_sub(HighSecPolicy{})->execute();
+    auto r2 = make_sub(StandardPolicy{})->execute();
+    auto r3 = make_sub(DebugPolicy{})->execute();
 
-TEST(EngineMba, AddCommutative) {
-    uint8_t seed[32]; fill_seed(seed);
-    std::mt19937_64 rng(123);
-
-    for (int trial = 0; trial < 50; ++trial) {
-        uint64_t a = rng(), b = rng();
-
-        auto e1 = single_bb_engine<HighSecPolicy>(seed, 0xF2,
-            {{VmOpcode::LOAD_CONST, pool_none(), 0, 0, 0},
-             {VmOpcode::LOAD_CONST, pool_none(), 1, 0, 1},
-             {VmOpcode::ADD, rr(), 0, 1, 0},
-             {VmOpcode::HALT, none(), 0, 0, 0}},
-            {{a, 0, 0}, {b, 0, 1}});
-
-        auto e2 = single_bb_engine<HighSecPolicy>(seed, 0xF2,
-            {{VmOpcode::LOAD_CONST, pool_none(), 0, 0, 0},
-             {VmOpcode::LOAD_CONST, pool_none(), 1, 0, 1},
-             {VmOpcode::ADD, rr(), 0, 1, 0},
-             {VmOpcode::HALT, none(), 0, 0, 0}},
-            {{b, 0, 0}, {a, 0, 1}});
-
-        auto r1 = e1->execute(), r2 = e2->execute();
-        ASSERT_TRUE(r1.has_value() && r2.has_value());
-        EXPECT_EQ(r1->return_value, r2->return_value)
-            << "ADD not commutative: a=" << a << " b=" << b;
-    }
+    ASSERT_TRUE(r1.has_value() && r2.has_value() && r3.has_value());
+    EXPECT_EQ(r1->return_value, 42u);
+    EXPECT_EQ(r2->return_value, 42u);
+    EXPECT_EQ(r3->return_value, 42u);
 }
 
 // ============================================================================
@@ -691,6 +665,12 @@ namespace {
 ///
 /// Creates a minimal VmEngine to derive encoding tables, then extracts
 /// a mutable VmEpoch and VmExecution for direct handler calls.
+///
+/// Doc 16: atomic handlers receive plaintext via insn.plain_a / plain_b.
+/// We set those directly — no encode_reg/decode_reg (those are gone).
+/// Handlers write plaintext results to e.regs[dst] (RegVal bits) which
+/// the pipeline would FPE_Encode after handler return; in the test we
+/// just read the raw plaintext bits back.
 struct AtomicTestFixture {
     uint8_t seed[32];
     std::shared_ptr<const VmImmutable> imm;
@@ -714,7 +694,7 @@ struct AtomicTestFixture {
         bb.epoch = 0;
         bb.live_regs_bitmap = 0xFFFF;
         fill_epoch(bb.epoch_seed, 0xF7);
-        epoch.enter_bb(bb, *imm);
+        epoch.enter_bb(bb);  // doc 16: single arg, no VmImmutable
 
         // Initialize ORAM state (unused by atomic handlers, but needed
         // for the handler signature).
@@ -724,17 +704,22 @@ struct AtomicTestFixture {
         table = build_handler_table<DebugPolicy, DirectOram>();
     }
 
-    /// Encode a plaintext value into register `reg` using the epoch tables.
-    RegVal encode(uint8_t reg, uint64_t plain) const {
-        return RegVal(VMPilot::Runtime::detail::encode_reg(epoch, reg, plain));
+    /// Set register `reg` to a plaintext value.
+    /// In doc 16, atomic handlers write/read plaintext via regs[];
+    /// the pipeline FPE-encodes after handler return.  For direct
+    /// handler tests we work in plaintext throughout.
+    void set_reg(uint8_t reg, uint64_t plain) {
+        exec.regs[reg] = RegVal(plain);
     }
 
-    /// Decode an encoded register value back to plaintext.
-    uint64_t decode(uint8_t reg, RegVal encoded) const {
-        return VMPilot::Runtime::detail::decode_reg(epoch, reg, encoded.bits);
+    /// Read the plaintext value written by a handler into register `reg`.
+    /// Handlers write plaintext into regs[dst] (pipeline would encode after).
+    uint64_t get_reg(uint8_t reg) const {
+        return exec.regs[reg].bits;
     }
 
     /// Build a DecodedInsn for an atomic operation.
+    /// Sets plain_a from regs[ra] and plain_b from regs[rb].
     /// aux = 0, load_base_delta carries the full address.
     DecodedInsn make_insn(VmOpcode op, uint8_t ra, uint8_t rb = 0) const {
         DecodedInsn insn{};
@@ -746,6 +731,10 @@ struct AtomicTestFixture {
         insn.operand_b_type = 0;
         insn.condition = 0;
         insn.plaintext_opcode = 0;
+        // Doc 16: pipeline pre-decodes plain_a/plain_b before handler call.
+        // For direct handler testing, set them from the register values.
+        insn.plain_a = exec.regs[ra].bits;
+        insn.plain_b = exec.regs[rb].bits;
         return insn;
     }
 
@@ -766,8 +755,8 @@ TEST(EngineAtomic, LockAdd) {
     f.exec.load_base_delta = static_cast<int64_t>(
         reinterpret_cast<uintptr_t>(&target));
 
-    // r0 = encode(50)  — the addend
-    f.exec.regs[0] = f.encode(0, 50);
+    // r0 = 50 (the addend, plaintext)
+    f.set_reg(0, 50);
 
     auto insn = f.make_insn(VmOpcode::LOCK_ADD, /*reg_a=*/0);
     auto r = f.call(insn);
@@ -776,8 +765,8 @@ TEST(EngineAtomic, LockAdd) {
     // Guest memory should be 100 + 50 = 150
     EXPECT_EQ(target, 150u);
 
-    // r0 should hold the OLD value (100), encoded in r0's domain
-    EXPECT_EQ(f.decode(0, f.exec.regs[0]), 100u);
+    // r0 should hold the OLD value (100) — handler writes plaintext
+    EXPECT_EQ(f.get_reg(0), 100u);
 }
 
 TEST(EngineAtomic, LockAddZero) {
@@ -788,14 +777,14 @@ TEST(EngineAtomic, LockAddZero) {
         reinterpret_cast<uintptr_t>(&target));
 
     // Adding zero should return the current value and leave memory unchanged.
-    f.exec.regs[0] = f.encode(0, 0);
+    f.set_reg(0, 0);
 
     auto insn = f.make_insn(VmOpcode::LOCK_ADD, 0);
     auto r = f.call(insn);
     ASSERT_TRUE(r.has_value());
 
     EXPECT_EQ(target, 42u);
-    EXPECT_EQ(f.decode(0, f.exec.regs[0]), 42u);
+    EXPECT_EQ(f.get_reg(0), 42u);
 }
 
 TEST(EngineAtomic, Xchg) {
@@ -806,7 +795,7 @@ TEST(EngineAtomic, Xchg) {
         reinterpret_cast<uintptr_t>(&target));
 
     // r0 = new value to exchange in
-    f.exec.regs[0] = f.encode(0, 0xCAFEBABE);
+    f.set_reg(0, 0xCAFEBABE);
 
     auto insn = f.make_insn(VmOpcode::XCHG, /*reg_a=*/0);
     auto r = f.call(insn);
@@ -816,7 +805,7 @@ TEST(EngineAtomic, Xchg) {
     EXPECT_EQ(target, 0xCAFEBABEu);
 
     // r0 should hold the OLD value from memory
-    EXPECT_EQ(f.decode(0, f.exec.regs[0]), 0xDEADBEEFu);
+    EXPECT_EQ(f.get_reg(0), 0xDEADBEEFu);
 }
 
 TEST(EngineAtomic, XchgSameValue) {
@@ -827,14 +816,14 @@ TEST(EngineAtomic, XchgSameValue) {
         reinterpret_cast<uintptr_t>(&target));
 
     // Exchange with the same value — idempotent
-    f.exec.regs[0] = f.encode(0, 77);
+    f.set_reg(0, 77);
 
     auto insn = f.make_insn(VmOpcode::XCHG, 0);
     auto r = f.call(insn);
     ASSERT_TRUE(r.has_value());
 
     EXPECT_EQ(target, 77u);
-    EXPECT_EQ(f.decode(0, f.exec.regs[0]), 77u);
+    EXPECT_EQ(f.get_reg(0), 77u);
 }
 
 TEST(EngineAtomic, CmpxchgSuccess) {
@@ -846,8 +835,8 @@ TEST(EngineAtomic, CmpxchgSuccess) {
         reinterpret_cast<uintptr_t>(&target));
 
     // reg_a (r0) = expected value, reg_b (r1) = desired value
-    f.exec.regs[0] = f.encode(0, 100);  // expected
-    f.exec.regs[1] = f.encode(1, 200);  // desired
+    f.set_reg(0, 100);  // expected
+    f.set_reg(1, 200);  // desired
 
     auto insn = f.make_insn(VmOpcode::CMPXCHG, /*reg_a=*/0, /*reg_b=*/1);
     auto r = f.call(insn);
@@ -857,7 +846,7 @@ TEST(EngineAtomic, CmpxchgSuccess) {
     EXPECT_EQ(target, 200u);
 
     // r0 should hold the old memory value (== expected, since success)
-    EXPECT_EQ(f.decode(0, f.exec.regs[0]), 100u);
+    EXPECT_EQ(f.get_reg(0), 100u);
 
     // ZF set on success (vm_flags bit 0 = 1)
     EXPECT_EQ(f.exec.vm_flags & 0x01, 0x01u);
@@ -871,8 +860,8 @@ TEST(EngineAtomic, CmpxchgFailure) {
     f.exec.load_base_delta = static_cast<int64_t>(
         reinterpret_cast<uintptr_t>(&target));
 
-    f.exec.regs[0] = f.encode(0, 999);  // wrong expected
-    f.exec.regs[1] = f.encode(1, 200);  // desired (should NOT be written)
+    f.set_reg(0, 999);  // wrong expected
+    f.set_reg(1, 200);  // desired (should NOT be written)
 
     auto insn = f.make_insn(VmOpcode::CMPXCHG, 0, 1);
     auto r = f.call(insn);
@@ -883,7 +872,7 @@ TEST(EngineAtomic, CmpxchgFailure) {
 
     // r0 should hold the ACTUAL memory value (100), not the expected (999).
     // compare_exchange_strong writes the actual value into `expected` on failure.
-    EXPECT_EQ(f.decode(0, f.exec.regs[0]), 100u);
+    EXPECT_EQ(f.get_reg(0), 100u);
 
     // ZF cleared on failure (vm_flags bit 0 = 0)
     EXPECT_EQ(f.exec.vm_flags & 0x01, 0x00u);
@@ -897,8 +886,8 @@ TEST(EngineAtomic, CmpxchgSuccessThenFailure) {
         reinterpret_cast<uintptr_t>(&target));
 
     // First: succeed (expect 10, swap in 20)
-    f.exec.regs[0] = f.encode(0, 10);
-    f.exec.regs[1] = f.encode(1, 20);
+    f.set_reg(0, 10);
+    f.set_reg(1, 20);
 
     auto insn = f.make_insn(VmOpcode::CMPXCHG, 0, 1);
     auto r1 = f.call(insn);
@@ -907,13 +896,15 @@ TEST(EngineAtomic, CmpxchgSuccessThenFailure) {
     EXPECT_EQ(f.exec.vm_flags & 0x01, 0x01u);
 
     // Second: fail (expect 10, but memory is now 20)
-    f.exec.regs[0] = f.encode(0, 10);  // stale expected
-    f.exec.regs[1] = f.encode(1, 30);
+    f.set_reg(0, 10);  // stale expected
+    f.set_reg(1, 30);
 
-    auto r2 = f.call(insn);
+    // Rebuild insn to pick up new plain_a/plain_b
+    auto insn2 = f.make_insn(VmOpcode::CMPXCHG, 0, 1);
+    auto r2 = f.call(insn2);
     ASSERT_TRUE(r2.has_value());
     EXPECT_EQ(target, 20u);  // unchanged
-    EXPECT_EQ(f.decode(0, f.exec.regs[0]), 20u);  // actual value loaded
+    EXPECT_EQ(f.get_reg(0), 20u);  // actual value loaded
     EXPECT_EQ(f.exec.vm_flags & 0x01, 0x00u);
 }
 
@@ -928,8 +919,8 @@ TEST(EngineAtomic, AtomicLoad) {
     auto r = f.call(insn);
     ASSERT_TRUE(r.has_value());
 
-    // r0 should hold the memory value, encoded in r0's domain
-    EXPECT_EQ(f.decode(0, f.exec.regs[0]), 0x123456789ABCDEF0ull);
+    // r0 should hold the memory value (plaintext)
+    EXPECT_EQ(f.get_reg(0), 0x123456789ABCDEF0ull);
 }
 
 TEST(EngineAtomic, AtomicLoadZero) {
@@ -943,7 +934,7 @@ TEST(EngineAtomic, AtomicLoadZero) {
     auto r = f.call(insn);
     ASSERT_TRUE(r.has_value());
 
-    EXPECT_EQ(f.decode(0, f.exec.regs[0]), 0u);
+    EXPECT_EQ(f.get_reg(0), 0u);
 }
 
 TEST(EngineAtomic, AtomicLoadDifferentRegisters) {
@@ -958,7 +949,7 @@ TEST(EngineAtomic, AtomicLoadDifferentRegisters) {
     auto r = f.call(insn);
     ASSERT_TRUE(r.has_value());
 
-    EXPECT_EQ(f.decode(3, f.exec.regs[3]), 42u);
+    EXPECT_EQ(f.get_reg(3), 42u);
 }
 
 TEST(EngineAtomic, LockAddOverflow) {
@@ -969,14 +960,14 @@ TEST(EngineAtomic, LockAddOverflow) {
     f.exec.load_base_delta = static_cast<int64_t>(
         reinterpret_cast<uintptr_t>(&target));
 
-    f.exec.regs[0] = f.encode(0, 1);
+    f.set_reg(0, 1);
 
     auto insn = f.make_insn(VmOpcode::LOCK_ADD, 0);
     auto r = f.call(insn);
     ASSERT_TRUE(r.has_value());
 
     EXPECT_EQ(target, 0u);  // wraps around
-    EXPECT_EQ(f.decode(0, f.exec.regs[0]), UINT64_MAX);  // old value
+    EXPECT_EQ(f.get_reg(0), UINT64_MAX);  // old value
 }
 
 TEST(EngineTable, AllOpcodesCovered) {

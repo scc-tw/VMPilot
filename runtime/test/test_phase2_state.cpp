@@ -4,9 +4,10 @@
 /// Validates:
 ///   1. Struct layout and alignment (static_assert + runtime sizeof checks)
 ///   2. Policy traits (compile-time validation, default ORAM mapping)
-///   3. VmEpoch table derivation and RE_TABLE application
+///   3. VmEpoch opcode permutation derivation (doc 16 — no RegTables/DomainTables)
 ///   4. VmExecution register access via phantom types
-///   5. VmEngine template instantiation for all 3 policies
+///   5. Speck-FPE encode/decode roundtrip and per-register independence
+///   6. VmEngine template instantiation for all 3 policies
 
 #include "vm_engine.hpp"
 #include "vm_state.hpp"
@@ -14,9 +15,9 @@
 #include "oram_strategy.hpp"
 
 #include <vm/encoded_value.hpp>
-#include <vm/vm_encoding.hpp>
 #include <vm/vm_crypto.hpp>
 #include <vm/vm_context.hpp>
+#include <vm/xex_speck64.hpp>
 
 #include <gtest/gtest.h>
 
@@ -33,8 +34,9 @@ using namespace VMPilot::Common::VM;
 TEST(Phase2Layout, VmExecutionAlignment) {
     static_assert(alignof(VmExecution) >= 64);
     static_assert(offsetof(VmExecution, regs) == 0);
-    EXPECT_LE(sizeof(VmExecution), 2048u)
-        << "VmExecution should be stack-friendly (< 2KB)";
+    // Doc 16 added insn_fpe_key[16] + bb_chain_state[32], growing to ~2112 bytes.
+    EXPECT_LE(sizeof(VmExecution), 2176u)
+        << "VmExecution should be stack-friendly (< ~2KB)";
 }
 
 TEST(Phase2Layout, VmOramAlignment) {
@@ -45,8 +47,11 @@ TEST(Phase2Layout, VmOramAlignment) {
 }
 
 TEST(Phase2Layout, VmEpochContainsTables) {
-    // VmEpoch must hold all encoding tables (~131KB)
-    EXPECT_GE(sizeof(VmEpoch), sizeof(RegTables) + sizeof(DomainTables));
+    // Doc 16: VmEpoch holds only opcode_perm[256] + opcode_perm_inv[256]
+    // + 3 scalar fields (bb_id, epoch, live_regs_bitmap) ≈ 524 bytes.
+    // RegTables and DomainTables are gone — register encoding is Speck-FPE.
+    EXPECT_GE(sizeof(VmEpoch), 512u);
+    EXPECT_LT(sizeof(VmEpoch), 1024u);  // must be small, not ~131KB
 }
 
 TEST(Phase2Layout, VmEngineStackSize) {
@@ -110,14 +115,9 @@ TEST(Phase2Policy, OramOrthogonality) {
 // ============================================================================
 
 TEST(Phase2Epoch, EnterBbDerivesTables) {
-    // Set up a minimal VmImmutable with memory tables
-    VmImmutable imm{};
-    uint8_t seed[32];
-    for (int i = 0; i < 32; ++i) seed[i] = static_cast<uint8_t>(i + 1);
-    std::memcpy(imm.stored_seed, seed, 32);
-    Encoding::derive_memory_tables(seed, imm.mem.encode, imm.mem.decode);
+    // Doc 16: enter_bb(bb) takes a single arg — no VmImmutable needed.
+    // It sets identity fields and derives the D4 opcode permutation.
 
-    // Create a BB metadata entry
     BBMetadata bb{};
     bb.bb_id = 1;
     bb.epoch = 0;
@@ -126,75 +126,77 @@ TEST(Phase2Epoch, EnterBbDerivesTables) {
     bb.live_regs_bitmap = 0x0003;  // r0 and r1 live
     for (int i = 0; i < 32; ++i) bb.epoch_seed[i] = static_cast<uint8_t>(0xBB + i);
 
-    // Derive tables via enter_bb
     VmEpoch epoch{};
-    epoch.enter_bb(bb, imm);
+    epoch.enter_bb(bb);
 
+    // Verify identity fields are set correctly
     EXPECT_EQ(epoch.bb_id, 1u);
     EXPECT_EQ(epoch.epoch, 0u);
     EXPECT_EQ(epoch.live_regs_bitmap, 0x0003u);
 
-    // Verify encode→decode roundtrip for live register r0
-    for (uint64_t val = 0; val < 256; ++val) {
-        PlainVal pv(val);
-        RegVal encoded = encode_register(epoch.reg.encode_lut(0), pv);
-        PlainVal decoded = decode_register(epoch.reg.decode_lut(0), encoded);
-        EXPECT_EQ(decoded.bits, val) << "Roundtrip failed for r0, val=" << val;
+    // Verify opcode_perm is derived (not all zeros)
+    bool all_zero = true;
+    for (int i = 0; i < 256; ++i) {
+        if (epoch.opcode_perm[i] != 0) { all_zero = false; break; }
     }
+    EXPECT_FALSE(all_zero) << "opcode_perm should not be all zeros after enter_bb";
 
-    // Verify store→load roundtrip for r0
-    for (uint64_t val = 0; val < 50; ++val) {
-        RegVal rv(val * 0x0101010101010101ull);  // spread across lanes
-        MemVal stored = store_convert(epoch.dom.store_lut(0), rv);
-        RegVal loaded = load_convert(epoch.dom.load_lut(0), stored);
-        EXPECT_EQ(loaded, rv) << "Store→Load roundtrip failed for r0";
+    // Verify opcode_perm is not the identity permutation
+    bool is_identity = true;
+    for (int i = 0; i < 256; ++i) {
+        if (epoch.opcode_perm[i] != static_cast<uint8_t>(i)) {
+            is_identity = false; break;
+        }
+    }
+    EXPECT_FALSE(is_identity) << "opcode_perm should not be the identity permutation";
+
+    // Verify opcode_perm_inv is the inverse of opcode_perm
+    for (int i = 0; i < 256; ++i) {
+        EXPECT_EQ(epoch.opcode_perm_inv[epoch.opcode_perm[i]],
+                  static_cast<uint8_t>(i))
+            << "opcode_perm_inv[opcode_perm[" << i << "]] != " << i;
     }
 }
 
-TEST(Phase2Epoch, TransitionRegsPreservesValues) {
-    // Verify that RE_TABLE re-encoding preserves plaintext identity:
-    //   decode_new(reencode(encode_old(x))) == x
+TEST(Phase2Epoch, FpeEncodeDecodeRoundtrip) {
+    // Doc 16: register encoding uses Speck-FPE (XEX mode over Speck64/128)
+    // instead of per-BB RegTables LUTs.  Verify roundtrip and per-register
+    // independence using the xex_speck64.hpp API.
 
-    VmImmutable imm{};
-    uint8_t seed[32];
-    for (int i = 0; i < 32; ++i) seed[i] = static_cast<uint8_t>(i + 1);
-    std::memcpy(imm.stored_seed, seed, 32);
-    Encoding::derive_memory_tables(seed, imm.mem.encode, imm.mem.decode);
+    using namespace VMPilot::Common::VM::Crypto;
 
-    // BB 1 (old epoch)
-    BBMetadata bb1{};
-    bb1.bb_id = 1; bb1.epoch = 0;
-    bb1.live_regs_bitmap = 0x0003;
-    for (int i = 0; i < 32; ++i) bb1.epoch_seed[i] = static_cast<uint8_t>(0xAA + i);
+    // Set up a test key (128 bits)
+    uint8_t key[16];
+    for (int i = 0; i < 16; ++i) key[i] = static_cast<uint8_t>(0xA0 + i);
 
-    // BB 2 (new epoch)
-    BBMetadata bb2{};
-    bb2.bb_id = 2; bb2.epoch = 1;
-    bb2.live_regs_bitmap = 0x0003;
-    for (int i = 0; i < 32; ++i) bb2.epoch_seed[i] = static_cast<uint8_t>(0xCC + i);
+    Speck64_RoundKeys rk;
+    Speck64_KeySchedule(key, rk);
 
-    // Enter BB 1 and encode some values
-    VmEpoch epoch{};
-    epoch.enter_bb(bb1, imm);
+    XEX_Tweaks tweaks;
+    XEX_ComputeTweaks(rk, tweaks);
 
-    VmExecution exec{};
-    PlainVal plain_r0(0x42);
-    PlainVal plain_r1(0xDEADBEEF);
-    exec.regs[0] = encode_register(epoch.reg.encode_lut(0), plain_r0);
-    exec.regs[1] = encode_register(epoch.reg.encode_lut(1), plain_r1);
+    // Verify encode→decode roundtrip for several values across registers
+    const uint64_t test_values[] = {0, 1, 0x42, 0xDEADBEEF, 0xCAFEBABE12345678ull};
+    for (uint8_t reg = 0; reg < 4; ++reg) {
+        for (uint64_t plain : test_values) {
+            uint64_t encoded = FPE_Encode(rk, tweaks, reg, plain);
+            uint64_t decoded = FPE_Decode(rk, tweaks, reg, encoded);
+            EXPECT_EQ(decoded, plain)
+                << "FPE roundtrip failed for reg=" << int(reg)
+                << ", plain=0x" << std::hex << plain;
+        }
+    }
 
-    // Transition to BB 2 (applies RE_TABLE)
-    epoch.transition_regs(exec, bb2, imm);
+    // Verify per-register independence: same plaintext in different registers
+    // must produce different ciphertext (XEX tweak guarantees this).
+    uint64_t plain = 0x42;
+    uint64_t enc_r0 = FPE_Encode(rk, tweaks, 0, plain);
+    uint64_t enc_r1 = FPE_Encode(rk, tweaks, 1, plain);
+    EXPECT_NE(enc_r0, enc_r1)
+        << "Same plaintext in different registers must produce different ciphertext";
 
-    // Now enter BB 2 (derives new tables)
-    epoch.enter_bb(bb2, imm);
-
-    // Decode with NEW tables — should recover original plaintext
-    PlainVal decoded_r0 = decode_register(epoch.reg.decode_lut(0), exec.regs[0]);
-    PlainVal decoded_r1 = decode_register(epoch.reg.decode_lut(1), exec.regs[1]);
-
-    EXPECT_EQ(decoded_r0.bits, 0x42u);
-    EXPECT_EQ(decoded_r1.bits, 0xDEADBEEFu);
+    // Encoding is not identity (ciphertext != plaintext)
+    EXPECT_NE(enc_r0, plain) << "FPE_Encode should not return plaintext";
 }
 
 // ============================================================================
@@ -226,6 +228,12 @@ TEST(Phase2Execution, DefaultsAreZero) {
     EXPECT_FALSE(exec.branch_taken);
     EXPECT_EQ(exec.shadow_depth, 0u);
     EXPECT_EQ(exec.load_base_delta, 0);
+
+    // Doc 16 forward-secrecy fields default to zero
+    for (int i = 0; i < 16; ++i)
+        EXPECT_EQ(exec.insn_fpe_key[i], 0u) << "insn_fpe_key[" << i << "] not zero";
+    for (int i = 0; i < 32; ++i)
+        EXPECT_EQ(exec.bb_chain_state[i], 0u) << "bb_chain_state[" << i << "] not zero";
 }
 
 // ============================================================================
