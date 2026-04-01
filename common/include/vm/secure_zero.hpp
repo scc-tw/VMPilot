@@ -49,9 +49,11 @@ inline void secure_zero(void* ptr, size_t len) noexcept {
     // C11 Annex K: memset_s is guaranteed not to be optimised away.
     memset_s(ptr, len, 0, len);
 
-#elif defined(__GNUC__) || defined(__clang__)
-    // GCC/Clang/MinGW on POSIX: explicit_bzero is available since glibc 2.25,
-    // musl 1.1.20, FreeBSD 11, macOS 10.13 (all ≥2017).
+#elif (defined(__GNUC__) || defined(__clang__)) && !defined(__APPLE__)
+    // GCC/Clang/MinGW on Linux/FreeBSD: explicit_bzero is available since
+    // glibc 2.25, musl 1.1.20, FreeBSD 11 (all ≥2017).
+    // Apple platforms excluded: <strings.h> needed for declaration, and
+    // the volatile fallback below is equally safe on macOS/iOS.
     explicit_bzero(ptr, len);
 
 #else
