@@ -163,16 +163,16 @@ inline std::vector<uint8_t> build_test_blob(
 
     // ── Derive keys (same derivation the loader uses) ────────────────────
     uint8_t fast_key[16];
-    blake3_kdf(stored_seed, "fast", 4, fast_key, 16);
+    blake3_keyed_hash(stored_seed, reinterpret_cast<const uint8_t*>("fast"), 4, fast_key, 16);
 
     uint8_t meta_key[16];
-    blake3_kdf(stored_seed, "meta", 4, meta_key, 16);
+    blake3_keyed_hash(stored_seed, reinterpret_cast<const uint8_t*>("meta"), 4, meta_key, 16);
 
     uint8_t pool_key[16];
-    blake3_kdf(stored_seed, "pool", 4, pool_key, 16);
+    blake3_keyed_hash(stored_seed, reinterpret_cast<const uint8_t*>("pool"), 4, pool_key, 16);
 
     uint8_t integrity_key[32];
-    blake3_kdf(stored_seed, "integrity", 9, integrity_key, 32);
+    blake3_keyed_hash(stored_seed, reinterpret_cast<const uint8_t*>("integrity"), 9, integrity_key, 32);
 
     // ── Build alias LUT (needed before instruction encryption) ─────────
     // Identity mapping: alias[i] = i % VM_OPCODE_COUNT
@@ -248,9 +248,12 @@ inline std::vector<uint8_t> build_test_blob(
                     std::memcpy(rk_ctx, "rekey", 5);
                     std::memcpy(rk_ctx + 5, &rk_counter, 4);
                     uint8_t rk_mat[16];
-                    blake3_kdf(stored_seed,
-                               reinterpret_cast<const char*>(rk_ctx), 9,
-                               rk_mat, 16);
+                    // Use pre-derived rekey_key (matches runtime — 32 bytes for BLAKE3_KEYED)
+                    uint8_t rekey_key[32];
+                    blake3_keyed_hash(stored_seed,
+                                      reinterpret_cast<const uint8_t*>("rekey"), 5,
+                                      rekey_key, 32);
+                    blake3_keyed_hash(rekey_key, rk_ctx, 9, rk_mat, 16);
                     uint8_t es[8];
                     std::memcpy(es, &enc_state, 8);
                     enc_state = siphash_2_4(rk_mat, es, 8);
@@ -452,16 +455,16 @@ inline std::vector<uint8_t> build_test_blob_ex(
 
     // ── Derive keys ──────────────────────────────────────────────────────
     uint8_t fast_key[16];
-    blake3_kdf(stored_seed, "fast", 4, fast_key, 16);
+    blake3_keyed_hash(stored_seed, reinterpret_cast<const uint8_t*>("fast"), 4, fast_key, 16);
 
     uint8_t meta_key[16];
-    blake3_kdf(stored_seed, "meta", 4, meta_key, 16);
+    blake3_keyed_hash(stored_seed, reinterpret_cast<const uint8_t*>("meta"), 4, meta_key, 16);
 
     uint8_t pool_key[16];
-    blake3_kdf(stored_seed, "pool", 4, pool_key, 16);
+    blake3_keyed_hash(stored_seed, reinterpret_cast<const uint8_t*>("pool"), 4, pool_key, 16);
 
     uint8_t integrity_key[32];
-    blake3_kdf(stored_seed, "integrity", 9, integrity_key, 32);
+    blake3_keyed_hash(stored_seed, reinterpret_cast<const uint8_t*>("integrity"), 9, integrity_key, 32);
 
     // ── Build alias LUT ──────────────────────────────────────────────────
     uint8_t alias_lut[256];

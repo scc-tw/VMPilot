@@ -962,8 +962,9 @@ struct HandlerTraits<VmOpcode::REKEY, P> {
         std::memcpy(rk_ctx, "rekey", 5);
         std::memcpy(rk_ctx + 5, &counter, 4);
         uint8_t rk_mat[16];
-        Common::VM::Crypto::blake3_kdf(im.stored_seed,
-            reinterpret_cast<const char*>(rk_ctx), 9, rk_mat, 16);
+        // Use pre-derived rekey_key (stored_seed was zeroed at init)
+        Common::VM::Crypto::blake3_keyed_hash(im.rekey_key,
+            rk_ctx, 9, rk_mat, 16);
         uint8_t es[8];
         std::memcpy(es, &e.enc_state, 8);
         e.enc_state = Common::VM::Crypto::siphash_2_4(rk_mat, es, 8);

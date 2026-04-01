@@ -104,9 +104,13 @@ struct VmImmutable {
     /// BB MAC verification key (derived from stored_seed).
     uint8_t integrity_key[32];
 
-    /// Root secret — in production, this should live in CPU registers only.
-    /// Stored here for reentrancy (shared across levels, not re-derived).
-    uint8_t stored_seed[32];
+    /// Chain evolution key — used by enter_basic_block to evolve bb_chain_state.
+    /// Pre-derived from stored_seed as BLAKE3_KEYED(stored_seed, "chain_evo").
+    /// stored_seed itself is zeroed after this derivation (doc 16 §1.1).
+    uint8_t chain_evolution_key[32];
+
+    /// REKEY handler key — pre-derived from stored_seed (32 bytes for BLAKE3_KEYED).
+    uint8_t rekey_key[32];
 
     /// ORAM keystream key (derived from stored_seed).
     uint8_t oram_key[16];

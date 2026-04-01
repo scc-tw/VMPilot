@@ -1,4 +1,5 @@
 #include <vm/vm_crypto.hpp>
+#include <vm/secure_zero.hpp>
 
 #include <blake3.h>
 
@@ -36,7 +37,7 @@ void blake3_keyed_128(const uint8_t key128[16],
 
     // Zero the extended key — prevent the redundant copy from persisting
     // in stack memory after this function returns.
-    __builtin_memset(extended, 0, 32);
+    Common::VM::secure_zero(extended, 32);
 }
 
 void blake3_keyed_fingerprint(const uint8_t key128[16],

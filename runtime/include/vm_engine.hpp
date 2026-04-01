@@ -307,16 +307,26 @@ VmEngine<Policy, Oram>::create(
     if (!blob_or) return tl::make_unexpected(blob_or.error());
     m->blob = *blob_or;
 
-    std::memcpy(m->stored_seed, stored_seed, 32);
+    // 2. Key derivation (doc 16 §6: all via BLAKE3_KEYED, not blake3_kdf)
+    //
+    // stored_seed (32 bytes) is the BLAKE3 key.  Context strings are the
+    // message, producing domain-separated sub-keys.  After all derivations
+    // complete, stored_seed is zeroed (doc 16 §1.1: ROOT DESTROYED).
+    auto bkh = [&](const char* ctx, size_t clen, uint8_t* out, size_t olen) {
+        blake3_keyed_hash(stored_seed,
+                          reinterpret_cast<const uint8_t*>(ctx), clen,
+                          out, olen);
+    };
 
-    // 2. Key derivation
-    blake3_kdf(stored_seed, "fast", 4, m->fast_key, 16);
-    blake3_kdf(stored_seed, "oram", 4, m->oram_key, 16);
-    blake3_kdf(stored_seed, "integrity", 9, m->integrity_key, 32);
+    bkh("fast", 4, m->fast_key, 16);
+    bkh("oram", 4, m->oram_key, 16);
+    bkh("integrity", 9, m->integrity_key, 32);
+    bkh("chain_evo", 9, m->chain_evolution_key, 32);
+    bkh("rekey", 5, m->rekey_key, 32);
 
     uint8_t meta_key[16], pool_key[16];
-    blake3_kdf(stored_seed, "meta", 4, meta_key, 16);
-    blake3_kdf(stored_seed, "pool", 4, pool_key, 16);
+    bkh("meta", 4, meta_key, 16);
+    bkh("pool", 4, pool_key, 16);
 
     // 3. Decrypt BB metadata
     auto raw_meta = m->blob.bb_metadata_raw();
@@ -346,7 +356,9 @@ VmEngine<Policy, Oram>::create(
         uint8_t enc_msg[7];
         std::memcpy(enc_msg, "enc", 3);
         std::memcpy(enc_msg + 3, &md.bb_id, 4);
-        blake3_keyed_hash(stored_seed, enc_msg, 7, md.bb_enc_seed, 8);
+        blake3_keyed_hash(stored_seed,
+                          reinterpret_cast<const uint8_t*>(enc_msg), 7,
+                          md.bb_enc_seed, 8);
     }
 
     // 4. Decrypt constant pool (SipHash XOR -- pool content is plaintext after this)
@@ -373,20 +385,24 @@ VmEngine<Policy, Oram>::create(
     // 7. Copy alias LUT
     std::memcpy(m->alias_lut, m->blob.alias_lut(), 256);
 
-    // 8. Blob integrity hash
-    blake3_keyed_hash(m->integrity_key, blob_data, blob_size,
+    // 8. Blob integrity hash (uses integrity_key, NOT stored_seed)
+    blake3_keyed_hash(m->integrity_key,
+                      m->blob_storage.data(), m->blob_storage.size(),
                       m->blob_integrity_hash, 32);
 
-    // 9. Destroy ephemeral derivation keys (doc 16 E2).
+    // 9. ROOT DESTROYED (doc 16 §1.1).
     //
-    // WHY: meta_key and pool_key were used only for metadata/pool decryption.
-    // Leaving them on the stack allows a memory dump to decrypt the blob's
-    // metadata and constant pool, which are meant to be confidential.
+    // All stored_seed-dependent values have been pre-derived:
+    //   fast_key, oram_key, integrity_key, chain_evolution_key, rekey_key,
+    //   meta_key (local), pool_key (local), bb_enc_seeds (in bb_metadata),
+    //   mem.encode/decode, blob_integrity_hash.
     //
-    // stored_seed is NOT zeroed here — it's needed at runtime for BB MAC
-    // verification (verify_bb_mac) and bb_chain_state evolution.  The stub
-    // zeros the payload-section copy (E1); VmImmutable's copy persists until
-    // the engine is destroyed.
+    // stored_seed is the 32-byte root secret.  Zeroing it here ensures no
+    // memory dump after this point can recover the root — all Theorems 7.2-7.4
+    // depend on this invariant.
+    //
+    // The LOCAL copy on the caller's stack (stored_seed parameter) is the
+    // caller's responsibility.  VmImmutable does NOT store it.
     secure_zero(meta_key, sizeof(meta_key));
     secure_zero(pool_key, sizeof(pool_key));
 
@@ -571,9 +587,10 @@ VmEngine<Policy, Oram>::step() noexcept
         exec_, *epoch_, *oram_, *imm_, insn);
     if (!r) return tl::make_unexpected(r.error());
 
-    // Zero plaintext operands immediately after handler (Theorem 7.1).
-    // These existed in CPU registers during handler execution; zeroing
-    // prevents stack residue if the compiler spilled them.
+    // Zero plaintext operands after handler (Theorem 7.1).
+    // plain_a/plain_b are the decoded register values.  Other insn fields
+    // (opcode, reg_a, aux, plaintext_opcode) are still needed by Phases E-K
+    // and are NOT secret (they're from the decrypted instruction, not data).
     secure_zero(&insn.plain_a, sizeof(insn.plain_a));
     secure_zero(&insn.plain_b, sizeof(insn.plain_b));
 
@@ -645,13 +662,20 @@ VmEngine<Policy, Oram>::step() noexcept
             SecureLocal<XEX_Tweaks> new_tw;
             XEX_ComputeTweaks(new_rk.val, new_tw.val);
 
+            // Doc 16 §4 Phase H: live registers re-encode, dead → Enc(0).
+            uint16_t live = imm_->bb_metadata[exec_.current_bb_index].live_regs_bitmap;
             for (uint8_t i = 0; i < 16; ++i) {
-                SecureLocal<uint64_t> plain;
-                plain.val = FPE_Decode(rk.val, tw.val, i,
-                                       exec_.regs[i].bits);
-                exec_.regs[i] = RegVal(
-                    FPE_Encode(new_rk.val, new_tw.val, i, plain.val));
-                // plain auto-zeroed by SecureLocal destructor (Theorem 7.1)
+                if (live & (1u << i)) {
+                    SecureLocal<uint64_t> plain;
+                    plain.val = FPE_Decode(rk.val, tw.val, i,
+                                           exec_.regs[i].bits);
+                    exec_.regs[i] = RegVal(
+                        FPE_Encode(new_rk.val, new_tw.val, i, plain.val));
+                } else {
+                    // Dead register: canonical zero under new key
+                    exec_.regs[i] = RegVal(
+                        FPE_Encode(new_rk.val, new_tw.val, i, 0));
+                }
             }
             // new_rk, new_tw zeroed by SecureLocal destructor.
         }

@@ -100,6 +100,11 @@ inline uint64_t hardware_random_u64() noexcept {
 #endif
 
     // Final fallback: deterministic zero (test/emulator environments only).
+    //
+    // WARNING: This makes bb_chain_state deterministic across executions,
+    // breaking per-execution independence (Theorem 7.4).  In production
+    // this path should never be reached — all supported platforms have
+    // RDRAND (x86), RNDR (ARM64), BCryptGenRandom (Windows), or /dev/urandom.
     return 0;
 }
 

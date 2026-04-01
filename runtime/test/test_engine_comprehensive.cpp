@@ -144,7 +144,7 @@ TEST(EngineBlob, KeyDerivationCorrect) {
     // Verify keys were derived (fast_key, integrity_key are in VmImmutable)
     auto imm = engine->shared_immutable();
     uint8_t expected_fast[16];
-    Crypto::blake3_kdf(seed, "fast", 4, expected_fast, 16);
+    Crypto::blake3_keyed_hash(seed, reinterpret_cast<const uint8_t*>("fast"), 4, expected_fast, 16);
     EXPECT_EQ(std::memcmp(imm->fast_key, expected_fast, 16), 0);
 }
 
@@ -1116,31 +1116,33 @@ TEST(EngineOramOblivious, NonceMonotonicallyIncreases) {
 // 14. Anti-tamper: corrupted blob rejected by BlobView
 // ============================================================================
 
-TEST(EngineAntiTamper, CorruptedBlobRejected) {
+TEST(EngineAntiTamper, CorruptedMacRejected) {
     uint8_t seed[32]; fill_seed(seed);
     TestBB bb{}; bb.bb_id = 1; bb.epoch = 0;
     bb.live_regs_bitmap = 0xFFFF;
     fill_epoch(bb.epoch_seed, 0xD0);
-    bb.instructions = {{VmOpcode::HALT, none(), 0, 0, 0}};
+    // Use 2 instructions so execution reaches BB boundary (MAC check)
+    bb.instructions = {
+        {VmOpcode::NOP, none(), 0, 0, 0},
+        {VmOpcode::HALT, none(), 0, 0, 0},
+    };
 
     auto blob = build_test_blob(seed, {bb});
 
-    // Corrupt an instruction byte
-    if (blob.size() > 40) blob[40] ^= 0xFF;
+    // Corrupt the MAC section (after instructions + pool + metadata).
+    // This causes BB MAC verification to fail without corrupting the
+    // instruction ciphertext (which would produce garbage operand types).
+    auto& hdr = *reinterpret_cast<BlobHeader*>(blob.data());
+    uint32_t mac_off = blob_section_mac(hdr);
+    if (mac_off < blob.size()) blob[mac_off] ^= 0xFF;
 
     auto engine = VmEngine<DebugPolicy>::create(blob.data(), blob.size(), seed);
-    // Engine creation may succeed but execution should fail on MAC check
-    if (engine.has_value()) {
-        auto r = engine->execute();
-        // Either MAC fails or instruction decrypts to garbage opcode
-        // Both are acceptable anti-tamper responses
-        if (r.has_value()) {
-            // If it somehow executed, the result should be wrong
-            // (corrupted instruction unlikely to be HALT with correct return)
-        }
-    }
-    // The important thing: no crash, no UB — tampered blob is handled gracefully
-    SUCCEED();
+    ASSERT_TRUE(engine.has_value());
+
+    auto r = engine->execute();
+    // BB MAC should fail at BB boundary (step 11)
+    ASSERT_FALSE(r.has_value());
+    EXPECT_EQ(r.error(), DiagnosticCode::BBMacVerificationFailed);
 }
 
 // ============================================================================

@@ -41,15 +41,8 @@ using namespace Common::VM::Crypto;
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Derive bb_enc_seed = BLAKE3_keyed(stored_seed, "enc" || bb_id_le32)[0:8]
-static void derive_bb_enc_seed(const uint8_t stored_seed[32],
-                               uint32_t bb_id,
-                               uint8_t out[8]) noexcept {
-    uint8_t msg[7];
-    std::memcpy(msg, "enc", 3);
-    std::memcpy(msg + 3, &bb_id, 4);
-    blake3_keyed_hash(stored_seed, msg, 7, out, 8);
-}
+// derive_bb_enc_seed removed: bb_enc_seeds are now pre-derived in VmImmutable
+// during VmEngine::create() and stored in BBMetadata.  No stored_seed at runtime.
 
 /// Update enc_state: SipHash(enc_state_as_key_zeropadded_16, opcode(2)||aux(4))
 static uint64_t update_enc_state_impl(uint64_t enc_state,
@@ -206,14 +199,17 @@ void resolve_operands(const VmImmutable& imm,
     //   ratcheted after each instruction.  This key determines the Speck
     //   permutation used to encode register values.  Only REG operands are
     //   in this domain -- POOL, MEM, and NONE are already plaintext.
-    Speck64_RoundKeys rk;
-    Speck64_KeySchedule(exec.insn_fpe_key, rk);
-    XEX_Tweaks tw;
-    XEX_ComputeTweaks(rk, tw);
+    // SecureLocal ensures round keys and tweaks are zeroed on scope exit.
+    // Without this, an attacker could recover insn_fpe_key[j] by inverting
+    // Speck's key schedule from stale round keys on the stack (Theorem 7.1).
+    SecureLocal<Speck64_RoundKeys> rk;
+    Speck64_KeySchedule(exec.insn_fpe_key, rk.val);
+    SecureLocal<XEX_Tweaks> tw;
+    XEX_ComputeTweaks(rk.val, tw.val);
 
     // Operand A: FPE decode if REG, passthrough otherwise
     if (insn.operand_a_type == VM_OPERAND_REG) {
-        insn.plain_a = FPE_Decode(rk, tw, insn.reg_a, insn.resolved_a.bits);
+        insn.plain_a = FPE_Decode(rk.val, tw.val, insn.reg_a, insn.resolved_a.bits);
     } else {
         // POOL, MEM, NONE: resolved value IS the plaintext
         insn.plain_a = insn.resolved_a.bits;
@@ -221,19 +217,11 @@ void resolve_operands(const VmImmutable& imm,
 
     // Operand B: same logic
     if (insn.operand_b_type == VM_OPERAND_REG) {
-        insn.plain_b = FPE_Decode(rk, tw, insn.reg_b, insn.resolved_b.bits);
+        insn.plain_b = FPE_Decode(rk.val, tw.val, insn.reg_b, insn.resolved_b.bits);
     } else {
         insn.plain_b = insn.resolved_b.bits;
     }
-
-    // NOTE: rk and tw are stack-local and will be overwritten.
-    // The caller (step()) will re-derive them if needed for FPE_Encode
-    // of the handler result.  This is intentional -- the key may ratchet
-    // between decode and encode if the instruction has side effects.
-    //
-    // For paranoid cleanup we could secure_zero rk/tw here, but the
-    // key schedule is re-derivable from insn_fpe_key which is in exec,
-    // so there's no additional secret exposure from stack residue.
+    // rk, tw auto-zeroed by SecureLocal destructor
 }
 
 // ---------------------------------------------------------------------------
@@ -290,12 +278,9 @@ enter_basic_block(VmExecution& exec,
 
     const BBMetadata& target = imm.bb_metadata[static_cast<size_t>(bb_idx)];
 
-    // 2. Derive bb_enc_seed and reset enc_state (unchanged from doc 15)
-    uint8_t enc_seed_bytes[8];
-    derive_bb_enc_seed(imm.stored_seed, target.bb_id, enc_seed_bytes);
-
+    // 2. Use pre-derived bb_enc_seed from BBMetadata (no stored_seed needed)
     uint64_t enc_seed_u64 = 0;
-    std::memcpy(&enc_seed_u64, enc_seed_bytes, 8);
+    std::memcpy(&enc_seed_u64, target.bb_enc_seed, 8);
     exec.enc_state = enc_seed_u64;
 
     // 3. Reset instruction tracking
@@ -316,29 +301,29 @@ enter_basic_block(VmExecution& exec,
 
     // 5. Evolve bb_chain_state BEFORE deriving the new key.
     //
-    // chain_state_new = BLAKE3(stored_seed, chain_state_old || bb_id_le32)
+    // chain_state_new = BLAKE3_KEYED(chain_evolution_key, old_state || bb_id)
+    //
+    // Doc 16 §5 step 2: chain evolution uses a pre-derived key (NOT stored_seed,
+    // which was zeroed during create()).  The chain_evolution_key is derived
+    // from stored_seed once during init and stored in VmImmutable.
     //
     // WHY evolve before key derivation:
     //   The chain state must incorporate the target BB identity so that
     //   entering the same BB via different paths yields different states.
-    //   We evolve first, then derive the key from the evolved state.
-    //   This ensures the FPE key depends on the full path including the
-    //   current BB, not just the path up to the previous BB.
-    //
-    // WHY stored_seed as the BLAKE3 key:
-    //   Using stored_seed (the root secret) as the hash key makes the
-    //   chain state evolution a keyed PRF.  An attacker who doesn't know
-    //   stored_seed cannot predict the chain state evolution, even if they
-    //   know the BB graph topology and the old chain state.
     {
         uint8_t evolve_msg[36];  // 32 (old chain state) + 4 (bb_id)
         std::memcpy(evolve_msg, exec.bb_chain_state, 32);
         std::memcpy(evolve_msg + 32, &target.bb_id, 4);
 
         uint8_t new_chain_state[32];
-        blake3_keyed_hash(imm.stored_seed, evolve_msg, 36,
+        blake3_keyed_hash(imm.chain_evolution_key, evolve_msg, 36,
                           new_chain_state, 32);
+
+        // Zero old chain state before overwriting (forward secrecy)
+        secure_zero(exec.bb_chain_state, 32);
         std::memcpy(exec.bb_chain_state, new_chain_state, 32);
+        secure_zero(evolve_msg, sizeof(evolve_msg));
+        secure_zero(new_chain_state, sizeof(new_chain_state));
     }
 
     // 6. Derive new insn_fpe_key from evolved chain state
@@ -436,7 +421,7 @@ verify_bb_mac(const VmImmutable& imm,
 
     // Derive bb_enc_seed for this BB
     uint8_t enc_seed_bytes[8];
-    derive_bb_enc_seed(imm.stored_seed, bb.bb_id, enc_seed_bytes);
+    std::memcpy(enc_seed_bytes, bb.bb_enc_seed, 8);
 
     uint64_t enc_state = 0;
     std::memcpy(&enc_state, enc_seed_bytes, 8);
@@ -467,9 +452,9 @@ verify_bb_mac(const VmImmutable& imm,
                 std::memcpy(rk_ctx, "rekey", 5);
                 std::memcpy(rk_ctx + 5, &rekey_counter, 4);
                 uint8_t rk_mat[16];
-                blake3_kdf(imm.stored_seed,
-                           reinterpret_cast<const char*>(rk_ctx), 9,
-                           rk_mat, 16);
+                // Use pre-derived rekey_key (stored_seed was zeroed)
+                blake3_keyed_hash(imm.rekey_key,
+                                  rk_ctx, 9, rk_mat, 16);
                 uint8_t es[8];
                 std::memcpy(es, &enc_state, 8);
                 enc_state = siphash_2_4(rk_mat, es, 8);
@@ -492,7 +477,10 @@ verify_bb_mac(const VmImmutable& imm,
     uint64_t computed_mac_u64 = 0;
     std::memcpy(&computed_mac_u64, computed_mac, 8);
 
-    if (computed_mac_u64 != stored_mac)
+    // Constant-time comparison: XOR is data-independent; the compiler
+    // cannot short-circuit it.  Prevents timing side-channel on MAC check.
+    uint64_t diff = computed_mac_u64 ^ stored_mac;
+    if (diff != 0)
         return tl::make_unexpected(DiagnosticCode::BBMacVerificationFailed);
 
     return {};
@@ -511,7 +499,7 @@ void replay_enc_state(VmExecution& exec, const VmEpoch& epoch,
     // Derive bb_enc_seed from scratch (enter_basic_block already set enc_state,
     // but we need the seed for the keystream replay).
     uint8_t enc_seed_bytes[8];
-    derive_bb_enc_seed(imm.stored_seed, bb.bb_id, enc_seed_bytes);
+    std::memcpy(enc_seed_bytes, bb.bb_enc_seed, 8);
 
     uint64_t es = 0;
     std::memcpy(&es, enc_seed_bytes, 8);
@@ -539,9 +527,9 @@ void replay_enc_state(VmExecution& exec, const VmEpoch& epoch,
             std::memcpy(rk_ctx, "rekey", 5);
             std::memcpy(rk_ctx + 5, &cnt, 4);
             uint8_t rk_mat[16];
-            blake3_kdf(imm.stored_seed,
-                       reinterpret_cast<const char*>(rk_ctx), 9,
-                       rk_mat, 16);
+            // Use pre-derived rekey_key (stored_seed was zeroed)
+            blake3_keyed_hash(imm.rekey_key,
+                              rk_ctx, 9, rk_mat, 16);
             uint8_t esb[8];
             std::memcpy(esb, &es, 8);
             es = siphash_2_4(rk_mat, esb, 8);
