@@ -102,6 +102,10 @@ if(ENABLE_TESTS)
                 vmpilot_options vmpilot_sanitizer)
     gtest_discover_tests(test_tls_helpers)
 
+    # ── Doc 16 crypto primitive tests ──
+
+    vmpilot_add_runtime_test(test_doc16_crypto SOURCES test/test_doc16_crypto.cpp)
+
     # ── Opcode coverage tests (doc 16 compliance) ──
 
     foreach(_t IN ITEMS
