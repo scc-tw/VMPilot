@@ -19,12 +19,21 @@
 
 #if defined(__x86_64__) && !defined(_WIN32)
 
+// Mach-O (macOS) requires a leading underscore on C symbols; ELF does not.
+#if defined(__APPLE__)
+#define SYM(name) _##name
+#else
+#define SYM(name) name
+#endif
+
     .text
-    .globl platform_call
-    .type  platform_call, @function
+    .globl SYM(platform_call)
+#if !defined(__APPLE__)
+    .type  SYM(platform_call), @function
+#endif
     .p2align 4
 
-platform_call:
+SYM(platform_call):
     pushq   %rbp
     movq    %rsp, %rbp
     pushq   %r12
@@ -101,20 +110,26 @@ platform_call:
     popq    %rbp
     ret
 
-    .size platform_call, . - platform_call
+#if !defined(__APPLE__)
+    .size SYM(platform_call), . - SYM(platform_call)
+#endif
 
 // ─────────────────────────────────────────────────────────────────────
 // platform_call_struct — on x86-64 SysV, struct ptr is already in
 // int_regs[0] via classify_args (rdi).  Just delegate to platform_call.
 // ─────────────────────────────────────────────────────────────────────
 
-    .globl platform_call_struct
-    .type  platform_call_struct, @function
+    .globl SYM(platform_call_struct)
+#if !defined(__APPLE__)
+    .type  SYM(platform_call_struct), @function
+#endif
 
-platform_call_struct:
+SYM(platform_call_struct):
     // rdi = desc (same as platform_call), rsi = struct_ptr (ignored — already in int_regs[0])
-    jmp     platform_call
+    jmp     SYM(platform_call)
 
-    .size platform_call_struct, . - platform_call_struct
+#if !defined(__APPLE__)
+    .size SYM(platform_call_struct), . - SYM(platform_call_struct)
+#endif
 
 #endif  // __x86_64__ && !_WIN32
