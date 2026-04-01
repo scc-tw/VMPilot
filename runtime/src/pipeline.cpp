@@ -110,6 +110,7 @@ fetch_decrypt_decode(const VmImmutable& imm,
     decoded.reg_b           = insn.reg_b();
     decoded.plaintext_opcode = insn.opcode;
     decoded.aux             = insn.aux;
+    decoded.full_plaintext_insn = plain_u64;
 
     return decoded;
 }
@@ -155,6 +156,13 @@ static RegVal resolve_one(const VmImmutable& imm,
         case VM_OPERAND_MEM: {
             // Guest external memory (Space 2, direct access).
             // Read raw value -> decode through GlobalMemTables -> plaintext.
+            //
+            // SECURITY NOTE: There are intentionally no bounds checks here.
+            // VMPilot's threat model assumes it is obfuscating trusted C++ code
+            // (Man-At-The-End attack model), not sandboxing untrusted code.
+            // The protected code must legitimately access the host process's
+            // global data, stack, and heap. Restricting memory access would
+            // break standard C++ execution capabilities.
             //
             // WHY decode to plaintext here (not FPE-encode into register domain):
             //   Doc 16 handlers expect plain_a/plain_b as plaintext.  For MEM

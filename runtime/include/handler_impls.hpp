@@ -114,6 +114,12 @@ struct HandlerTraits<VmOpcode::LOAD, P> {
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable& im, const DecodedInsn& i) noexcept {
+        // SECURITY NOTE: There are intentionally no bounds checks here.
+        // VMPilot's threat model assumes it is obfuscating trusted C++ code
+        // (Man-At-The-End attack model), not sandboxing untrusted code.
+        // The protected code must legitimately access the host process's
+        // global data, stack, and heap. Restricting memory access would
+        // break standard C++ execution capabilities.
         auto addr = static_cast<uintptr_t>(static_cast<int64_t>(i.aux) + e.load_base_delta);
         uint64_t raw = 0;
         std::memcpy(&raw, reinterpret_cast<const uint8_t*>(addr), 8);
@@ -133,6 +139,10 @@ struct HandlerTraits<VmOpcode::STORE, P> {
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable& im, const DecodedInsn& i) noexcept {
+        // SECURITY NOTE: Intentional lack of bounds checking.
+        // Similar to LOAD, the VM must have unrestricted access to the
+        // host process's memory space to correctly execute the obfuscated
+        // application logic. This is not a sandbox.
         auto addr = static_cast<uintptr_t>(static_cast<int64_t>(i.aux) + e.load_base_delta);
         // Encode plaintext to global memory domain for guest storage
         uint64_t mem = im.mem.encode_lut().apply(i.plain_a);

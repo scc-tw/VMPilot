@@ -633,22 +633,21 @@ VmEngine<Policy, Oram>::step() noexcept
         }
 
         // ── Phase G: Key ratchet ────────────────────────────────────────
-        // next_key = BLAKE3_KEYED_128(current_key, fingerprint || opcode || aux)
+        // next_key = BLAKE3_KEYED_128(current_key, fingerprint || full_insn)
         //
         // The ratchet message includes:
         //   - fingerprint (16 bytes): binds next key to ALL register state
-        //   - opcode (2 bytes): binds next key to the instruction executed
-        //   - aux (4 bytes): binds next key to the instruction's immediate
+        //   - full_insn (8 bytes): binds next key to the entire decrypted instruction
+        //     (including opcode, operand types, registers, and aux).
         //
         // One-way property of BLAKE3 means current_key cannot be recovered
         // from next_key -- this is the forward-secrecy guarantee.
         SecureLocal<uint8_t[16]> next_key;
         {
-            uint8_t ratchet_msg[22];  // 16 + 2 + 4
+            uint8_t ratchet_msg[24];  // 16 + 8
             std::memcpy(ratchet_msg, fingerprint.val, 16);
-            std::memcpy(ratchet_msg + 16, &insn.plaintext_opcode, 2);
-            std::memcpy(ratchet_msg + 18, &insn.aux, 4);
-            blake3_keyed_128(exec_.insn_fpe_key, ratchet_msg, 22,
+            std::memcpy(ratchet_msg + 16, &insn.full_plaintext_insn, 8);
+            blake3_keyed_128(exec_.insn_fpe_key, ratchet_msg, 24,
                              next_key.val, 16);
             secure_zero(ratchet_msg, sizeof(ratchet_msg));
         }

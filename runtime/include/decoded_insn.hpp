@@ -70,6 +70,9 @@ struct DecodedInsn {
     /// Auxiliary field (pool index / memory offset / BB target / padding).
     uint32_t aux;
 
+    /// Full 8-byte decrypted instruction (used for full entropy key ratcheting).
+    uint64_t full_plaintext_insn;
+
     /// Resolved operand values — domain depends on operand type.
     ///
     /// For REG operands: FPE-encoded value from exec.regs[] (register domain).
