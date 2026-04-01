@@ -186,3 +186,23 @@ if(ENABLE_TESTS)
     )
     gtest_discover_tests(test_doc16_crypto)
 endif()
+
+# ---------------------------------------------------------------------------
+# Examples (always built, no gtest dependency)
+# ---------------------------------------------------------------------------
+set(EXAMPLE_INCLUDE_DIRS
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/test
+    ${CMAKE_SOURCE_DIR}/common/include
+    ${CMAKE_SOURCE_DIR}/common/include/vm
+    ${CMAKE_SOURCE_DIR}/third_party/expected/include
+)
+
+add_executable(dry_run_example       ${CMAKE_CURRENT_SOURCE_DIR}/example/dry_run.cpp)
+add_executable(hello_world_example   ${CMAKE_CURRENT_SOURCE_DIR}/example/hello_world.cpp)
+add_executable(arithmetic_example    ${CMAKE_CURRENT_SOURCE_DIR}/example/arithmetic.cpp)
+
+foreach(tgt dry_run_example hello_world_example arithmetic_example)
+    target_include_directories(${tgt} PRIVATE ${EXAMPLE_INCLUDE_DIRS})
+    target_link_libraries(${tgt} PRIVATE VMPilot_Runtime)
+endforeach()
