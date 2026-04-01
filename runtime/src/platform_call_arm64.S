@@ -12,12 +12,21 @@
 
 #if defined(__aarch64__)
 
+// Mach-O (macOS) requires a leading underscore on C symbols; ELF does not.
+#if defined(__APPLE__)
+#define SYM(name) _##name
+#else
+#define SYM(name) name
+#endif
+
     .text
-    .globl platform_call
-    .type  platform_call, %function
+    .globl SYM(platform_call)
+#if !defined(__APPLE__)
+    .type  SYM(platform_call), %function
+#endif
     .p2align 4
 
-platform_call:
+SYM(platform_call):
     // Save callee-saved registers and link register.
     stp     x29, x30, [sp, #-32]!
     mov     x29, sp
@@ -55,6 +64,8 @@ platform_call:
     ldp     x29, x30, [sp], #32
     ret
 
-    .size platform_call, . - platform_call
+#if !defined(__APPLE__)
+    .size SYM(platform_call), . - SYM(platform_call)
+#endif
 
 #endif  // __aarch64__
