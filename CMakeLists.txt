@@ -15,25 +15,28 @@ elseif (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W4 /WX /utf-8")
 endif()
 
-# Enable debug symbols, sanitizer, and disable optimization for debug build
+# Enable debug symbols and disable optimization for debug build.
+# Sanitizers are applied per-target (not globally) to avoid breaking
+# third_party code — GCC 15 + UBsan rejects constexpr fn-ptr comparisons
+# in abseil's hash_policy_traits.h.
 if (CMAKE_BUILD_TYPE MATCHES "Debug")
     if (CMAKE_CXX_COMPILER_ID MATCHES "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-        # Disable sanitizer if compiler is ARM or target is ARM
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -fno-omit-frame-pointer -O0")
         if (NOT (CMAKE_SYSTEM_PROCESSOR MATCHES "arm" OR CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64"))
-            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -fsanitize=address -fno-omit-frame-pointer -O0")
+            set(VMPILOT_SANITIZER_FLAGS "-fsanitize=address,undefined")
         else ()
             message(WARNING "Sanitizer is not supported on ARM")
+            set(VMPILOT_SANITIZER_FLAGS "")
         endif ()
     elseif (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-        # Enable sanitizer if MSVC version supports it
         if (CMAKE_CXX_FLAGS MATCHES ".*(/sdl|-sdl).*")
-            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /fsanitize=address")
+            set(VMPILOT_SANITIZER_FLAGS "/fsanitize=address")
         else ()
             message(WARNING "Your MSVC version does not support sanitizer")
+            set(VMPILOT_SANITIZER_FLAGS "")
         endif ()
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zi /Od")
     endif ()
-    # Define DEBUG macro
     add_compile_definitions(DEBUG)
 endif ()
 
@@ -95,6 +98,16 @@ if (ENABLE_TESTS)
     set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(googletest)
     enable_testing()
+endif()
+
+# Sanitizer interface target — link this to get ASan+UBsan.
+# Kept separate from CMAKE_CXX_FLAGS so third_party code (abseil, protobuf)
+# is never compiled with sanitizers.  GCC 15 + UBsan rejects constexpr
+# fn-ptr null comparisons in abseil's hash_policy_traits.h.
+add_library(vmpilot_sanitizer INTERFACE)
+if (VMPILOT_SANITIZER_FLAGS)
+    target_compile_options(vmpilot_sanitizer INTERFACE ${VMPILOT_SANITIZER_FLAGS})
+    target_link_options(vmpilot_sanitizer INTERFACE ${VMPILOT_SANITIZER_FLAGS})
 endif()
 
 add_subdirectory(common)

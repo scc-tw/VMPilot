@@ -73,6 +73,7 @@ target_link_libraries(VMPilot_Runtime
     PUBLIC  nlohmann_json::nlohmann_json
             opcode_table
     PRIVATE Threads::Threads
+            vmpilot_sanitizer
 )
 
 # ---------------------------------------------------------------------------
@@ -90,6 +91,7 @@ if(ENABLE_TESTS)
     target_link_libraries(runtime_smoke_test
         PRIVATE VMPilot_Runtime
                 GTest::gtest_main
+                vmpilot_sanitizer
     )
 
     include(GoogleTest)
@@ -105,6 +107,7 @@ if(ENABLE_TESTS)
         PRIVATE VMPilot_Runtime
                 Threads::Threads
                 GTest::gtest_main
+                vmpilot_sanitizer
     )
     gtest_discover_tests(test_tls_helpers)
 
@@ -114,6 +117,7 @@ if(ENABLE_TESTS)
     target_link_libraries(test_phase1_foundation
         PRIVATE VMPilot_Runtime
                 GTest::gtest_main
+                vmpilot_sanitizer
     )
     gtest_discover_tests(test_phase1_foundation)
 
@@ -123,6 +127,7 @@ if(ENABLE_TESTS)
     target_link_libraries(test_phase2_state
         PRIVATE VMPilot_Runtime
                 GTest::gtest_main
+                vmpilot_sanitizer
     )
     gtest_discover_tests(test_phase2_state)
 
@@ -132,6 +137,7 @@ if(ENABLE_TESTS)
     target_link_libraries(test_phase3_handlers
         PRIVATE VMPilot_Runtime
                 GTest::gtest_main
+                vmpilot_sanitizer
     )
     gtest_discover_tests(test_phase3_handlers)
 
@@ -144,6 +150,7 @@ if(ENABLE_TESTS)
     target_link_libraries(test_phase4_engine
         PRIVATE VMPilot_Runtime
                 GTest::gtest_main
+                vmpilot_sanitizer
     )
     gtest_discover_tests(test_phase4_engine)
 
@@ -156,6 +163,7 @@ if(ENABLE_TESTS)
     target_link_libraries(test_engine_comprehensive
         PRIVATE VMPilot_Runtime
                 GTest::gtest_main
+                vmpilot_sanitizer
     )
     gtest_discover_tests(test_engine_comprehensive)
 
@@ -186,6 +194,7 @@ if(ENABLE_TESTS)
         target_link_libraries(${_t}
             PRIVATE VMPilot_Runtime
                     GTest::gtest_main
+                    vmpilot_sanitizer
         )
         gtest_discover_tests(${_t})
     endforeach()
@@ -202,6 +211,7 @@ if(ENABLE_TESTS)
     target_link_libraries(test_vm_runner
         PRIVATE VMPilot_Runtime
                 GTest::gtest_main
+                vmpilot_sanitizer
     )
     gtest_discover_tests(test_vm_runner)
 endif()

@@ -46,7 +46,7 @@ set (LIBS ${LIBS}
 )
 
 add_library(${LIB_NAME} STATIC ${SRC_FILES})
-target_link_libraries(${LIB_NAME} ${LIBS})
+target_link_libraries(${LIB_NAME} ${LIBS} vmpilot_sanitizer)
 
 # Tests
 if(ENABLE_TESTS)
