@@ -37,8 +37,11 @@ platform_call:
     testl   %eax, %eax
     jz      .Lno_stack_sysv
 
-    // Align to 16: round up to nearest 16
-    addl    $15, %eax
+    // Align: need (3 pushes + alloc + call) to be 16-aligned at callee.
+    // 3 pushes = 24B, entry was 8-misaligned → 32 total.
+    // After alloc N + call 8 → 32+N+8 = 40+N. Need 40+N ≡ 0 (mod 16).
+    // N is rounded to 16 → 40 mod 16 = 8. Add 8 to fix.
+    addl    $15+8, %eax
     andl    $-16, %eax
     subq    %rax, %rsp
 
