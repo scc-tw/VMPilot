@@ -91,6 +91,29 @@
             }
         },
         {
+            "name": "bench",
+            "displayName": "Benchmark (Release + benchmarks)",
+            "description": "Pipeline performance benchmarks — must be Release for meaningful results",
+            "inherits": "ninja",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "VMPILOT_ENABLE_BENCHMARKS": "ON",
+                "VMPILOT_ENABLE_TESTS": "OFF",
+                "VMPILOT_ENABLE_SANITIZERS": "OFF"
+            }
+        },
+        {
+            "name": "bench-win",
+            "displayName": "Benchmark — Windows (Release + benchmarks)",
+            "inherits": "vs2022",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "VMPILOT_ENABLE_BENCHMARKS": "ON",
+                "VMPILOT_ENABLE_TESTS": "OFF",
+                "VMPILOT_ENABLE_SANITIZERS": "OFF"
+            }
+        },
+        {
             "name": "ci",
             "displayName": "CI (Debug + tests + sanitizers)",
             "inherits": "dev"
@@ -108,6 +131,8 @@
         { "name": "release-win", "configurePreset": "release-win", "configuration": "Release" },
         { "name": "reldbg",      "configurePreset": "reldbg" },
         { "name": "minsize",     "configurePreset": "minsize" },
+        { "name": "bench",       "configurePreset": "bench" },
+        { "name": "bench-win",   "configurePreset": "bench-win", "configuration": "Release" },
         { "name": "ci",          "configurePreset": "ci" },
         { "name": "ci-win",      "configurePreset": "ci-win", "configuration": "Debug" }
     ],

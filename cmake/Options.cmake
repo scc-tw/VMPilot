@@ -14,6 +14,7 @@ endif()
 
 # ── Feature toggles ─────────────────────────────────────────────────────────
 option(VMPILOT_ENABLE_TESTS       "Build test targets"                          OFF)
+option(VMPILOT_ENABLE_BENCHMARKS  "Build pipeline performance benchmarks"       OFF)
 option(VMPILOT_ENABLE_SANITIZERS  "Enable ASan + UBsan on first-party targets"  OFF)
 option(VMPILOT_ENABLE_LTO         "Enable link-time optimisation (Release)"     OFF)
 

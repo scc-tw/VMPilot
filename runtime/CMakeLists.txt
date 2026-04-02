@@ -151,3 +151,8 @@ if(ENABLE_TESTS)
         SOURCES test/test_vm_runner.cpp
         EXTRA_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/include)
 endif()
+
+# ── Benchmarks (opt-in) ─────────────────────────────────────────────────
+if(VMPILOT_ENABLE_BENCHMARKS)
+    add_subdirectory(bench)
+endif()
