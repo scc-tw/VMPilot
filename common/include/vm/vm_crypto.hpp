@@ -10,6 +10,15 @@ namespace VMPilot::Common::VM::Crypto {
 
 // -------------------------------------------------------------------------
 // SipHash-2-4  (header-only, standalone implementation)
+//
+// WHY HEADER-ONLY:
+//   SipHash is the innermost crypto primitive in the instruction decryption
+//   hot path — called at least once per VM instruction (siphash_keystream),
+//   and 8× per ORAM access (siphash_expand).  Keeping it inline allows the
+//   compiler to inline sip_round() into siphash_2_4() and eliminate call
+//   overhead in tight loops.  Moving to a .cpp would add function call
+//   overhead on every instruction fetch and ORAM line, measurably degrading
+//   throughput.  Pure computation, no platform-specific code.
 // -------------------------------------------------------------------------
 
 namespace detail {

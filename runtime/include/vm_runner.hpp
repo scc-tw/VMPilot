@@ -29,6 +29,8 @@
 ///       .program([](auto& p) { /* ... */ })
 ///       .run_interactive();
 ///   while (!ctrl.is_halted()) ctrl.step();
+///
+/// Implementation: vm_runner.cpp (explicit instantiations for all Policy×Oram combos).
 
 #include "vm_engine.hpp"
 #include "vm_policy.hpp"
@@ -75,32 +77,15 @@ public:
     [[nodiscard]] bool is_halted() const noexcept { return halted_; }
 
     /// Execute a single VM instruction.
-    /// Returns the step result, or an error.
-    [[nodiscard]] tl::expected<VmResult, DiagnosticCode> step() {
-        if (!engine_) return tl::make_unexpected(DiagnosticCode::BlobHeaderInvalid);
-        if (halted_) return VmResult::Halted;
-
-        auto r = engine_->step();
-        if (!r) return r;
-        if (*r == VmResult::Halted) halted_ = true;
-        return r;
-    }
+    [[nodiscard]] tl::expected<VmResult, DiagnosticCode> step();
 
     /// Execute until halt or error.
-    [[nodiscard]] tl::expected<VmExecResult, DiagnosticCode> run_to_completion() {
-        if (!engine_) return tl::make_unexpected(DiagnosticCode::BlobHeaderInvalid);
-        return engine_->execute();
-    }
+    [[nodiscard]] tl::expected<VmExecResult, DiagnosticCode> run_to_completion();
 
     /// Get the return value (decoded r0) after halting.
     /// Only valid after is_halted() returns true.
     /// Doc 16: uses FPE_Decode with current insn_fpe_key (replaces LUT decode).
-    [[nodiscard]] uint64_t return_value() const {
-        if (!engine_) return 0;
-        return Common::VM::Crypto::FPE_Decode(
-            engine_->execution().insn_fpe_key, 0,
-            engine_->execution().regs[0].bits);
-    }
+    [[nodiscard]] uint64_t return_value() const;
 
     /// Read-only access to the engine (for inspection).
     [[nodiscard]] const VmEngine<Policy, Oram>& engine() const { return *engine_; }
@@ -116,11 +101,7 @@ private:
     std::unique_ptr<VmEngine<Policy, Oram>> engine_holder_;
     bool halted_ = false;
 
-    void set_engine(tl::expected<VmEngine<Policy, Oram>, DiagnosticCode>&& eng) {
-        if (!eng) throw std::runtime_error("VmRunner: engine creation failed");
-        engine_holder_ = std::make_unique<VmEngine<Policy, Oram>>(std::move(*eng));
-        engine_ = engine_holder_.get();
-    }
+    void set_engine(tl::expected<VmEngine<Policy, Oram>, DiagnosticCode>&& eng);
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -211,30 +192,10 @@ public:
     }
 
     /// Build the blob and execute until halt.
-    /// Returns the execution result (halted + return value).
-    [[nodiscard]] tl::expected<VmExecResult, DiagnosticCode> run() {
-        auto blob = build_blob_internal();
-
-        auto engine = VmEngine<Policy, Oram>::create(
-            blob.data(), blob.size(), seed_,
-            load_base_delta_, init_regs_, num_init_regs_);
-        if (!engine) return tl::make_unexpected(engine.error());
-
-        return engine->execute();
-    }
+    [[nodiscard]] tl::expected<VmExecResult, DiagnosticCode> run();
 
     /// Build the blob and return a StepController for interactive execution.
-    [[nodiscard]] StepController<Policy, Oram> run_interactive() {
-        StepController<Policy, Oram> ctrl;
-        ctrl.blob_storage_ = build_blob_internal();
-
-        auto engine = VmEngine<Policy, Oram>::create(
-            ctrl.blob_storage_.data(), ctrl.blob_storage_.size(), seed_,
-            load_base_delta_, init_regs_, num_init_regs_);
-        ctrl.set_engine(std::move(engine));
-
-        return ctrl;
-    }
+    [[nodiscard]] StepController<Policy, Oram> run_interactive();
 
 private:
     uint8_t seed_[32] = {};
@@ -246,24 +207,7 @@ private:
     std::function<void(ProgramBuilder&)> build_fn_;
 
     /// Build the encrypted blob from the program definition.
-    std::vector<uint8_t> build_blob_internal() {
-        if (!build_fn_)
-            throw std::runtime_error("VmRunner: no program defined (call .program())");
-
-        // 1. Assemble the program via ProgramBuilder
-        ProgramBuilder pb(&registry_);
-        build_fn_(pb);
-
-        const auto& builder_bbs = pb.basic_blocks();
-        const auto& builder_pool = pb.pool_entries();
-
-        // 2. Scan all instructions for NATIVE_CALL and auto-compute call_site_ip.
-        //    Build the BlobNativeCall vector from the registry.
-        std::vector<BlobNativeCall> blob_natives = compute_native_calls(builder_bbs);
-
-        // 3. Build the blob
-        return build_blob(seed_, builder_bbs, builder_pool, blob_natives, debug_mode_);
-    }
+    std::vector<uint8_t> build_blob_internal();
 
     /// Scan assembled BBs for NATIVE_CALL instructions and build
     /// the BlobNativeCall vector with auto-computed global IPs.
@@ -278,46 +222,7 @@ private:
     /// The result is sorted by transition entry index (the blob expects
     /// transition entries in index order).
     std::vector<BlobNativeCall> compute_native_calls(
-        const std::vector<BuilderBB>& bbs) const
-    {
-        if (registry_.size() == 0) return {};
-
-        // Pre-allocate: one entry per registered native
-        std::vector<BlobNativeCall> result(registry_.size());
-        std::vector<bool> seen(registry_.size(), false);
-
-        uint32_t global_ip = 0;
-        for (const auto& bb : bbs) {
-            for (const auto& insn : bb.instructions) {
-                if (insn.opcode == Common::VM::VmOpcode::NATIVE_CALL) {
-                    uint32_t idx = insn.aux;  // transition entry index
-                    if (idx < registry_.size()) {
-                        const auto& desc = registry_.at(idx);
-                        result[idx].call_site_ip = global_ip;
-                        result[idx].arg_count = NativeRegistry::pack_arg_count(
-                            desc.arg_count, desc.fp_mask, desc.is_variadic);
-                        result[idx].target_addr = desc.fn_addr;
-                        seen[idx] = true;
-                    }
-                }
-                ++global_ip;
-            }
-        }
-
-        // Fill any natives that weren't referenced in the program
-        // (they still need valid transition entries).
-        for (uint32_t i = 0; i < registry_.size(); ++i) {
-            if (!seen[i]) {
-                const auto& desc = registry_.at(i);
-                result[i].call_site_ip = 0;  // unused
-                result[i].arg_count = NativeRegistry::pack_arg_count(
-                    desc.arg_count, desc.fp_mask, desc.is_variadic);
-                result[i].target_addr = desc.fn_addr;
-            }
-        }
-
-        return result;
-    }
+        const std::vector<BuilderBB>& bbs) const;
 };
 
 }  // namespace VMPilot::Runtime

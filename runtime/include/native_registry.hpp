@@ -14,13 +14,13 @@
 ///   2. Inject a reference into ProgramBuilder so `native_call("name")`
 ///      resolves the transition entry index at build time
 ///   3. Provide the TestNativeCall vector for blob construction
+///
+/// Implementation: native_registry.cpp.
 
 #include <cstdint>
-#include <cstring>
 #include <string>
 #include <vector>
 #include <unordered_map>
-#include <stdexcept>
 
 namespace VMPilot::Runtime {
 
@@ -42,52 +42,24 @@ public:
     NativeRegistry() = default;
 
     /// Register a native function by name.
-    ///
-    /// @param name        human-readable identifier (must be unique)
-    /// @param fn_addr     function pointer cast to uint64_t
-    /// @param arg_count   number of arguments (0-8)
-    /// @param fp_mask     floating-point argument mask (default: 0)
-    /// @param is_variadic whether function is variadic (default: false)
-    /// @return            the auto-assigned index for this native
     uint32_t add(const std::string& name, uint64_t fn_addr,
                  uint8_t arg_count, uint8_t fp_mask = 0,
-                 bool is_variadic = false) {
-        if (name_to_index_.count(name))
-            throw std::runtime_error("NativeRegistry: duplicate name '" + name + "'");
-
-        uint32_t idx = static_cast<uint32_t>(entries_.size());
-        entries_.push_back({name, fn_addr, arg_count, fp_mask, is_variadic, idx});
-        name_to_index_[name] = idx;
-        return idx;
-    }
+                 bool is_variadic = false);
 
     /// Look up a native by name. Returns the index, or throws if not found.
-    [[nodiscard]] uint32_t index_of(const std::string& name) const {
-        auto it = name_to_index_.find(name);
-        if (it == name_to_index_.end())
-            throw std::runtime_error("NativeRegistry: unknown native '" + name + "'");
-        return it->second;
-    }
+    [[nodiscard]] uint32_t index_of(const std::string& name) const;
 
     /// Check if a name is registered.
-    [[nodiscard]] bool has(const std::string& name) const noexcept {
-        return name_to_index_.count(name) > 0;
-    }
+    [[nodiscard]] bool has(const std::string& name) const noexcept;
 
     /// Get descriptor by index.
-    [[nodiscard]] const NativeDescriptor& at(uint32_t idx) const {
-        return entries_.at(idx);
-    }
+    [[nodiscard]] const NativeDescriptor& at(uint32_t idx) const;
 
     /// Number of registered natives.
-    [[nodiscard]] uint32_t size() const noexcept {
-        return static_cast<uint32_t>(entries_.size());
-    }
+    [[nodiscard]] uint32_t size() const noexcept;
 
     /// All registered descriptors (in index order).
-    [[nodiscard]] const std::vector<NativeDescriptor>& entries() const noexcept {
-        return entries_;
-    }
+    [[nodiscard]] const std::vector<NativeDescriptor>& entries() const noexcept;
 
     /// Build the packed arg_count field for TransitionEntry.
     ///
@@ -96,6 +68,8 @@ public:
     ///   [11:4]  = fp_arg_mask
     ///   [15:12] = flags (bit 12: is_variadic)
     ///   [31:16] = 0
+    ///
+    /// WHY inline: trivial bit-packing, pure computation, no platform dependency.
     [[nodiscard]] static uint32_t pack_arg_count(
         uint8_t argc, uint8_t fp_mask = 0, bool variadic = false) noexcept
     {

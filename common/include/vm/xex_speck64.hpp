@@ -5,6 +5,14 @@
 /// @file xex_speck64.hpp
 /// @brief XEX tweakable encryption mode over Speck64/128 for register FPE.
 ///
+/// WHY HEADER-ONLY:
+///   XEX encrypt/decrypt and FPE_Encode/FPE_Decode are called on every
+///   VM instruction: Phase E (encode handler result), Phase H (re-encode
+///   all 16 registers).  A single step() performs 17+ XEX operations.
+///   Inlining allows the compiler to fold XEX_Encrypt → Speck64_Encrypt
+///   into a single call chain without function-call overhead.  Pure
+///   computation over Speck64 (itself header-only), no platform-specific code.
+///
 /// WHY XEX MODE (Rogaway 2004):
 ///
 ///   Each VM register needs a DIFFERENT encryption even under the SAME key —

@@ -5,6 +5,14 @@
 /// @file speck64.hpp
 /// @brief Speck64/128 lightweight block cipher — header-only, constant-time.
 ///
+/// WHY HEADER-ONLY:
+///   Speck64 key schedule, encrypt, and decrypt are called on every VM
+///   instruction during Phases E-H (FPE encode, key ratchet re-encode).
+///   Each step() invocation performs at minimum 2 key schedules + 32+
+///   block cipher calls.  Inlining eliminates per-call overhead and lets
+///   the compiler unroll the 27-round loop.  Pure ARX computation, no
+///   platform-specific code, no branches — constant-time by construction.
+///
 /// WHY SPECK64/128:
 ///
 ///   Doc 16 (Forward-Secrecy Extension) requires a 64-bit block cipher for
