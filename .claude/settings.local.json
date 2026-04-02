@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python py2vmp.py snake_logic.py -o snake_vm.gen.hpp)",
+      "Bash(cmake --preset bench-win)",
+      "Bash(cmake --build build/bench-win --target vmpilot_bench --config Release)",
+      "Bash(./build/bench-win/bin/Release/vmpilot_bench.exe --iterations=11 --insns=500 --policy=all)",
+      "WebSearch"
+    ]
+  }
+}

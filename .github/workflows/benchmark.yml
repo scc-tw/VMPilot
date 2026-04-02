@@ -117,6 +117,13 @@ jobs:
         shell: bash
         run: python3 scripts/bench_to_chart.py bench_raw.json > bench_chart.json
 
+      # Deinit submodules so github-action-benchmark can switch to gh-pages
+      # without hitting "fatal: not a git repository: .git/modules/..."
+      - name: Deinit submodules for gh-pages switch
+        if: github.event_name == 'push'
+        shell: bash
+        run: git submodule deinit --all --force 2>/dev/null || true
+
       - name: Publish to GitHub Pages
         if: github.event_name == 'push'
         uses: benchmark-action/github-action-benchmark@v1
