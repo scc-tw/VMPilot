@@ -47,6 +47,9 @@ PEEditor::open(const std::string& path,
                     "failed to load PE: " + path + " (" +
                     std::string(coffi::to_string(loaded.error())) + ")");
     ed.impl_->pe = std::move(*loaded);
+    if (!ed.impl_->pe.win_header())
+        return fail(diag, DC::PatchBinaryReadFailed,
+                    "PE missing Windows NT header: " + path);
 
     // Retrieve image base from the Windows NT header
     ed.impl_->image_base = ed.impl_->pe.win_header()->image_base;
