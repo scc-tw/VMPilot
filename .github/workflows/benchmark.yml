@@ -136,6 +136,7 @@ jobs:
           benchmark-data-dir-path: bench/${{ matrix.platform }}
           comment-on-alert: false
           fail-on-alert: false
+          max-items-in-chart: 300
 
   # ── PR comment with comparison table ──
   comment:
