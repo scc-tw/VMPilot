@@ -1,0 +1,200 @@
+name: Benchmark
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write        # push to gh-pages
+  pull-requests: write   # post PR comments
+
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            generator: Ninja
+            cmake_args: >-
+              -DCMAKE_BUILD_TYPE=Release
+              -DCMAKE_C_COMPILER=gcc-14
+              -DCMAKE_CXX_COMPILER=g++-14
+            build_args: ""
+            bin: ./build/bin/vmpilot_bench
+            platform: linux
+          - os: macos-latest
+            generator: Ninja
+            cmake_args: "-DCMAKE_BUILD_TYPE=Release"
+            build_args: ""
+            bin: ./build/bin/vmpilot_bench
+            platform: macos
+          - os: windows-latest
+            generator: "Visual Studio 17 2022"
+            cmake_args: "-A x64"
+            build_args: "--config Release"
+            bin: ./build/bin/Release/vmpilot_bench.exe
+            platform: windows
+
+    runs-on: ${{ matrix.os }}
+    name: bench (${{ matrix.platform }})
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # ── Submodules ──
+      - name: Compute submodule cache key
+        id: submod-hash
+        shell: bash
+        run: |
+          echo "hash=$(git ls-tree HEAD third_party common/crypto | git hash-object --stdin)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache submodules
+        id: cache-submodules
+        uses: actions/cache@v4
+        with:
+          path: |
+            third_party
+            common/crypto
+          key: submodules-${{ runner.os }}-${{ steps.submod-hash.outputs.hash }}
+
+      - name: Init submodules
+        if: steps.cache-submodules.outputs.cache-hit != 'true'
+        run: git submodule update --init --recursive --depth 1
+
+      # ── CPM cache ──
+      - name: Cache CPM
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: cpm-bench-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'sdk/src/CMakeLists.txt') }}
+          restore-keys: cpm-bench-${{ runner.os }}-
+
+      # ── Install Ninja ──
+      - name: Install Ninja (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      # ── Build ──
+      - name: Configure
+        shell: bash
+        run: |
+          cmake -B build \
+            -G "${{ matrix.generator }}" \
+            ${{ matrix.cmake_args }} \
+            -DVMPILOT_ENABLE_BENCHMARKS=ON
+
+      - name: Build
+        run: cmake --build build ${{ matrix.build_args }} --target vmpilot_bench -j
+
+      # ── Run benchmark ──
+      - name: Run benchmark
+        shell: bash
+        run: ${{ matrix.bin }} --iterations=11 --insns=500 --policy=debug > bench_raw.json
+
+      # ── Upload raw result ──
+      - name: Upload raw JSON
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ matrix.platform }}
+          path: bench_raw.json
+
+      # ── Store in gh-pages (push to main/dev only — becomes baseline) ──
+      - name: Convert for chart
+        if: github.event_name == 'push'
+        shell: bash
+        run: python3 scripts/bench_to_chart.py bench_raw.json > bench_chart.json
+
+      - name: Publish to GitHub Pages
+        if: github.event_name == 'push'
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: ${{ matrix.platform }}
+          tool: customSmallerIsBetter
+          output-file-path: bench_chart.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          benchmark-data-dir-path: bench/${{ matrix.platform }}
+          comment-on-alert: false
+          fail-on-alert: false
+
+  # ── PR comment with comparison table ──
+  comment:
+    if: github.event_name == 'pull_request'
+    needs: bench
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Download all platform results
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bench-*
+          merge-multiple: false
+
+      # Fetch baselines from gh-pages
+      - name: Fetch baselines
+        shell: bash
+        run: |
+          mkdir -p baselines
+          for p in linux macos windows; do
+            # Try to download the latest raw JSON stored in gh-pages
+            # The benchmark-action stores chart data, not raw JSON.
+            # So we use the artifact from the latest main/dev run instead.
+            echo "{}" > baselines/${p}.json
+          done
+          # Try to get baseline artifacts from latest dev/main run
+          gh run list --branch dev --workflow Benchmark --status completed --limit 1 --json databaseId -q '.[0].databaseId' > /tmp/run_id.txt || true
+          RUN_ID=$(cat /tmp/run_id.txt)
+          if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
+            for p in linux macos windows; do
+              gh run download "$RUN_ID" --name "bench-${p}" --dir "baselines/${p}_dl" 2>/dev/null || true
+              if [ -f "baselines/${p}_dl/bench_raw.json" ]; then
+                cp "baselines/${p}_dl/bench_raw.json" "baselines/${p}.json"
+              fi
+            done
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Generate markdown comparison
+      - name: Generate comparison
+        shell: bash
+        run: |
+          echo "## Pipeline Benchmark" > comment.md
+          echo "" >> comment.md
+          for p in linux macos windows; do
+            if [ -f "bench-${p}/bench_raw.json" ]; then
+              BASE_ARG=""
+              if [ -s "baselines/${p}.json" ] && [ "$(cat baselines/${p}.json)" != "{}" ]; then
+                BASE_ARG="--baseline baselines/${p}.json"
+              fi
+              python3 scripts/bench_compare.py \
+                --current "bench-${p}/bench_raw.json" \
+                $BASE_ARG \
+                --platform "${p}" >> comment.md
+              echo "" >> comment.md
+            fi
+          done
+          echo "" >> comment.md
+          echo "_Commit: \`$(echo ${{ github.event.pull_request.head.sha }} | cut -c1-8)\` | Iterations: 11 | Insns: 500_" >> comment.md
+
+      # Post / update PR comment
+      - name: Post PR comment
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: comment.md
+          comment-tag: benchmark-results
