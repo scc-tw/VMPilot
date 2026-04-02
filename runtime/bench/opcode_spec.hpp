@@ -36,13 +36,20 @@ struct OpcodeBenchSpec {
     uint32_t    max_n;      ///< 0 → use default; e.g. PUSH/POP → 200
 };
 
-/// Master table.  Phase 1 covers RegReg + RegOnly + NoOperand (~35 opcodes).
-/// Later phases fill in the remaining shapes.
+/// Master table — all 55 opcodes.  Shapes that cannot be auto-generated
+/// from the spec table alone (Custom) are built via hand-written factories
+/// in program_factory.cpp.
 // clang-format off
 inline constexpr OpcodeBenchSpec SPECS[] = {
     // ── Cat 0: Data Movement ────────────────────────────────────────
-    {VmOpcode::MOVE,       Shape::RegReg,    0, 1, 0, nullptr, 0},
-    // LOAD, STORE, PUSH, POP, LOAD_CONST, LOAD_CTX, STORE_CTX → Phase 2+
+    {VmOpcode::MOVE,       Shape::RegReg,    0, 1, 0, nullptr,   0},
+    {VmOpcode::LOAD,       Shape::Memory,    0, 0, 0, nullptr,   0},
+    {VmOpcode::STORE,      Shape::Memory,    0, 0, 0, nullptr,   0},
+    {VmOpcode::PUSH,       Shape::Oram,      0, 0, 0, nullptr, 200},
+    {VmOpcode::POP,        Shape::Oram,      0, 0, 0, nullptr, 200},
+    {VmOpcode::LOAD_CONST, Shape::PoolReg,   0, 0, 0, nullptr,   0},
+    {VmOpcode::LOAD_CTX,   Shape::CtxAccess, 0, 0, 0, nullptr,   0},  // aux=0 → vm_ip
+    {VmOpcode::STORE_CTX,  Shape::CtxAccess, 0, 0, 1, nullptr,   0},  // aux=1 → vm_sp
 
     // ── Cat 1: Arithmetic ───────────────────────────────────────────
     {VmOpcode::ADD,        Shape::RegReg,    0, 1, 0, nullptr, 0},
@@ -71,6 +78,12 @@ inline constexpr OpcodeBenchSpec SPECS[] = {
     {VmOpcode::SET_FLAG,   Shape::NoOperand, 0, 0, 1, nullptr, 0},
     {VmOpcode::GET_FLAG,   Shape::RegOnly,   0, 0, 0, nullptr, 0},
 
+    // ── Cat 4: Control Flow ─────────────────────────────────────────
+    {VmOpcode::JMP,         Shape::Custom, 0, 0, 0, nullptr,  50},
+    {VmOpcode::JCC,         Shape::Custom, 0, 0, 0, nullptr,  50},
+    {VmOpcode::NATIVE_CALL, Shape::Custom, 0, 0, 0, nullptr, 200},
+    // CALL_VM, RET_VM, HALT — skipped (nesting/termination constraints)
+
     // ── Cat 5: Width/Extension ──────────────────────────────────────
     {VmOpcode::SEXT8,      Shape::RegOnly,   0, 0, 0, nullptr, 0},
     {VmOpcode::SEXT16,     Shape::RegOnly,   0, 0, 0, nullptr, 0},
@@ -81,14 +94,19 @@ inline constexpr OpcodeBenchSpec SPECS[] = {
     {VmOpcode::TRUNC8,     Shape::RegOnly,   0, 0, 0, nullptr, 0},
     {VmOpcode::TRUNC16,    Shape::RegOnly,   0, 0, 0, nullptr, 0},
 
-    // ── Cat 6: Atomic (NoOperand for FENCE) ─────────────────────────
-    {VmOpcode::FENCE,      Shape::NoOperand, 0, 0, 0, nullptr, 0},
+    // ── Cat 6: Atomic ───────────────────────────────────────────────
+    {VmOpcode::LOCK_ADD,    Shape::Memory, 0, 1, 0, nullptr, 0},
+    {VmOpcode::XCHG,        Shape::Memory, 0, 1, 0, nullptr, 0},
+    {VmOpcode::CMPXCHG,     Shape::Memory, 0, 1, 0, nullptr, 0},
+    {VmOpcode::FENCE,       Shape::NoOperand, 0, 0, 0, nullptr, 0},
+    {VmOpcode::ATOMIC_LOAD, Shape::Memory, 0, 0, 0, nullptr, 0},
 
     // ── Cat 7: VM Internal ──────────────────────────────────────────
     {VmOpcode::NOP,             Shape::NoOperand, 0, 0, 0, nullptr, 0},
     {VmOpcode::CHECK_INTEGRITY, Shape::NoOperand, 0, 0, 0, nullptr, 0},
     {VmOpcode::CHECK_DEBUG,     Shape::NoOperand, 0, 0, 0, nullptr, 0},
     {VmOpcode::MUTATE_ISA,      Shape::NoOperand, 0, 0, 0, nullptr, 0},
+    // REKEY, SAVE_EPOCH, RESYNC — skipped (require enc_state tracking / nesting)
 };
 // clang-format on
 

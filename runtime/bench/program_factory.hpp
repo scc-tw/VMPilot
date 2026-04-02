@@ -17,6 +17,9 @@ struct BenchProgram {
     uint32_t measured_insn_count = 0;  ///< N (target opcode repetitions)
     uint32_t total_insn_count    = 0;  ///< setup + N + HALT
     VmOpcode opcode              = VmOpcode::NOP;
+    bool     needs_guest_memory  = false;  ///< Memory/Atomic shapes
+    bool     needs_native        = false;  ///< NATIVE_CALL shape
+    uint64_t native_fn           = 0;      ///< trivial native function ptr
 };
 
 /// Build a micro-benchmark for a single opcode from its spec.

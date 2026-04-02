@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <vector>
 
 namespace VMPilot::Bench {
@@ -24,28 +25,36 @@ struct RunConfig {
     uint32_t warmup     = 2;    ///< discarded warm-up runs
 };
 
+/// Guest memory buffer for Memory/Atomic benchmarks.
+/// Aligned and large enough for any benchmark workload.
+alignas(64) static uint64_t g_guest_mem[64] = {};
+
 /// Run all registered specs and return results with baseline subtraction.
 template<typename Policy, typename Oram>
 std::vector<BenchResult> run_all(const RunConfig& cfg) {
     const uint32_t N = cfg.insns;
     const uint32_t total_samples = cfg.warmup + cfg.iterations;
 
+    auto time_program = [&](const BenchProgram& prog) -> uint64_t {
+        int64_t delta = prog.needs_guest_memory
+            ? static_cast<int64_t>(reinterpret_cast<uintptr_t>(g_guest_mem))
+            : 0;
+        auto engine = VmEngine<Policy, Oram>::create(
+            prog.blob.data(), prog.blob.size(), prog.seed, delta);
+        if (!engine) return 0;
+        auto t0 = Clock::now();
+        auto r  = engine->execute();
+        auto t1 = Clock::now();
+        return r ? Clock::elapsed_ns(t0, t1) : 0;
+    };
+
     // ── NOP baseline ────────────────────────────────────────────────
     auto nop_prog = build_nop_baseline(N);
     std::vector<uint64_t> nop_samples;
     nop_samples.reserve(cfg.iterations);
-
     for (uint32_t s = 0; s < total_samples; ++s) {
-        auto engine = VmEngine<Policy, Oram>::create(
-            nop_prog.blob.data(), nop_prog.blob.size(), nop_prog.seed);
-        if (!engine) continue;
-
-        auto t0 = Clock::now();
-        auto r  = engine->execute();
-        auto t1 = Clock::now();
-
-        if (s >= cfg.warmup && r)
-            nop_samples.push_back(Clock::elapsed_ns(t0, t1));
+        uint64_t ns = time_program(nop_prog);
+        if (s >= cfg.warmup && ns > 0) nop_samples.push_back(ns);
     }
     auto nop_result = compute_stats("NOP_BASELINE", VmOpcode::NOP,
                                      nop_prog.measured_insn_count, nop_samples);
@@ -58,12 +67,6 @@ std::vector<BenchResult> run_all(const RunConfig& cfg) {
     for (size_t si = 0; si < SPEC_COUNT; ++si) {
         const auto& spec = SPECS[si];
 
-        // Skip shapes not yet implemented
-        if (spec.shape != Shape::RegReg &&
-            spec.shape != Shape::RegOnly &&
-            spec.shape != Shape::NoOperand)
-            continue;
-
         auto prog = build_opcode_program(spec, N);
         if (prog.blob.empty()) continue;
 
@@ -73,18 +76,11 @@ std::vector<BenchResult> run_all(const RunConfig& cfg) {
 
         std::vector<uint64_t> samples;
         samples.reserve(cfg.iterations);
-
         for (uint32_t s = 0; s < total_samples; ++s) {
-            auto engine = VmEngine<Policy, Oram>::create(
-                prog.blob.data(), prog.blob.size(), prog.seed);
-            if (!engine) continue;
-
-            auto t0 = Clock::now();
-            auto r  = engine->execute();
-            auto t1 = Clock::now();
-
-            if (s >= cfg.warmup && r)
-                samples.push_back(Clock::elapsed_ns(t0, t1));
+            // Reset guest memory between runs
+            std::memset(g_guest_mem, 0, sizeof(g_guest_mem));
+            uint64_t ns = time_program(prog);
+            if (s >= cfg.warmup && ns > 0) samples.push_back(ns);
         }
 
         auto result = compute_stats(name, spec.opcode,
