@@ -22,8 +22,9 @@ if (VMPILOT_ENABLE_SANITIZERS)
                 -fsanitize=address,undefined)
         endif()
     elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-        # MSVC supports ASan only (no UBsan)
-        target_compile_options(vmpilot_sanitizer INTERFACE /fsanitize=address)
-        target_link_options(vmpilot_sanitizer INTERFACE /fsanitize=address)
+        # MSVC ASan compile flags (/fsanitize=address) and /INCREMENTAL:NO
+        # are set globally in root CMakeLists.txt so that ALL targets
+        # (including third-party) share the same annotation metadata.
+        # This target is kept as a no-op on MSVC for interface compatibility.
     endif()
 endif()

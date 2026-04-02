@@ -27,6 +27,10 @@ add_compile_definitions(
     TEST_DATA_DATA_REFS="${CMAKE_SOURCE_DIR}/data/data_refs/bin"
 )
 
+# Note: MSVC ASan is set globally in root CMakeLists.txt for consistency.
+# GCC/Clang sanitizers propagate from linked libraries (VMPilot_Common, etc.)
+# via vmpilot_sanitizer INTERFACE target.
+
 # --- Test targets ---
 
 add_executable(test_native_function_base test_native_function_base.cpp)

@@ -18,6 +18,7 @@ include(cmake/Options.cmake)            # VMPILOT_ENABLE_TESTS, _SANITIZERS, _LT
 include(cmake/CompilerWarnings.cmake)   # vmpilot_options INTERFACE target
 include(cmake/Sanitizers.cmake)         # vmpilot_sanitizer INTERFACE target
 include(cmake/LTO.cmake)               # CMAKE_INTERPROCEDURAL_OPTIMIZATION
+include(cmake/MSVCGlobal.cmake)         # /utf-8, /fsanitize=address (global)
 include(cmake/Dependencies.cmake)       # googletest (conditional)
 
 # ─────────────────────────────────────────────────────────────────────────────

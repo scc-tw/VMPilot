@@ -10,13 +10,13 @@ string(REPLACE "/WX" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 string(REPLACE "-Werror" "" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
 string(REPLACE "-Werror" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 
-# Suppress all warnings from third-party code (abseil/protobuf)
+# Suppress all warnings from third-party code (abseil/protobuf).
+# On MSVC we only strip /WX (above) — adding /w would conflict with abseil's
+# /W3 and protobuf's /W1 target_compile_options, causing D9025 spam.
+# Both libraries are clean at their own warning levels so no extra noise appears.
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "GNU")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -w")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w")
-elseif (MSVC)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /w")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /w")
 endif()
 
 # Abseil — pinned submodule (LTS 2026-01-07), built before protobuf

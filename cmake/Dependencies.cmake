@@ -55,6 +55,8 @@ if (VMPILOT_ENABLE_TESTS)
     )
     set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
     set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+    # Note: MSVC ASan (/fsanitize=address) and /utf-8 are set globally in
+    # the root CMakeLists.txt, so GoogleTest inherits them automatically.
     FetchContent_MakeAvailable(googletest)
     enable_testing()
     include(GoogleTest)

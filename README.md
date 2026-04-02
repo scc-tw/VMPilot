@@ -152,7 +152,7 @@ The runtime VM implements the **doc 16 forward-secrecy extension**:
 
 - [CMake](https://cmake.org/download/) 3.20+
 - C++17 compiler (GCC 14+, Clang 18+, MSVC 2022+, Apple Clang)
-- [Ninja](https://github.com/ninja-build/ninja) (recommended)
+- [Ninja](https://github.com/ninja-build/ninja) (required on Linux/macOS; not needed for Windows `*-win` presets)
 
 ### Third-party
 
@@ -196,7 +196,7 @@ cmake --list-presets    # show all available presets
 git submodule update --init --recursive
 
 cmake --preset dev-win
-cmake --build --preset dev-win
+cmake --build --preset dev-win --parallel
 ctest --preset dev-win
 
 # Other presets: release-win, ci-win
