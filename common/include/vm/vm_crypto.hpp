@@ -44,11 +44,24 @@ inline void sip_round(uint64_t& v0, uint64_t& v1,
 }
 
 /// Read a little-endian uint64_t from a byte pointer.
+///
+/// WHY byte-swap fallback:
+///   SipHash is defined over little-endian 64-bit words.  On little-endian
+///   hosts (x86, ARM in LE mode) memcpy produces the correct value directly.
+///   On big-endian hosts the bytes must be reversed.  Without this, the
+///   SipHash output would silently differ between platforms — every key
+///   derivation, MAC, and instruction decryption would break.
 [[nodiscard]] inline uint64_t le64(const uint8_t* p) noexcept {
     uint64_t v = 0;
     std::memcpy(&v, p, 8);
-    // On big-endian systems this would need a byte swap, but in practice
-    // VMPilot targets little-endian (x86/ARM).
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    // GCC / Clang: compile-time endianness detection
+    v = __builtin_bswap64(v);
+#elif defined(_MSC_VER) && defined(_M_PPC)
+    // MSVC on big-endian targets (theoretical — no current MSVC BE target)
+    v = _byteswap_uint64(v);
+#endif
+    // Little-endian (x86, ARM, RISC-V default): v is already correct.
     return v;
 }
 

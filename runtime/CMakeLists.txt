@@ -29,11 +29,25 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# Platform-specific runtime initialization (payload section discovery)
+# ---------------------------------------------------------------------------
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set(RUNTIME_INIT_SRC src/vm_runtime_init_darwin.cpp)
+elseif(WIN32)
+    set(RUNTIME_INIT_SRC src/vm_runtime_init_windows.cpp)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+    set(RUNTIME_INIT_SRC src/vm_runtime_init_linux.cpp)
+else()
+    message(WARNING "Unsupported OS for runtime init — payload auto-discovery disabled")
+    set(RUNTIME_INIT_SRC "")
+endif()
+
+# ---------------------------------------------------------------------------
 # Static library
 # ---------------------------------------------------------------------------
 add_library(VMPilot_Runtime STATIC
     src/vm_stub_entry.cpp
-    src/vm_runtime_init.cpp
+    ${RUNTIME_INIT_SRC}
     src/vm_state.cpp
     src/vm_engine.cpp
     src/vm_runner.cpp
