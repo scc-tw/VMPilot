@@ -7,6 +7,7 @@
 
 #include <vm/vm_opcode.hpp>
 
+#include <cstddef>
 #include <cstdint>
 
 namespace VMPilot::Bench {
