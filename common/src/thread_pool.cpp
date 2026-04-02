@@ -69,6 +69,19 @@ void ThreadPool::worker_loop(size_t id) {
         if (task) {
             task();
             if (pending_tasks_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                // Lock wait_mtx_ before notifying to prevent lost wakeup.
+                //
+                // WHY: wait_all() holds wait_mtx_ while checking the predicate
+                // (pending_tasks_ == 0) and atomically releasing the lock to
+                // enter cv.wait().  If we notify WITHOUT the lock, there is a
+                // window between predicate-check and wait-enter where the
+                // notification fires to nobody — permanent hang.  Holding the
+                // lock here serialises with the waiter: either the waiter sees
+                // the predicate true (and never waits), or it has already
+                // entered wait (and our notify wakes it).
+                {
+                    std::lock_guard<std::mutex> wlock(wait_mtx_);
+                }
                 wait_cv_.notify_all();
             }
             continue;

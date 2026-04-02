@@ -74,7 +74,7 @@ auto ThreadPool::submit(F&& f, Args&&... args)
 
     auto future = task->get_future();
 
-    pending_tasks_.fetch_add(1, std::memory_order_relaxed);
+    pending_tasks_.fetch_add(1, std::memory_order_acq_rel);
 
     // Round-robin to a worker queue
     size_t idx = next_queue_.fetch_add(1, std::memory_order_relaxed) %
