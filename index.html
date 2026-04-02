@@ -17,6 +17,7 @@
     .tab:hover { color: #c9d1d9; }
     .tab.active { color: #c9d1d9; background: #161b22; border-color: #30363d;
                   border-bottom-color: #161b22; margin-bottom: -2px; }
+    .sep { width: 1px; background: #30363d; margin: 4px 8px; }
     iframe { width: 100%; height: calc(100vh - 120px); border: none; background: #161b22; }
   </style>
 </head>
@@ -26,14 +27,16 @@
     <p class="meta">12-phase FPE ratchet pipeline &mdash; per-opcode ns/insn, handler overhead, IPS</p>
   </header>
   <div class="tabs">
-    <button class="tab active" onclick="show('linux',this)">Linux (GCC 14)</button>
-    <button class="tab" onclick="show('windows',this)">Windows (MSVC)</button>
-    <button class="tab" onclick="show('macos',this)">macOS (Apple Clang)</button>
+    <button class="tab" onclick="show('bench/bar.html',this)">Snapshot</button>
+    <div class="sep"></div>
+    <button class="tab active" onclick="show('bench/linux/index.html',this)">Linux</button>
+    <button class="tab" onclick="show('bench/windows/index.html',this)">Windows</button>
+    <button class="tab" onclick="show('bench/macos/index.html',this)">macOS</button>
   </div>
   <iframe id="frame" src="bench/linux/index.html"></iframe>
   <script>
-    function show(platform, el) {
-      document.getElementById('frame').src = 'bench/' + platform + '/index.html';
+    function show(url, el) {
+      document.getElementById('frame').src = url;
       document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
       el.classList.add('active');
     }

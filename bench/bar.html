@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>VMPilot Benchmark — Opcode Snapshot</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+           background: #0d1117; color: #c9d1d9; padding: 24px; }
+    h2 { color: #58a6ff; margin-bottom: 4px; }
+    .meta { color: #8b949e; font-size: 13px; margin-bottom: 16px; }
+    .controls { margin-bottom: 16px; display: flex; gap: 12px; align-items: center; }
+    .controls label { color: #8b949e; font-size: 13px; }
+    .controls select { background: #161b22; color: #c9d1d9; border: 1px solid #30363d;
+                       padding: 4px 8px; border-radius: 4px; font-size: 13px; }
+    .chart-wrap { background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+                  padding: 16px; margin-bottom: 24px; }
+    canvas { width: 100% !important; }
+    .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+    .legend-item { font-size: 12px; color: #8b949e; display: flex; align-items: center; gap: 4px; }
+    .legend-dot { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  </style>
+</head>
+<body>
+  <h2>Opcode Performance Snapshot</h2>
+  <p class="meta" id="commit-info">Loading...</p>
+
+  <div class="controls">
+    <label>Metric:</label>
+    <select id="metric" onchange="render()">
+      <option value="total">ns/insn (total pipeline)</option>
+      <option value="handler">handler overhead (ns)</option>
+      <option value="ips">IPS (throughput)</option>
+    </select>
+  </div>
+
+  <div class="chart-wrap">
+    <canvas id="chart" height="600"></canvas>
+  </div>
+
+  <!-- Load data from all three platforms -->
+  <script>
+    const PLATFORMS = ['linux', 'windows', 'macos'];
+    const COLORS = {
+      linux:   { bg: 'rgba(88,166,255,0.7)',  border: '#58a6ff' },
+      windows: { bg: 'rgba(124,179,66,0.7)',   border: '#7cb342' },
+      macos:   { bg: 'rgba(255,167,38,0.7)',   border: '#ffa726' },
+    };
+    const CAT_COLORS = [
+      '#58a6ff', // 0 Data Movement
+      '#f78166', // 1 Arithmetic
+      '#d2a8ff', // 2 Logic
+      '#7ee787', // 3 Comparison
+      '#ffa657', // 4 Control Flow
+      '#79c0ff', // 5 Width/Extension
+      '#ff7b72', // 6 Atomic
+      '#8b949e', // 7 VM Internal
+    ];
+    const CAT_NAMES = [
+      'Data Movement', 'Arithmetic', 'Logic', 'Comparison',
+      'Control Flow', 'Width/Extension', 'Atomic', 'VM Internal'
+    ];
+
+    let allData = {};
+    let chart = null;
+
+    async function loadData() {
+      for (const p of PLATFORMS) {
+        try {
+          const resp = await fetch(p + '/data.js');
+          const text = await resp.text();
+          const json = JSON.parse(text.split('=').slice(1).join('=').trim().replace(/;$/, ''));
+          const entries = json.entries[p];
+          if (entries && entries.length > 0) {
+            allData[p] = entries[entries.length - 1]; // latest commit
+          }
+        } catch (e) {
+          console.warn('Failed to load ' + p, e);
+        }
+      }
+      render();
+    }
+
+    function extractBenches(entry, suffix) {
+      const out = {};
+      if (!entry) return out;
+      for (const b of entry.benches) {
+        if (b.name.endsWith(suffix)) {
+          const opcode = b.name.replace(suffix, '').trim();
+          out[opcode] = b.value;
+        }
+      }
+      return out;
+    }
+
+    // Map opcode to category index
+    function opcodeCategory(name) {
+      const map = {
+        MOVE:0, LOAD:0, STORE:0, PUSH:0, POP:0, LOAD_CONST:0, LOAD_CTX:0, STORE_CTX:0,
+        ADD:1, SUB:1, MUL:1, IMUL:1, DIV:1, IDIV:1, NEG:1, MOD:1,
+        AND:2, OR:2, XOR:2, NOT:2, SHL:2, SHR:2, SAR:2, ROL:2, ROR:2,
+        CMP:3, TEST:3, SET_FLAG:3, GET_FLAG:3,
+        JMP:4, JCC:4, CALL_VM:4, RET_VM:4, NATIVE_CALL:4, HALT:4,
+        SEXT8:5, SEXT16:5, SEXT32:5, ZEXT8:5, ZEXT16:5, ZEXT32:5, TRUNC8:5, TRUNC16:5,
+        LOCK_ADD:6, XCHG:6, CMPXCHG:6, FENCE:6, ATOMIC_LOAD:6,
+        NOP:7, CHECK_INTEGRITY:7, CHECK_DEBUG:7, MUTATE_ISA:7, REKEY:7, SAVE_EPOCH:7, RESYNC:7,
+      };
+      // Also handle NOP_BASELINE
+      if (name === 'NOP_BASELINE') return 7;
+      return map[name] !== undefined ? map[name] : -1;
+    }
+
+    function render() {
+      const metric = document.getElementById('metric').value;
+      const suffix = metric === 'total' ? ' (total)' :
+                     metric === 'handler' ? ' (handler)' : ' (IPS)';
+
+      // Collect all opcodes across platforms
+      const allOpcodes = new Set();
+      const platformBenches = {};
+      for (const p of PLATFORMS) {
+        platformBenches[p] = extractBenches(allData[p], suffix);
+        for (const op of Object.keys(platformBenches[p])) allOpcodes.add(op);
+      }
+
+      // Sort opcodes by category, then name
+      const opcodes = [...allOpcodes]
+        .filter(op => op !== 'NOP_BASELINE')
+        .sort((a, b) => {
+          const ca = opcodeCategory(a), cb = opcodeCategory(b);
+          return ca !== cb ? ca - cb : a.localeCompare(b);
+        });
+
+      // Build datasets (one per platform)
+      const datasets = PLATFORMS
+        .filter(p => allData[p])
+        .map(p => ({
+          label: p,
+          data: opcodes.map(op => platformBenches[p][op] || 0),
+          backgroundColor: COLORS[p].bg,
+          borderColor: COLORS[p].border,
+          borderWidth: 1,
+        }));
+
+      // Background bands by category
+      const catBands = opcodes.map(op => {
+        const c = opcodeCategory(op);
+        return CAT_COLORS[c] + '15'; // very transparent
+      });
+
+      // Update commit info
+      const first = allData[PLATFORMS.find(p => allData[p])];
+      if (first) {
+        const hash = first.commit.id.substring(0, 8);
+        const date = new Date(first.date).toLocaleString();
+        document.getElementById('commit-info').textContent =
+          'Latest: ' + hash + ' | ' + date + ' | ' +
+          opcodes.length + ' opcodes | ' +
+          (metric === 'ips' ? 'higher is better' : 'lower is better');
+      }
+
+      // Render chart
+      if (chart) chart.destroy();
+      const ctx = document.getElementById('chart').getContext('2d');
+      chart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: opcodes.map(op => {
+            const c = opcodeCategory(op);
+            return op; // + ' [' + CAT_NAMES[c] + ']';
+          }),
+          datasets: datasets,
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              labels: { color: '#c9d1d9', font: { size: 12 } },
+            },
+            tooltip: {
+              callbacks: {
+                label: function(ctx) {
+                  const unit = metric === 'ips' ? ' insn/s' : ' ns';
+                  return ctx.dataset.label + ': ' + ctx.parsed.x.toFixed(1) + unit;
+                },
+                afterLabel: function(ctx) {
+                  const op = opcodes[ctx.dataIndex];
+                  const c = opcodeCategory(op);
+                  return 'Category: ' + CAT_NAMES[c];
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              grid: { color: '#21262d' },
+              ticks: { color: '#8b949e' },
+              title: {
+                display: true,
+                text: metric === 'total' ? 'ns/insn' :
+                      metric === 'handler' ? 'handler overhead (ns)' : 'instructions/sec',
+                color: '#8b949e',
+              }
+            },
+            y: {
+              grid: { color: '#21262d' },
+              ticks: { color: '#c9d1d9', font: { family: 'monospace', size: 11 } },
+            }
+          }
+        }
+      });
+    }
+
+    loadData();
+  </script>
+</body>
+</html>
