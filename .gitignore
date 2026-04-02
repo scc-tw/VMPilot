@@ -30,6 +30,11 @@
 !data/*/bin/*.exe
 !data/*/bin/*.dll
 
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
 build/
 compile_commands.json
 .vscode/

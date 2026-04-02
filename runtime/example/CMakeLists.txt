@@ -8,8 +8,12 @@ foreach(_example_src IN LISTS RUNTIME_EXAMPLE_SOURCES)
     set(_example_target "${_example_name}_example")
 
     add_executable(${_example_target} ${_example_src})
+    # Include the source file's own directory so that generated headers
+    # sitting next to the .cpp (e.g. snake/snake_vm.gen.hpp) are found.
+    get_filename_component(_example_dir "${_example_src}" DIRECTORY)
     target_include_directories(${_example_target}
-        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+        PRIVATE ${_example_dir}
+                ${CMAKE_CURRENT_SOURCE_DIR}
                 ${CMAKE_CURRENT_SOURCE_DIR}/..
                 ${CMAKE_CURRENT_SOURCE_DIR}/../include
                 ${CMAKE_CURRENT_SOURCE_DIR}/../test
