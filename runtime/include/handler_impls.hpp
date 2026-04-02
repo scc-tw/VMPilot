@@ -236,40 +236,117 @@ struct HandlerTraits<VmOpcode::STORE_CTX, P> {
 // ===========================================================================
 // Cat 1: Arithmetic (8 opcodes)
 //
-// All arithmetic is now uniform across policies.  The old Class B (MBA) and
-// Class C (native bridge) distinction is gone — every handler receives
-// plaintext operands and returns a plaintext result.  The pipeline handles
-// all FPE encode/decode.
+// Doc 15 §3.4 classification:
+//   Class B (ADD, SUB, NEG) — MBA decomposition, 7 register-transient carry bits
+//   Class C (MUL, IMUL, DIV, IDIV, MOD) — native bridge, full plaintext transient
+//
+// Policy wiring:
+//   P::use_mba           → Class B ops use MBA decomposition (XOR+AND+SHL1 chain)
+//                           Depth controlled by P::fusion_granularity (1-4 levels)
+//   P::constant_time     → Class C ops use branchless zero-safe division
+//   !P::use_mba          → Class B ops fall back to native bridge (DebugPolicy)
+//   !P::constant_time    → Class C ops use branch-based zero check (DebugPolicy)
 // ===========================================================================
 
-/// ADD: dst = a + b
+namespace detail {
+
+/// MBA addition: a + b = (a ^ b) + 2*(a & b), applied recursively.
+///
+/// Each level replaces one addition with XOR + AND + shift + addition,
+/// progressively shredding the carry chain.  After `depth` levels the
+/// residual addition handles the remaining carries.
+///
+/// Constant-time: every level executes unconditionally (no early-out on
+/// zero carry) to prevent timing side-channels.
+inline uint64_t mba_add(uint64_t a, uint64_t b, uint8_t depth) noexcept {
+    for (uint8_t i = 0; i < depth; ++i) {
+        uint64_t x = a ^ b;           // sum without carries
+        uint64_t c = (a & b) << 1;    // carry chain shifted
+        a = x;
+        b = c;
+    }
+    return a + b;   // residual native add for remaining carries
+}
+
+/// MBA subtraction: a - b = a + (~b) + 1, then MBA the addition.
+inline uint64_t mba_sub(uint64_t a, uint64_t b, uint8_t depth) noexcept {
+    return mba_add(a, ~b + 1, depth);
+}
+
+/// MBA negation: -a = ~a + 1, then MBA the increment.
+inline uint64_t mba_neg(uint64_t a, uint8_t depth) noexcept {
+    return mba_add(~a, 1, depth);
+}
+
+/// Constant-time zero-safe division:  avoids data-dependent branch.
+/// Returns a/b when b != 0, 0 when b == 0.
+inline uint64_t ct_div(uint64_t a, uint64_t b) noexcept {
+    // mask = 0 when b==0, all-ones when b!=0
+    uint64_t nz   = b | (-b);          // MSB set iff b != 0
+    uint64_t mask = static_cast<uint64_t>(
+        -static_cast<int64_t>(nz >> 63));
+    // safe_b is 1 when b==0 (prevents hardware divide-by-zero), b otherwise
+    uint64_t safe_b = b | (~mask & 1);
+    return (a / safe_b) & mask;
+}
+
+/// Constant-time zero-safe signed division.
+inline uint64_t ct_idiv(int64_t a, int64_t b) noexcept {
+    uint64_t ub = static_cast<uint64_t>(b);
+    uint64_t nz   = ub | (-ub);
+    uint64_t mask = static_cast<uint64_t>(
+        -static_cast<int64_t>(nz >> 63));
+    int64_t safe_b = static_cast<int64_t>(ub | (~mask & 1));
+    return static_cast<uint64_t>(a / safe_b) & mask;
+}
+
+/// Constant-time zero-safe modulus.
+inline uint64_t ct_mod(uint64_t a, uint64_t b) noexcept {
+    uint64_t nz   = b | (-b);
+    uint64_t mask = static_cast<uint64_t>(
+        -static_cast<int64_t>(nz >> 63));
+    uint64_t safe_b = b | (~mask & 1);
+    return (a % safe_b) & mask;
+}
+
+}  // namespace detail
+
+/// ADD: dst = a + b  [doc 15 §3.4: Class B — MBA decomposition]
 template<typename P>
 struct HandlerTraits<VmOpcode::ADD, P> {
-    static constexpr auto security_class = SecurityClass::A;
+    static constexpr auto security_class = SecurityClass::B;
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        e.regs[i.reg_a] = RegVal(i.plain_a + i.plain_b);
+        if constexpr (P::use_mba)
+            e.regs[i.reg_a] = RegVal(
+                detail::mba_add(i.plain_a, i.plain_b, P::fusion_granularity));
+        else
+            e.regs[i.reg_a] = RegVal(i.plain_a + i.plain_b);
         return {};
     }
 };
 
-/// SUB: dst = a - b
+/// SUB: dst = a - b  [doc 15 §3.4: Class B — MBA decomposition]
 template<typename P>
 struct HandlerTraits<VmOpcode::SUB, P> {
-    static constexpr auto security_class = SecurityClass::A;
+    static constexpr auto security_class = SecurityClass::B;
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        e.regs[i.reg_a] = RegVal(i.plain_a - i.plain_b);
+        if constexpr (P::use_mba)
+            e.regs[i.reg_a] = RegVal(
+                detail::mba_sub(i.plain_a, i.plain_b, P::fusion_granularity));
+        else
+            e.regs[i.reg_a] = RegVal(i.plain_a - i.plain_b);
         return {};
     }
 };
 
-/// MUL: dst = a * b (unsigned)
+/// MUL: dst = a * b (unsigned) — native for all policies (MBA mul is future work)
 template<typename P>
 struct HandlerTraits<VmOpcode::MUL, P> {
-    static constexpr auto security_class = SecurityClass::A;
+    static constexpr auto security_class = SecurityClass::C;
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
@@ -278,10 +355,10 @@ struct HandlerTraits<VmOpcode::MUL, P> {
     }
 };
 
-/// IMUL: dst = a * b (signed)
+/// IMUL: dst = a * b (signed) — native for all policies
 template<typename P>
 struct HandlerTraits<VmOpcode::IMUL, P> {
-    static constexpr auto security_class = SecurityClass::A;
+    static constexpr auto security_class = SecurityClass::C;
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
@@ -295,11 +372,14 @@ struct HandlerTraits<VmOpcode::IMUL, P> {
 /// DIV: dst = a / b (unsigned), zero-safe
 template<typename P>
 struct HandlerTraits<VmOpcode::DIV, P> {
-    static constexpr auto security_class = SecurityClass::A;
+    static constexpr auto security_class = SecurityClass::C;
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        e.regs[i.reg_a] = RegVal(i.plain_b != 0 ? i.plain_a / i.plain_b : 0);
+        if constexpr (P::constant_time)
+            e.regs[i.reg_a] = RegVal(detail::ct_div(i.plain_a, i.plain_b));
+        else
+            e.regs[i.reg_a] = RegVal(i.plain_b != 0 ? i.plain_a / i.plain_b : 0);
         return {};
     }
 };
@@ -307,25 +387,32 @@ struct HandlerTraits<VmOpcode::DIV, P> {
 /// IDIV: dst = a / b (signed), zero-safe
 template<typename P>
 struct HandlerTraits<VmOpcode::IDIV, P> {
-    static constexpr auto security_class = SecurityClass::A;
+    static constexpr auto security_class = SecurityClass::C;
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
         auto sa = static_cast<int64_t>(i.plain_a);
         auto sb = static_cast<int64_t>(i.plain_b);
-        e.regs[i.reg_a] = RegVal(sb != 0 ? static_cast<uint64_t>(sa / sb) : 0);
+        if constexpr (P::constant_time)
+            e.regs[i.reg_a] = RegVal(detail::ct_idiv(sa, sb));
+        else
+            e.regs[i.reg_a] = RegVal(sb != 0 ? static_cast<uint64_t>(sa / sb) : 0);
         return {};
     }
 };
 
-/// NEG: dst = -a (two's complement)
+/// NEG: dst = -a (two's complement)  [doc 15 §3.4: Class B — MBA decomposition]
 template<typename P>
 struct HandlerTraits<VmOpcode::NEG, P> {
-    static constexpr auto security_class = SecurityClass::A;
+    static constexpr auto security_class = SecurityClass::B;
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        e.regs[i.reg_a] = RegVal(-i.plain_a);
+        if constexpr (P::use_mba)
+            e.regs[i.reg_a] = RegVal(
+                detail::mba_neg(i.plain_a, P::fusion_granularity));
+        else
+            e.regs[i.reg_a] = RegVal(-i.plain_a);
         return {};
     }
 };
@@ -333,21 +420,29 @@ struct HandlerTraits<VmOpcode::NEG, P> {
 /// MOD: dst = a % b (unsigned), zero-safe
 template<typename P>
 struct HandlerTraits<VmOpcode::MOD, P> {
-    static constexpr auto security_class = SecurityClass::A;
+    static constexpr auto security_class = SecurityClass::C;
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        e.regs[i.reg_a] = RegVal(i.plain_b != 0 ? i.plain_a % i.plain_b : 0);
+        if constexpr (P::constant_time)
+            e.regs[i.reg_a] = RegVal(detail::ct_mod(i.plain_a, i.plain_b));
+        else
+            e.regs[i.reg_a] = RegVal(i.plain_b != 0 ? i.plain_a % i.plain_b : 0);
         return {};
     }
 };
 
 // ===========================================================================
-// Cat 2: Logic (9 opcodes)
+// Cat 2: Logic (9 opcodes)  [doc 15 §3.4: Class A — zero plaintext]
 //
-// Previously AND/OR/XOR/NOT were Class A (composition tables, zero plaintext).
-// Now all are uniform plaintext ops — the FPE pipeline provides the
-// equivalent security via per-instruction key ratchet.
+// Class A: byte-lane LUT composition in the encoding domain, zero plaintext
+// exposure.  In the current doc 16 architecture, the pipeline provides
+// plaintext operands and Class A composition tables are NOT yet wired.
+// The FPE key ratchet provides equivalent forward secrecy.
+//
+// TODO: When superoperator infrastructure lands, Class A handlers should
+//       operate on encoded values directly via composition tables,
+//       bypassing the plaintext decode/encode phases entirely.
 // ===========================================================================
 
 /// AND: dst = a & b
@@ -465,11 +560,41 @@ struct HandlerTraits<VmOpcode::ROR, P> {
 };
 
 // ===========================================================================
-// Cat 3: Comparison (4 opcodes)
+// Cat 3: Comparison (4 opcodes)  [doc 15 §3.4: Class A — zero plaintext]
 //
-// CMP and TEST use pre-decoded plaintext operands to set flags.
+// CMP and TEST set flags from pre-decoded plaintext operands.
 // No register result — pipeline skips FPE-encode for these.
+//
+// When P::constant_time is true, flag computation uses branchless
+// arithmetic to prevent timing side-channels on the comparison result.
 // ===========================================================================
+
+namespace detail {
+
+/// Branchless flag computation for CMP.
+/// Each flag bit is computed via arithmetic, no branches.
+inline uint8_t ct_cmp_flags(uint64_t a, uint64_t b) noexcept {
+    auto sa = static_cast<int64_t>(a);
+    auto sb = static_cast<int64_t>(b);
+    int64_t diff = sa - sb;
+
+    // ZF: diff == 0  →  1 iff all bits zero
+    uint64_t zf = static_cast<uint64_t>(
+        (static_cast<int64_t>(~(diff | -diff))) >> 63) & 1;
+
+    // SF: sign bit of diff
+    uint64_t sf = (static_cast<uint64_t>(diff) >> 63) & 1;
+
+    // CF: unsigned borrow (a < b)
+    uint64_t cf = (a < b) ? 1 : 0;  // compiled to SBB on x86
+
+    // OF: signed overflow
+    uint64_t of = (static_cast<uint64_t>((sa ^ sb) & (sa ^ diff)) >> 63) & 1;
+
+    return static_cast<uint8_t>(zf | (sf << 1) | (cf << 2) | (of << 3));
+}
+
+}  // namespace detail
 
 /// CMP: set flags from signed/unsigned comparison of a and b.
 template<typename P>
@@ -478,16 +603,20 @@ struct HandlerTraits<VmOpcode::CMP, P> {
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        auto sa = static_cast<int64_t>(i.plain_a);
-        auto sb = static_cast<int64_t>(i.plain_b);
-        auto ua = i.plain_a;
-        auto ub = i.plain_b;
-        int64_t diff = sa - sb;
-        e.vm_flags = 0;
-        if (diff == 0)  e.vm_flags |= 0x01;  // ZF
-        if (diff < 0)   e.vm_flags |= 0x02;  // SF
-        if (ua < ub)    e.vm_flags |= 0x04;  // CF
-        if (((sa ^ sb) & (sa ^ diff)) < 0) e.vm_flags |= 0x08;  // OF
+        if constexpr (P::constant_time) {
+            e.vm_flags = detail::ct_cmp_flags(i.plain_a, i.plain_b);
+        } else {
+            auto sa = static_cast<int64_t>(i.plain_a);
+            auto sb = static_cast<int64_t>(i.plain_b);
+            auto ua = i.plain_a;
+            auto ub = i.plain_b;
+            int64_t diff = sa - sb;
+            e.vm_flags = 0;
+            if (diff == 0)  e.vm_flags |= 0x01;
+            if (diff < 0)   e.vm_flags |= 0x02;
+            if (ua < ub)    e.vm_flags |= 0x04;
+            if (((sa ^ sb) & (sa ^ diff)) < 0) e.vm_flags |= 0x08;
+        }
         return {};
     }
 };
@@ -500,9 +629,16 @@ struct HandlerTraits<VmOpcode::TEST, P> {
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
         uint64_t result = i.plain_a & i.plain_b;
-        e.vm_flags = 0;
-        if (result == 0) e.vm_flags |= 0x01;  // ZF
-        if (static_cast<int64_t>(result) < 0) e.vm_flags |= 0x02;  // SF
+        if constexpr (P::constant_time) {
+            uint64_t zf = static_cast<uint64_t>(
+                (static_cast<int64_t>(~(result | -result))) >> 63) & 1;
+            uint64_t sf = (result >> 63) & 1;
+            e.vm_flags = static_cast<uint8_t>(zf | (sf << 1));
+        } else {
+            e.vm_flags = 0;
+            if (result == 0) e.vm_flags |= 0x01;
+            if (static_cast<int64_t>(result) < 0) e.vm_flags |= 0x02;
+        }
         return {};
     }
 };
