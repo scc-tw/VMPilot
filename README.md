@@ -192,6 +192,11 @@ cmake --list-presets    # show all available presets
 
 ### Windows (Visual Studio)
 
+> **Note:** The `dev-win` preset enables AddressSanitizer (ASan), which
+> requires the MSVC ASan runtime DLLs on `PATH`. Use **Visual Studio
+> Developer PowerShell** (or `VsDevCmd.bat`) to ensure they are available.
+> The `release-win` preset does not require this.
+
 ```powershell
 git submodule update --init --recursive
 

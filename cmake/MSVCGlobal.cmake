@@ -20,6 +20,14 @@ add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/utf-8>)
 if (VMPILOT_ENABLE_SANITIZERS)
     add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/fsanitize=address>)
     add_link_options(/INCREMENTAL:NO)
+
+    # Copy MSVC ASan runtime DLLs to the output directory so tests can find
+    # them without requiring a Developer Command Prompt or manual PATH setup.
+    get_filename_component(_msvc_tool_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    file(GLOB _asan_dlls "${_msvc_tool_dir}/clang_rt.asan*.dll")
+    foreach(_dll IN LISTS _asan_dlls)
+        file(COPY "${_dll}" DESTINATION "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+    endforeach()
 endif()
 
 # TODO: fix the underlying alignment issues and remove these suppressions.
