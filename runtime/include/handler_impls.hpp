@@ -68,6 +68,11 @@ namespace detail {
 /// Implementation: handler_detail.cpp.
 bool evaluate_condition(uint8_t flags, uint8_t cond) noexcept;
 
+/// Branchless variant — precomputes all 10 conditions, selects via
+/// lookup table indexed by cond.  Constant-time: all conditions are
+/// always evaluated regardless of which one is actually needed.
+bool evaluate_condition_ct(uint8_t flags, uint8_t cond) noexcept;
+
 }  // namespace detail
 
 // ===========================================================================
@@ -585,8 +590,13 @@ inline uint8_t ct_cmp_flags(uint64_t a, uint64_t b) noexcept {
     // SF: sign bit of diff
     uint64_t sf = (static_cast<uint64_t>(diff) >> 63) & 1;
 
-    // CF: unsigned borrow (a < b)
-    uint64_t cf = (a < b) ? 1 : 0;  // compiled to SBB on x86
+    // CF: unsigned borrow (a < b), branchless.
+    // ~a & b catches all bits where b has a 1 and a has 0 (borrow sources).
+    // (a ^ b) has bits that differ; half-borrow propagation via AND with
+    // the XOR detects full borrow.  The MSB of the combined expression
+    // gives the borrow-out.
+    uint64_t diff_u = a - b;
+    uint64_t cf = ((~a & b) | ((~(a ^ b)) & diff_u)) >> 63;
 
     // OF: signed overflow
     uint64_t of = (static_cast<uint64_t>((sa ^ sb) & (sa ^ diff)) >> 63) & 1;
@@ -695,15 +705,26 @@ struct HandlerTraits<VmOpcode::JMP, P> {
 };
 
 /// JCC: conditional branch — evaluate condition against vm_flags.
+/// [doc 14 D3: branchless CMOV — no data-dependent branch on condition result]
 template<typename P>
 struct HandlerTraits<VmOpcode::JCC, P> {
     static constexpr auto security_class = SecurityClass::A;
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        if (detail::evaluate_condition(e.vm_flags, i.condition)) {
-            e.branch_target_bb = i.aux;
-            e.branch_taken = true;
+        if constexpr (P::constant_time) {
+            // Branchless: always write both fields.  The pipeline reads
+            // branch_taken to decide whether to transition; when false the
+            // values of branch_target_bb are harmlessly ignored.
+            bool cond = detail::evaluate_condition_ct(e.vm_flags, i.condition);
+            uint32_t mask = -static_cast<uint32_t>(cond);  // 0 or 0xFFFFFFFF
+            e.branch_target_bb = (i.aux & mask) | (e.branch_target_bb & ~mask);
+            e.branch_taken     = cond;
+        } else {
+            if (detail::evaluate_condition(e.vm_flags, i.condition)) {
+                e.branch_target_bb = i.aux;
+                e.branch_taken = true;
+            }
         }
         return {};
     }
@@ -968,25 +989,37 @@ struct HandlerTraits<VmOpcode::TRUNC16, P> {
 // ===========================================================================
 // Cat 6: Atomic (5 opcodes)
 //
-// Atomic operations read/write guest memory at physical addresses.
-// The pipeline pre-decodes plain_a (the value operand) and plain_b
-// (for CMPXCHG expected/desired).  Guest atomic memory is NOT in the
-// global memory encoding domain — it uses native plaintext because
-// atomic ops require hardware atomicity guarantees on the actual value.
+// [doc 15: LOCK_ADD = Class B (MBA on addend); XCHG/CMPXCHG/ATOMIC_LOAD
+//  = Class C native bridge; FENCE = no computation]
+//
+// Guest atomic memory uses native plaintext (hardware atomicity requires
+// actual values).  P::use_mba wires MBA decomposition for LOCK_ADD.
+// P::constant_time wires branchless flag computation for CMPXCHG.
 // ===========================================================================
 
 /// LOCK_ADD: atomic fetch-add on guest memory.
 /// plain_a = addend.  Returns old value in reg_a.
+/// [doc 15: Class B — MBA decomposition applies to the addend]
 template<typename P>
 struct HandlerTraits<VmOpcode::LOCK_ADD, P> {
-    static constexpr auto security_class = SecurityClass::A;
+    static constexpr auto security_class = SecurityClass::B;
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
         auto addr = static_cast<uintptr_t>(static_cast<int64_t>(i.aux) + e.load_base_delta);
         auto* ptr = reinterpret_cast<std::atomic<uint64_t>*>(addr);
-        uint64_t old = ptr->fetch_add(i.plain_a, std::memory_order_seq_cst);
-        e.regs[i.reg_a] = RegVal(old);
+        // MBA: decompose the addition on the loaded value
+        if constexpr (P::use_mba) {
+            uint64_t old = ptr->load(std::memory_order_seq_cst);
+            uint64_t sum = detail::mba_add(old, i.plain_a, P::fusion_granularity);
+            // CAS loop for atomicity with MBA result
+            while (!ptr->compare_exchange_weak(old, sum, std::memory_order_seq_cst))
+                sum = detail::mba_add(old, i.plain_a, P::fusion_granularity);
+            e.regs[i.reg_a] = RegVal(old);
+        } else {
+            uint64_t old = ptr->fetch_add(i.plain_a, std::memory_order_seq_cst);
+            e.regs[i.reg_a] = RegVal(old);
+        }
         return {};
     }
 };
@@ -1010,6 +1043,7 @@ struct HandlerTraits<VmOpcode::XCHG, P> {
 /// CMPXCHG: atomic compare-and-swap on guest memory.
 /// plain_a = expected, plain_b = desired.
 /// Returns old value (expected after CAS) in reg_a; ZF = success.
+/// [doc 15: branchless CMOV for D3 constant-time]
 template<typename P>
 struct HandlerTraits<VmOpcode::CMPXCHG, P> {
     static constexpr auto security_class = SecurityClass::A;
@@ -1022,7 +1056,12 @@ struct HandlerTraits<VmOpcode::CMPXCHG, P> {
         auto* ptr = reinterpret_cast<std::atomic<uint64_t>*>(addr);
         bool ok = ptr->compare_exchange_strong(expected, desired, std::memory_order_seq_cst);
         e.regs[i.reg_a] = RegVal(expected);
-        e.vm_flags = ok ? 0x01 : 0x00;
+        if constexpr (P::constant_time) {
+            // Branchless: ok maps to 0/1 via arithmetic, no branch
+            e.vm_flags = static_cast<uint8_t>(ok);
+        } else {
+            e.vm_flags = ok ? 0x01 : 0x00;
+        }
         return {};
     }
 };
