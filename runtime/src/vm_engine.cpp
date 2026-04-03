@@ -477,7 +477,179 @@ VmEngine<Policy, Oram>::step() noexcept
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// VmEngine::execute() — main loop
+// VmEngine::dispatch_unit() — Doc 19 fixed-width dispatch unit
+//
+// WHY this exists (Doc 19 §1, Doc 18 §2):
+//   The dispatch unit is the structural foundation for timing normalization.
+//   It executes N = Policy::fusion_granularity sub-instructions through the
+//   FULL Phase A-K crypto pipeline (no shortcuts), then Phase L once.
+//
+//   For N=1 (DebugPolicy), this is functionally identical to step() + Phase L.
+//   For N=4 (HighSecPolicy), it eliminates 3 interpreter loop iterations,
+//   3 indirect branches, and 3 Phase L checks — the only safe optimization
+//   axis when the VM state is cryptographically entangled (Doc 18 §0).
+//
+// STATE ISOMORPHISM (Doc 18 Theorem 4.1):
+//   dispatch_unit(σ₀) = A(…A(A(σ₀, p₁), p₂)…, pₙ)
+//   This is not an approximation — it is the definition.  The dispatch unit
+//   is a syntactic transformation (loop unrolling) of the interpreter, not
+//   a semantic optimization.
+// ═════════════════════════════════════════════════════════════════════════════
+
+template<typename Policy, typename Oram>
+tl::expected<VmResult, DiagnosticCode>
+VmEngine<Policy, Oram>::dispatch_unit() noexcept
+{
+    static const auto table = build_handler_table<Policy, Oram>();
+    constexpr uint8_t N = Policy::fusion_granularity;
+
+    // ── N sub-instructions: full Phase A-K each ─────────────────────────
+    for (uint8_t j = 0; j < N; ++j) {
+
+        // ── Phases A-C: FETCH + DECRYPT + DECODE ────────────────────────
+        auto insn_or = pipeline::fetch_decrypt_decode(*imm_, exec_, *epoch_);
+        if (!insn_or) return tl::make_unexpected(insn_or.error());
+        auto insn = *insn_or;
+
+        // ── Phase C': RESOLVE operands + FPE decode ─────────────────────
+        pipeline::resolve_operands(*imm_, exec_, *epoch_, insn);
+
+        // ── Phase D: HANDLER DISPATCH ───────────────────────────────────
+        auto r = table[static_cast<uint8_t>(insn.opcode)](
+            exec_, *epoch_, *oram_, *imm_, insn);
+        if (!r) return tl::make_unexpected(r.error());
+
+        // Zero plaintext operands after handler (Theorem 7.1).
+        secure_zero(&insn.plain_a, sizeof(insn.plain_a));
+        secure_zero(&insn.plain_b, sizeof(insn.plain_b));
+
+        // ── Phases E-I: FPE encode + fingerprint + key ratchet ──────────
+        {
+            SecureLocal<Speck64_RoundKeys> rk;
+            Speck64_KeySchedule(exec_.insn_fpe_key, rk.val);
+            SecureLocal<XEX_Tweaks> tw;
+            XEX_ComputeTweaks(rk.val, tw.val);
+
+            // Phase E: FPE-encode handler result
+            if (opcode_writes_reg(insn.opcode)) {
+                exec_.regs[insn.reg_a] = RegVal(
+                    FPE_Encode(rk.val, tw.val, insn.reg_a,
+                               exec_.regs[insn.reg_a].bits));
+            }
+
+            // Phase F: Fingerprint all 16 encoded registers
+            SecureLocal<uint8_t[16]> fingerprint;
+            {
+                uint64_t reg_bits[16];
+                for (uint8_t i = 0; i < 16; ++i)
+                    reg_bits[i] = exec_.regs[i].bits;
+                blake3_keyed_fingerprint(exec_.insn_fpe_key, reg_bits, fingerprint.val);
+                secure_zero(reg_bits, sizeof(reg_bits));
+            }
+
+            // Phase G: Key ratchet
+            SecureLocal<uint8_t[16]> next_key;
+            {
+                uint8_t ratchet_msg[24];
+                std::memcpy(ratchet_msg, fingerprint.val, 16);
+                std::memcpy(ratchet_msg + 16, &insn.full_plaintext_insn, 8);
+                blake3_keyed_128(exec_.insn_fpe_key, ratchet_msg, 24,
+                                 next_key.val, 16);
+                secure_zero(ratchet_msg, sizeof(ratchet_msg));
+            }
+
+            // Phase H: Re-encode all 16 registers (old key → new key)
+            {
+                SecureLocal<Speck64_RoundKeys> new_rk;
+                Speck64_KeySchedule(next_key.val, new_rk.val);
+                SecureLocal<XEX_Tweaks> new_tw;
+                XEX_ComputeTweaks(new_rk.val, new_tw.val);
+
+                uint16_t live = imm_->bb_metadata[exec_.current_bb_index].live_regs_bitmap;
+                for (uint8_t i = 0; i < 16; ++i) {
+                    if (live & (1u << i)) {
+                        SecureLocal<uint64_t> plain;
+                        plain.val = FPE_Decode(rk.val, tw.val, i,
+                                               exec_.regs[i].bits);
+                        exec_.regs[i] = RegVal(
+                            FPE_Encode(new_rk.val, new_tw.val, i, plain.val));
+                    } else {
+                        exec_.regs[i] = RegVal(
+                            FPE_Encode(new_rk.val, new_tw.val, i, 0));
+                    }
+                }
+            }
+
+            // Phase I: Commit new key
+            std::memcpy(exec_.insn_fpe_key, next_key.val, 16);
+        }
+        // Phase J: SecureLocal destructors zero all temporaries.
+
+        // ── Phase K: advance enc_state ──────────────────────────────────
+        pipeline::advance_enc_state(exec_, insn.full_plaintext_insn);
+
+        // Advance IP for next fetch (Phase L runs once after all N iterations)
+        exec_.vm_ip++;
+
+        // Break on HALT — Phase L must still run for BB MAC verification.
+        // In step(), Phase L executes even when halted (the BB boundary
+        // check triggers verify_bb_mac).  Returning early here would skip
+        // MAC verification, allowing a tampered blob to execute without
+        // detection until after HALT.
+        if (exec_.halted)
+            break;
+    }
+
+    // ── Phase L: BB transition (once per dispatch unit) ─────────────────
+    //
+    // WHY only once: the fusability predicate (Doc 18 Def 3.1) guarantees
+    // that only the last of N sub-instructions may be a branch.  For
+    // non-branch instructions, Phase L is just vm_ip++ (already done above).
+    // The BB boundary check and branch logic need only run once at the end.
+    //
+    // NOTE: This round uses the current branching Phase L.  Doc 19 Phase 4
+    // will replace this with a branchless snapshot/MUX in the next round.
+    if (exec_.branch_taken) {
+        exec_.branch_taken = false;
+
+        auto mac_r = pipeline::verify_bb_mac(*imm_, exec_, *epoch_);
+        if (!mac_r) return tl::make_unexpected(mac_r.error());
+
+        auto enter_r = pipeline::enter_basic_block(
+            exec_, *epoch_, *imm_, exec_.branch_target_bb);
+        if (!enter_r) return tl::make_unexpected(enter_r.error());
+
+        if (exec_.return_resume_ip != 0) {
+            exec_.vm_ip = exec_.return_resume_ip;
+            exec_.insn_index_in_bb = exec_.return_resume_insn_idx;
+            pipeline::replay_enc_state(exec_, *epoch_, *imm_,
+                                       exec_.return_resume_insn_idx);
+            exec_.return_resume_ip = 0;
+            exec_.return_resume_insn_idx = 0;
+        }
+    } else {
+        // Check if we've reached end of current BB (fallthrough)
+        uint32_t bb_end = imm_->bb_metadata[exec_.current_bb_index].entry_ip
+                        + pipeline::current_bb_insn_count(*imm_, exec_);
+
+        if (exec_.vm_ip >= bb_end) {
+            auto mac_r = pipeline::verify_bb_mac(*imm_, exec_, *epoch_);
+            if (!mac_r) return tl::make_unexpected(mac_r.error());
+
+            if (exec_.current_bb_index + 1 < imm_->bb_metadata.size()) {
+                uint32_t next_id = imm_->bb_metadata[exec_.current_bb_index + 1].bb_id;
+                auto enter_r = pipeline::enter_basic_block(
+                    exec_, *epoch_, *imm_, next_id);
+                if (!enter_r) return tl::make_unexpected(enter_r.error());
+            }
+        }
+    }
+
+    return exec_.halted ? VmResult::Halted : VmResult::Stepped;
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// VmEngine::execute() — main loop via dispatch_unit
 // ═════════════════════════════════════════════════════════════════════════════
 
 template<typename Policy, typename Oram>
@@ -485,7 +657,7 @@ tl::expected<VmExecResult, DiagnosticCode>
 VmEngine<Policy, Oram>::execute() noexcept
 {
     while (true) {
-        auto r = step();
+        auto r = dispatch_unit();
         if (!r) return tl::make_unexpected(r.error());
         if (*r == VmResult::Halted) {
             // Decode return value from register 0 using current FPE key.

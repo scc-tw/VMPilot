@@ -1111,13 +1111,35 @@ struct HandlerTraits<VmOpcode::ATOMIC_LOAD, P> {
 
 /// NOP: write to trash register file (GSS chaff — makes NOP
 /// indistinguishable from real ops in cache/memory traces).
+///
+/// WHY ghost ALU + ghost flags (constant_time mode, Doc 19 §2):
+///   In the fixed-width SO model, every dispatch unit contains 1 real
+///   instruction + N-1 chaff NOPs.  If the NOP handler has measurably
+///   different timing from arithmetic handlers (ADD, SUB, CMP), an
+///   attacker with EM/DPA access can distinguish chaff from real by
+///   timing the handler execution.  The ghost ALU performs the same
+///   ADD + flag computation as ADD/CMP handlers, writing results to
+///   trash_regs (never to real regs or flags).  This equalizes the
+///   micro-architectural footprint within timing cluster 1.
 template<typename P>
 struct HandlerTraits<VmOpcode::NOP, P> {
     static constexpr auto security_class = SecurityClass::A;
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        e.trash_regs[i.reg_a] = i.plain_b;
+        if constexpr (P::constant_time) {
+            // Ghost ALU: same computation as ADD handler to equalize
+            // micro-architectural side effects (pipeline stalls, power trace).
+            uint64_t ghost_result = i.plain_a + i.plain_b;
+            e.trash_regs[i.reg_a] = ghost_result;
+
+            // Ghost flags: CMP/TEST handlers write to vm_flags on every
+            // execution.  NOP must produce equivalent flag-write timing
+            // without touching real vm_flags.
+            e.trash_regs[(i.reg_b) & 0x0F] = ghost_result & 0x0F;
+        } else {
+            e.trash_regs[i.reg_a] = i.plain_b;
+        }
         return {};
     }
 };

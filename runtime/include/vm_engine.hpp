@@ -253,6 +253,19 @@ public:
     /// Mutable access to execution state (for test setup).
     [[nodiscard]] VmExecution& execution() noexcept { return exec_; }
 
+    /// Execute N sub-instructions as a single dispatch unit (Doc 19 §4).
+    ///
+    /// Runs Policy::fusion_granularity iterations of Phase A-K, then
+    /// Phase L once.  For N=1 (DebugPolicy) this is equivalent to step().
+    ///
+    /// WHY dispatch_unit instead of step()-in-a-loop:
+    ///   Eliminates N-1 interpreter loop iterations (indirect branch,
+    ///   decode, Phase L overhead).  More importantly, it is the
+    ///   structural foundation for Doc 19's timing normalization:
+    ///   every dispatch unit executes the same number of crypto pipeline
+    ///   iterations regardless of opcode mix (1 real + N-1 chaff NOP).
+    [[nodiscard]] tl::expected<VmResult, DiagnosticCode> dispatch_unit() noexcept;
+
 private:
     // ── Constructor (private -- use create() / create_reentrant()) ───────
 
