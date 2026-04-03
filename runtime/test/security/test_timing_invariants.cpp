@@ -43,9 +43,6 @@ static constexpr uint8_t f_pool_none() {
 static constexpr uint8_t f_rr() {
     return static_cast<uint8_t>((VM_OPERAND_REG << 6) | (VM_OPERAND_REG << 4));
 }
-static constexpr uint8_t f_r() {
-    return static_cast<uint8_t>((VM_OPERAND_REG << 6) | (VM_OPERAND_NONE << 4));
-}
 static constexpr uint8_t f_none() { return 0; }
 
 // ============================================================================

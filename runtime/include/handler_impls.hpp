@@ -297,13 +297,50 @@ inline uint64_t ct_div(uint64_t a, uint64_t b) noexcept {
 }
 
 /// Constant-time zero-safe signed division.
+///
+/// Handles two UB cases branchlessly:
+///   1. b == 0:                     returns 0 (zero-safe)
+///   2. a == INT64_MIN && b == -1:  returns INT64_MIN (two's complement wrap)
+///
+/// WHY case 2: INT64_MIN / -1 = INT64_MAX+1 overflows int64_t.
+///   On x86 this triggers #DE (divide error). C++ says it's UB.
+///   We return INT64_MIN — the two's complement wrapped result.
 inline uint64_t ct_idiv(int64_t a, int64_t b) noexcept {
+    uint64_t ua = static_cast<uint64_t>(a);
     uint64_t ub = static_cast<uint64_t>(b);
-    uint64_t nz   = ub | (-ub);
-    uint64_t mask = static_cast<uint64_t>(
-        -static_cast<int64_t>(nz >> 63));
-    int64_t safe_b = static_cast<int64_t>(ub | (~mask & 1));
-    return static_cast<uint64_t>(a / safe_b) & mask;
+
+    // Branchless equality: (~(x | -x)) >> 63 == 1 iff x == 0
+    auto eq_zero = [](uint64_t x) -> uint64_t {
+        return (~(x | -x)) >> 63;
+    };
+
+    // b == 0 check
+    uint64_t b_is_zero = eq_zero(ub);
+    uint64_t b_nz_mask = -static_cast<uint64_t>(!b_is_zero);  // all-ones if b != 0
+
+    // Overflow check: a == INT64_MIN && b == -1
+    uint64_t a_is_min  = eq_zero(ua ^ static_cast<uint64_t>(INT64_MIN));
+    uint64_t b_is_neg1 = eq_zero(ub ^ UINT64_MAX);
+    uint64_t overflow  = a_is_min & b_is_neg1;
+    uint64_t ov_mask   = -overflow;  // all-ones if overflow
+
+    // safe_b: replace b with 1 when b==0 OR overflow (avoids #DE and UB)
+    //   Normal:   safe_b = b
+    //   b==0:     safe_b = 1 → a/1 = a, masked to 0 by b_nz_mask
+    //   Overflow: safe_b = 1 → INT64_MIN/1 = INT64_MIN (correct wrap)
+    uint64_t poison = b_is_zero | overflow;          // 1 if either bad case
+    uint64_t poison_mask = -poison;                   // all-ones if bad
+    int64_t safe_b = static_cast<int64_t>(
+        (1 & poison_mask) | (ub & ~poison_mask));
+
+    uint64_t quotient = static_cast<uint64_t>(a / safe_b);
+
+    // Result selection:
+    //   b==0:     return 0
+    //   Overflow: return INT64_MIN (= ua)
+    //   Normal:   return quotient
+    uint64_t result = (quotient & ~ov_mask) | (ua & ov_mask);
+    return result & b_nz_mask;
 }
 
 /// Constant-time zero-safe modulus.

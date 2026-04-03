@@ -319,7 +319,6 @@ TEST(SecurityProperties, VmEpochBranchlessSelect_KeepNew) {
     a.live_regs_bitmap = 0xFFFF;
 
     VmEpoch snapshot{};
-    std::memset(&snapshot, 0, sizeof(snapshot));
 
     // branchless_select(snapshot, keep_new=true) → keep a's values
     a.branchless_select(snapshot, true);

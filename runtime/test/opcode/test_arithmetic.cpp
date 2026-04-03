@@ -292,17 +292,15 @@ TEST(Arithmetic, IdivByZero) {
     EXPECT_EQ(r->return_value, 0u) << "IDIV by zero should return 0 (zero-safe)";
 }
 
-// NOTE: IDIV(INT64_MIN, -1) is undefined behavior (signed division overflow).
-// ct_idiv does not guard against this case — it would trap on x86.
-// Leaving as DISABLED_ to document the edge case without crashing the test runner.
-TEST(Arithmetic, DISABLED_IdivMinByNegOne) {
-    // IDIV(INT64_MIN, -1) — signed division overflow, UB in C++.
+// IDIV(INT64_MIN, -1) — signed division overflow, handled by ct_idiv.
+// Returns INT64_MIN (two's complement wrap), avoids x86 #DE trap and C++ UB.
+TEST(Arithmetic, IdivMinByNegOne) {
     auto r = run_binop_test(VmOpcode::IDIV,
         static_cast<uint64_t>(INT64_MIN),
         static_cast<uint64_t>(static_cast<int64_t>(-1)), 0x46);
     ASSERT_TRUE(r.has_value());
-    // If the implementation handled this, INT64_MIN / -1 would be INT64_MAX+1
-    // which doesn't fit in int64_t.  This test is here to document the gap.
+    EXPECT_EQ(r->return_value, static_cast<uint64_t>(INT64_MIN))
+        << "IDIV(INT64_MIN, -1) must return INT64_MIN (two's complement wrap)";
 }
 
 // ============================================================================
