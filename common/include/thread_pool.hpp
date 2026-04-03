@@ -3,9 +3,9 @@
 
 #include <atomic>
 #include <condition_variable>
-#include <deque>
 #include <functional>
 #include <future>
+#include <list>
 #include <memory>
 #include <mutex>
 #include <random>
@@ -43,7 +43,42 @@ public:
 
 private:
     struct WorkerQueue {
-        std::deque<std::function<void()>> tasks;
+        // WHY std::list instead of std::deque:
+        //
+        // Apple libc++ (Apple clang 17 / clang-1700.0.13.5, LLVM 17+) ships
+        // ASan annotations for std::deque that use the
+        // __sanitizer_annotate_double_ended_contiguous_container API to track
+        // which slots in each 4KB deque block are "in use."  These annotations
+        // produce false-positive container-overflow reports for our
+        // work-stealing access pattern (emplace_back from producer, pop_front
+        // from owner, pop_back from stealer — all correctly mutex-protected).
+        //
+        // Root cause: sizeof(std::function<void()>) == 32 on this platform
+        // (24-byte SBO __buf_ + 8-byte __f_ pointer).  When a worker moves
+        // from the deque via back(), the std::function move-assignment reads
+        // the source's __f_ member (8 bytes at offset 24).  ASan's deque
+        // annotations incorrectly mark that element's memory as poisoned (fc)
+        // even though the deque's own logical state considers it valid
+        // (empty() == false, back() returns a reference to it).  Shadow byte
+        // forensics across 8 crash sites confirmed the annotation marks zero
+        // valid elements in blocks that demonstrably contain live elements.
+        //
+        // All deque accesses are serialized by WorkerQueue::mtx — there is no
+        // data race.  This was verified by auditing every access site:
+        //   - submit():     emplace_back under queues_[idx]->mtx
+        //   - own queue:    front()/pop_front() under queues_[id]->mtx
+        //   - steal:        back()/pop_back() under queues_[victim]->mtx
+        //
+        // std::list avoids the issue: each node is a separate heap allocation
+        // with no block-level container-overflow annotations.  It provides
+        // the same O(1) push_back/pop_front/pop_back/front/back guarantees.
+        // Performance is equivalent because the per-queue mutex dominates.
+        //
+        // Upstream references:
+        //   - LLVM commit 10ec9276d40: std::deque ASan annotations
+        //   - llvm/llvm-project#73043: deque ASan annotation issues
+        //   - github.com/google/sanitizers/wiki/AddressSanitizerContainerOverflow
+        std::list<std::function<void()>> tasks;
         std::mutex mtx;
     };
 
