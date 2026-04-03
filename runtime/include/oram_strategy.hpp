@@ -62,14 +62,6 @@ struct VmOramState;
 struct RollingKeyOram {
     static constexpr bool oblivious = true;
 
-    /// Read an 8-byte MemVal from the oblivious workspace at `offset`.
-    /// Scans all 64 cache lines (constant-time access pattern).
-    [[nodiscard]] static MemVal read(VmOramState& state, uint64_t offset) noexcept;
-
-    /// Write an 8-byte MemVal to the oblivious workspace at `offset`.
-    /// Scans all 64 cache lines and re-encrypts entire workspace.
-    static void write(VmOramState& state, uint64_t offset, MemVal val) noexcept;
-
     /// Unified ORAM access — always performs a full 64-line scan.
     ///
     /// WHY unified (Doc 19 pipeline-level normalization):
@@ -87,9 +79,6 @@ struct RollingKeyOram {
     [[nodiscard]] static uint64_t access(VmOramState& state, uint64_t addr,
                                          uint64_t write_value,
                                          bool is_write) noexcept;
-
-    /// Unconditional dummy scan (legacy — kept for backward compatibility).
-    static void dummy_scan(VmOramState& state) noexcept;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -106,19 +95,10 @@ struct RollingKeyOram {
 struct DirectOram {
     static constexpr bool oblivious = false;
 
-    /// Read 8 bytes from workspace at `offset` (direct indexed access).
-    [[nodiscard]] static MemVal read(VmOramState& state, uint64_t offset) noexcept;
-
-    /// Write 8 bytes to workspace at `offset` (direct indexed access).
-    static void write(VmOramState& state, uint64_t offset, MemVal val) noexcept;
-
     /// Unified access for DirectOram — direct indexed, no oblivious scan.
     [[nodiscard]] static uint64_t access(VmOramState& state, uint64_t addr,
                                          uint64_t write_value,
                                          bool is_write) noexcept;
-
-    /// No-op dummy scan — DirectOram does not need timing normalization.
-    static void dummy_scan(VmOramState&) noexcept {}
 };
 
 }  // namespace VMPilot::Runtime

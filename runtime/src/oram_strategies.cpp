@@ -15,22 +15,6 @@ using namespace Common::VM;
 using namespace Common::VM::Crypto;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DirectOram — simple indexed access (NOT oblivious)
-// ─────────────────────────────────────────────────────────────────────────────
-
-MemVal DirectOram::read(VmOramState& state, uint64_t offset) noexcept {
-    if (offset + 8 > VM_OBLIVIOUS_SIZE) return MemVal(0);
-    uint64_t val = 0;
-    std::memcpy(&val, state.workspace + offset, 8);
-    return MemVal(val);
-}
-
-void DirectOram::write(VmOramState& state, uint64_t offset, MemVal val) noexcept {
-    if (offset + 8 > VM_OBLIVIOUS_SIZE) return;
-    std::memcpy(state.workspace + offset, &val.bits, 8);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // RollingKeyOram — full oblivious scan (IND-CPA)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -104,23 +88,19 @@ uint64_t RollingKeyOram::access(VmOramState& state, uint64_t addr,
     return oram_access_impl(state, addr, write_value, is_write);
 }
 
-MemVal RollingKeyOram::read(VmOramState& state, uint64_t offset) noexcept {
-    return MemVal(oram_access_impl(state, offset, 0, false));
-}
-
-void RollingKeyOram::write(VmOramState& state, uint64_t offset, MemVal val) noexcept {
-    oram_access_impl(state, offset, val.bits, true);
-}
-
-void RollingKeyOram::dummy_scan(VmOramState& state) noexcept {
-    (void)oram_access_impl(state, 0, 0, false);
-}
-
 uint64_t DirectOram::access(VmOramState& state, uint64_t addr,
                              uint64_t write_value, bool is_write) noexcept {
     // Direct indexed — no oblivious scan.  Branchless read + conditional write.
+    //
+    // WHY two-part bounds check (addr < size AND addr+8 <= size):
+    //   Phase D.oram computes oram_addr via branchless MUX.  When vm_sp=0
+    //   and opcode=PUSH, oram_addr = vm_sp-8 = 0xFFF...F8 (unsigned wrap).
+    //   The naive `addr+8 <= VM_OBLIVIOUS_SIZE` wraps to `0 <= 4096` — true
+    //   — causing heap-buffer-overflow.  Checking `addr < VM_OBLIVIOUS_SIZE`
+    //   first rejects any wrapped address.  The PUSH handler will subsequently
+    //   return StackOverflow.
     uint64_t val = 0;
-    if (addr + 8 <= VM_OBLIVIOUS_SIZE) {
+    if (addr < VM_OBLIVIOUS_SIZE && addr + 8 <= VM_OBLIVIOUS_SIZE) {
         std::memcpy(&val, state.workspace + addr, 8);
         if (is_write)
             std::memcpy(state.workspace + addr, &write_value, 8);

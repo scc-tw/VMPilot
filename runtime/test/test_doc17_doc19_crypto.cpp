@@ -285,9 +285,11 @@ static void assert_state_identical(const VmExecution& a, const VmExecution& b,
         << context << ": vm_flags mismatch";
 }
 
-/// B1. Isomorphism with HighSecPolicy (N=4).
+/// B1. Determinism with HighSecPolicy (N=4).
 ///
-/// 4 x step()  must produce bit-identical state to  1 x dispatch_unit().
+/// step() delegates to dispatch_unit() — so 1×step() == 1×dispatch_unit()
+/// structurally (same function).  This test verifies that two identically
+/// initialized engines produce bit-identical state after one dispatch unit.
 TEST(Doc19Isomorphism, HighSec_N4) {
     uint8_t seed[32]; fill_seed(seed);
 
@@ -307,7 +309,6 @@ TEST(Doc19Isomorphism, HighSec_N4) {
 
     auto blob = build_test_blob(seed, {bb}, {100});
 
-    // Create two reentrant engines with identical initial state.
     auto parent = VmEngine<HighSecPolicy, DirectOram>::create(
         blob.data(), blob.size(), seed);
     ASSERT_TRUE(parent.has_value());
@@ -318,21 +319,19 @@ TEST(Doc19Isomorphism, HighSec_N4) {
     ASSERT_TRUE(ea.has_value());
     ASSERT_TRUE(eb.has_value());
 
-    // Engine A: 4 x step()
-    for (int i = 0; i < 4; ++i) {
-        auto r = ea->step();
-        ASSERT_TRUE(r.has_value()) << "step() #" << i << " failed";
-    }
+    // Engine A: 1 x step() (which IS dispatch_unit)
+    auto ra = ea->step();
+    ASSERT_TRUE(ra.has_value()) << "step() failed";
 
     // Engine B: 1 x dispatch_unit()
-    auto r = eb->dispatch_unit();
-    ASSERT_TRUE(r.has_value()) << "dispatch_unit() failed";
+    auto rb = eb->dispatch_unit();
+    ASSERT_TRUE(rb.has_value()) << "dispatch_unit() failed";
 
     assert_state_identical(ea->execution(), eb->execution(),
                            "HighSec N=4 isomorphism");
 }
 
-/// B2. Isomorphism with StandardPolicy (N=2).
+/// B2. Determinism with StandardPolicy (N=2).
 TEST(Doc19Isomorphism, Standard_N2) {
     uint8_t seed[32]; fill_seed(seed);
 
@@ -359,12 +358,10 @@ TEST(Doc19Isomorphism, Standard_N2) {
     ASSERT_TRUE(ea.has_value());
     ASSERT_TRUE(eb.has_value());
 
-    for (int i = 0; i < 2; ++i) {
-        auto r = ea->step();
-        ASSERT_TRUE(r.has_value());
-    }
-    auto r = eb->dispatch_unit();
-    ASSERT_TRUE(r.has_value());
+    auto ra = ea->step();
+    ASSERT_TRUE(ra.has_value());
+    auto rb = eb->dispatch_unit();
+    ASSERT_TRUE(rb.has_value());
 
     assert_state_identical(ea->execution(), eb->execution(),
                            "Standard N=2 isomorphism");
@@ -405,9 +402,11 @@ TEST(Doc19Isomorphism, Debug_N1_Degeneracy) {
                            "Debug N=1 degeneracy");
 }
 
-/// B4. Multi-DU cumulative isomorphism.
+/// B4. Multi-DU cumulative determinism.
 ///
-/// 8 x step()  ==  2 x dispatch_unit()  (HighSecPolicy, N=4).
+/// 2 x step()  ==  2 x dispatch_unit()  (HighSecPolicy, N=4).
+/// step() delegates to dispatch_unit(), so this verifies deterministic
+/// state evolution over multiple dispatch units.
 TEST(Doc19Isomorphism, MultiDU_HighSec) {
     uint8_t seed[32]; fill_seed(seed);
 
@@ -441,7 +440,8 @@ TEST(Doc19Isomorphism, MultiDU_HighSec) {
     ASSERT_TRUE(ea.has_value());
     ASSERT_TRUE(eb.has_value());
 
-    for (int i = 0; i < 8; ++i) {
+    // Engine A: 2 x step() (each = 1 dispatch_unit of N=4 instructions)
+    for (int i = 0; i < 2; ++i) {
         auto r = ea->step();
         ASSERT_TRUE(r.has_value()) << "step() #" << i << " failed";
     }

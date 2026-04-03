@@ -63,12 +63,7 @@ using Common::VM::PlainVal;
 
 namespace detail {
 
-/// Evaluate condition code against flags register.
-/// Pure predicate logic — no encoding involvement.
-/// Implementation: handler_detail.cpp.
-bool evaluate_condition(uint8_t flags, uint8_t cond) noexcept;
-
-/// Branchless variant — precomputes all 10 conditions, selects via
+/// Branchless condition evaluation — precomputes all 10 conditions, selects via
 /// lookup table indexed by cond.  Constant-time: all conditions are
 /// always evaluated regardless of which one is actually needed.
 bool evaluate_condition_ct(uint8_t flags, uint8_t cond) noexcept;
@@ -387,10 +382,7 @@ struct HandlerTraits<VmOpcode::DIV, P> {
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        if constexpr (P::constant_time)
-            e.regs[i.reg_a] = RegVal(detail::ct_div(i.plain_a, i.plain_b));
-        else
-            e.regs[i.reg_a] = RegVal(i.plain_b != 0 ? i.plain_a / i.plain_b : 0);
+        e.regs[i.reg_a] = RegVal(detail::ct_div(i.plain_a, i.plain_b));
         return {};
     }
 };
@@ -404,10 +396,7 @@ struct HandlerTraits<VmOpcode::IDIV, P> {
                                const VmImmutable&, const DecodedInsn& i) noexcept {
         auto sa = static_cast<int64_t>(i.plain_a);
         auto sb = static_cast<int64_t>(i.plain_b);
-        if constexpr (P::constant_time)
-            e.regs[i.reg_a] = RegVal(detail::ct_idiv(sa, sb));
-        else
-            e.regs[i.reg_a] = RegVal(sb != 0 ? static_cast<uint64_t>(sa / sb) : 0);
+        e.regs[i.reg_a] = RegVal(detail::ct_idiv(sa, sb));
         return {};
     }
 };
@@ -435,10 +424,7 @@ struct HandlerTraits<VmOpcode::MOD, P> {
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        if constexpr (P::constant_time)
-            e.regs[i.reg_a] = RegVal(detail::ct_mod(i.plain_a, i.plain_b));
-        else
-            e.regs[i.reg_a] = RegVal(i.plain_b != 0 ? i.plain_a % i.plain_b : 0);
+        e.regs[i.reg_a] = RegVal(detail::ct_mod(i.plain_a, i.plain_b));
         return {};
     }
 };
@@ -627,20 +613,7 @@ struct HandlerTraits<VmOpcode::CMP, P> {
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        if constexpr (P::constant_time) {
-            e.vm_flags = detail::ct_cmp_flags(i.plain_a, i.plain_b);
-        } else {
-            auto sa = static_cast<int64_t>(i.plain_a);
-            auto sb = static_cast<int64_t>(i.plain_b);
-            auto ua = i.plain_a;
-            auto ub = i.plain_b;
-            int64_t diff = sa - sb;
-            e.vm_flags = 0;
-            if (diff == 0)  e.vm_flags |= 0x01;
-            if (diff < 0)   e.vm_flags |= 0x02;
-            if (ua < ub)    e.vm_flags |= 0x04;
-            if (((sa ^ sb) & (sa ^ diff)) < 0) e.vm_flags |= 0x08;
-        }
+        e.vm_flags = detail::ct_cmp_flags(i.plain_a, i.plain_b);
         return {};
     }
 };
@@ -653,16 +626,10 @@ struct HandlerTraits<VmOpcode::TEST, P> {
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
         uint64_t result = i.plain_a & i.plain_b;
-        if constexpr (P::constant_time) {
-            uint64_t zf = static_cast<uint64_t>(
-                (static_cast<int64_t>(~(result | -result))) >> 63) & 1;
-            uint64_t sf = (result >> 63) & 1;
-            e.vm_flags = static_cast<uint8_t>(zf | (sf << 1));
-        } else {
-            e.vm_flags = 0;
-            if (result == 0) e.vm_flags |= 0x01;
-            if (static_cast<int64_t>(result) < 0) e.vm_flags |= 0x02;
-        }
+        uint64_t zf = static_cast<uint64_t>(
+            (static_cast<int64_t>(~(result | -result))) >> 63) & 1;
+        uint64_t sf = (result >> 63) & 1;
+        e.vm_flags = static_cast<uint8_t>(zf | (sf << 1));
         return {};
     }
 };
@@ -726,20 +693,13 @@ struct HandlerTraits<VmOpcode::JCC, P> {
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        if constexpr (P::constant_time) {
-            // Branchless: always write both fields.  The pipeline reads
-            // branch_taken to decide whether to transition; when false the
-            // values of branch_target_bb are harmlessly ignored.
-            bool cond = detail::evaluate_condition_ct(e.vm_flags, i.condition);
-            uint32_t mask = -static_cast<uint32_t>(cond);  // 0 or 0xFFFFFFFF
-            e.branch_target_bb = (i.aux & mask) | (e.branch_target_bb & ~mask);
-            e.branch_taken     = cond;
-        } else {
-            if (detail::evaluate_condition(e.vm_flags, i.condition)) {
-                e.branch_target_bb = i.aux;
-                e.branch_taken = true;
-            }
-        }
+        // Branchless: always write both fields.  The pipeline reads
+        // branch_taken to decide whether to transition; when false the
+        // values of branch_target_bb are harmlessly ignored.
+        bool cond = detail::evaluate_condition_ct(e.vm_flags, i.condition);
+        uint32_t mask = -static_cast<uint32_t>(cond);  // 0 or 0xFFFFFFFF
+        e.branch_target_bb = (i.aux & mask) | (e.branch_target_bb & ~mask);
+        e.branch_taken     = cond;
         return {};
     }
 };
@@ -1070,12 +1030,7 @@ struct HandlerTraits<VmOpcode::CMPXCHG, P> {
         auto* ptr = reinterpret_cast<std::atomic<uint64_t>*>(addr);
         bool ok = ptr->compare_exchange_strong(expected, desired, std::memory_order_seq_cst);
         e.regs[i.reg_a] = RegVal(expected);
-        if constexpr (P::constant_time) {
-            // Branchless: ok maps to 0/1 via arithmetic, no branch
-            e.vm_flags = static_cast<uint8_t>(ok);
-        } else {
-            e.vm_flags = ok ? 0x01 : 0x00;
-        }
+        e.vm_flags = static_cast<uint8_t>(ok);
         return {};
     }
 };
@@ -1133,19 +1088,15 @@ struct HandlerTraits<VmOpcode::NOP, P> {
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        if constexpr (P::constant_time) {
-            // Ghost ALU: same computation as ADD handler to equalize
-            // micro-architectural side effects (pipeline stalls, power trace).
-            uint64_t ghost_result = i.plain_a + i.plain_b;
-            e.trash_regs[i.reg_a] = ghost_result;
+        // Ghost ALU: same computation as ADD handler to equalize
+        // micro-architectural side effects (pipeline stalls, power trace).
+        uint64_t ghost_result = i.plain_a + i.plain_b;
+        e.trash_regs[i.reg_a] = ghost_result;
 
-            // Ghost flags: CMP/TEST handlers write to vm_flags on every
-            // execution.  NOP must produce equivalent flag-write timing
-            // without touching real vm_flags.
-            e.trash_regs[(i.reg_b) & 0x0F] = ghost_result & 0x0F;
-        } else {
-            e.trash_regs[i.reg_a] = i.plain_b;
-        }
+        // Ghost flags: CMP/TEST handlers write to vm_flags on every
+        // execution.  NOP must produce equivalent flag-write timing
+        // without touching real vm_flags.
+        e.trash_regs[(i.reg_b) & 0x0F] = ghost_result & 0x0F;
         return {};
     }
 };

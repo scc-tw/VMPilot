@@ -167,6 +167,77 @@ inline const char* to_string(VmOpcode op) noexcept {
     return "UNKNOWN";
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// opcode_writes_reg — doc 16 Phase E decision table
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Determine whether an opcode's handler writes a plaintext result to regs[reg_a].
+///
+/// Doc 16 Phase E needs to know which handlers left plaintext in regs[reg_a]
+/// (needing FPE-encode) vs which left the existing FPE-encoded value untouched.
+/// Encoding an already-encoded value would produce garbage, so we must
+/// distinguish the two cases.
+///
+/// The list of non-writing opcodes is exhaustive: any new opcode that writes
+/// to regs must NOT appear in the false cases.
+constexpr bool opcode_writes_reg(VmOpcode op) noexcept {
+    switch (op) {
+        // Control flow: these modify IP / flags / branch state, not regs.
+        case VmOpcode::JMP:
+        case VmOpcode::JCC:
+        case VmOpcode::HALT:
+        case VmOpcode::NOP:
+
+        // Comparison: writes to vm_flags, not regs.
+        case VmOpcode::CMP:
+        case VmOpcode::TEST:
+        case VmOpcode::SET_FLAG:
+
+        // Memory store: writes to guest memory or ORAM, not regs.
+        case VmOpcode::STORE:
+        case VmOpcode::PUSH:
+        case VmOpcode::STORE_CTX:
+
+        // Synchronisation: issues a fence, no register write.
+        case VmOpcode::FENCE:
+
+        // VM internal: integrity/debug checks produce no register output.
+        case VmOpcode::CHECK_INTEGRITY:
+        case VmOpcode::CHECK_DEBUG:
+        case VmOpcode::MUTATE_ISA:
+
+        // REKEY: triggers key ratchet externally, handler writes no register.
+        case VmOpcode::REKEY:
+
+        // SAVE_EPOCH / RESYNC: snapshot/restore mechanics, not a reg write.
+        // NOTE: RESYNC does overwrite regs[] with a saved snapshot, but those
+        // values are already FPE-encoded (under the snapshot-time key).
+        // Treating RESYNC as "not writing" avoids double-encoding.
+        // The ratchet's Phase H will re-encode under the new key, which is
+        // wrong for snapshot values -- RESYNC needs redesign for doc 16.
+        case VmOpcode::SAVE_EPOCH:
+        case VmOpcode::RESYNC:
+
+        // CALL_VM / RET_VM: shadow stack manipulation, not plaintext register writes.
+        // CALL_VM saves already-FPE-encoded regs[] to shadow_stack (no reg write).
+        // RET_VM restores FPE-encoded snapshot into regs[] and restores insn_fpe_key
+        // to the saved key, so regs[] are valid ciphertext under the restored key.
+        // Phase E must NOT re-encode them (double-encoding produces garbage).
+        // Phase H's re-encoding from restored key → ratcheted key handles the
+        // domain transition correctly.
+        case VmOpcode::CALL_VM:
+        case VmOpcode::RET_VM:
+            return false;
+
+        // Everything else writes a plaintext result to regs[reg_a]:
+        // MOVE, LOAD, POP, LOAD_CONST, LOAD_CTX, GET_FLAG,
+        // ADD..MOD, AND..ROR, SEXT8..TRUNC16, NATIVE_CALL,
+        // LOCK_ADD, XCHG, CMPXCHG, ATOMIC_LOAD
+        default:
+            return true;
+    }
+}
+
 }  // namespace VMPilot::Common::VM
 
 #endif  // __COMMON_VM_OPCODE_HPP__

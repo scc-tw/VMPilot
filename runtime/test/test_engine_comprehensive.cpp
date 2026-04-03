@@ -1079,19 +1079,19 @@ TEST(EngineOramOblivious, WorkspaceChangesOnEveryAccess) {
     std::memcpy(oram.key, key, 16);
 
     // Snapshot workspace after first write
-    RollingKeyOram::write(oram, 0, MemVal(42));
+    (void)RollingKeyOram::access(oram, 0, 42, true);
     std::vector<uint8_t> snap1(oram.workspace, oram.workspace + VM_OBLIVIOUS_SIZE);
 
     // Write same value at same address — workspace must differ (rolling nonce)
-    RollingKeyOram::write(oram, 0, MemVal(42));
+    (void)RollingKeyOram::access(oram, 0, 42, true);
     std::vector<uint8_t> snap2(oram.workspace, oram.workspace + VM_OBLIVIOUS_SIZE);
 
     EXPECT_NE(snap1, snap2) << "Rolling keystream ORAM must produce different "
                                "workspace bytes on each access (IND-CPA)";
 
     // But read back should still give 42
-    auto val = RollingKeyOram::read(oram, 0);
-    EXPECT_EQ(val.bits, 42u);
+    auto val = RollingKeyOram::access(oram, 0, 0, false);
+    EXPECT_EQ(val, 42u);
 }
 
 // ============================================================================
@@ -1104,11 +1104,11 @@ TEST(EngineOramOblivious, NonceMonotonicallyIncreases) {
     std::memcpy(oram.key, key, 16);
 
     EXPECT_EQ(oram.nonce, 0u);
-    RollingKeyOram::write(oram, 0, MemVal(1));
+    (void)RollingKeyOram::access(oram, 0, 1, true);
     EXPECT_EQ(oram.nonce, 1u);
-    (void)RollingKeyOram::read(oram, 0);
+    (void)RollingKeyOram::access(oram, 0, 0, false);
     EXPECT_EQ(oram.nonce, 2u);
-    RollingKeyOram::write(oram, 8, MemVal(2));
+    (void)RollingKeyOram::access(oram, 8, 2, true);
     EXPECT_EQ(oram.nonce, 3u);
 }
 

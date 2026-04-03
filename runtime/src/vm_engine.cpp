@@ -308,185 +308,195 @@ VmEngine<Policy, Oram>::create_reentrant(
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// VmEngine::step() — doc 16 Phase A-L pipeline
+// execute_one_instruction — THE per-instruction pipeline (Phase A-K)
+//
+// Single codepath for all instruction execution.  Both step() and
+// dispatch_unit() delegate here.  No other execution path exists.
+//
+// Security invariants (Doc 16 rev.8 §4, Doc 17 §2.2, Doc 19 §4.2):
+//   - Phase D.oram: unconditional ORAM scan per instruction (Doc 19)
+//   - Phase E: branchless FPE encode via bitmask MUX (Doc 19 §4.2 Fix #3)
+//   - Phase F-I: full crypto ratchet — fingerprint, key derivation, 16-reg
+//     re-encode, SecureLocal zeroing (Doc 16 Theorem 7.1)
+//   - Phase K: 8-byte full-instruction enc_state advance (Doc 17 §3.1)
+//
+// STATE ISOMORPHISM (Doc 18 Theorem 4.1):
+//   This function implements the atomic transition A(σ, p).  Calling it
+//   N times produces A(…A(A(σ₀, p₁), p₂)…, pₙ) — the exact definition
+//   of a dispatch unit.
 // ═════════════════════════════════════════════════════════════════════════════
 
 template<typename Policy, typename Oram>
-tl::expected<VmResult, DiagnosticCode>
-VmEngine<Policy, Oram>::step() noexcept
+static tl::expected<void, DiagnosticCode>
+execute_one_instruction(VmExecution& exec, VmEpoch& epoch,
+                        VmOramState& oram, const VmImmutable& imm) noexcept
 {
     // ── Phases A-C: FETCH + DECRYPT + DECODE ────────────────────────────
-    auto insn_or = pipeline::fetch_decrypt_decode(*imm_, exec_, *epoch_);
+    auto insn_or = pipeline::fetch_decrypt_decode(imm, exec, epoch);
     if (!insn_or) return tl::make_unexpected(insn_or.error());
     auto insn = *insn_or;
 
-    // ── Phase C (cont): RESOLVE operands + FPE decode ───────────────────
-    // resolve_operands fills both resolved_a/b (encoded) and plain_a/b (decoded).
-    // REG operands: FPE_Decode(insn_fpe_key, reg, encoded) -> plain.
-    // POOL/MEM/NONE: already plaintext, copied as-is.
-    pipeline::resolve_operands(*imm_, exec_, *epoch_, insn);
+    // ── Phase C': RESOLVE operands + FPE decode ─────────────────────────
+    pipeline::resolve_operands(imm, exec, epoch, insn);
 
-    // ── Phase D: HANDLER DISPATCH ───────────────────────────────────────
-    // Handler operates on insn.plain_a, insn.plain_b (plaintext).
-    // If the opcode writes to a register, the handler stores plaintext
-    // directly into exec_.regs[insn.reg_a].  This value is "naked" in
-    // memory for ~nanoseconds until Phase E re-encodes it.
+    // ── Phase D.oram: Unconditional per-instruction ORAM scan ───────────
+    //
+    // WHY per-instruction (Doc 19 pipeline-level normalization):
+    //   PUSH/POP handlers previously called Oram::read/write inside Phase D,
+    //   making their timing ~14K ns higher than NOP/ALU opcodes.  Moving the
+    //   scan here ensures every instruction does exactly 1 ORAM scan at the
+    //   same cost.  PUSH/POP handlers read exec.oram_read_result instead of
+    //   calling Oram directly.
+    //
+    //   Branchless MUX: address, value, and direction are computed from the
+    //   decoded opcode without data-dependent branches.  Non-PUSH/POP opcodes
+    //   produce a dummy read at address 0 with value 0 — same ORAM scan cost.
+    {
+        const uint64_t push_mask = -static_cast<uint64_t>(
+            insn.opcode == VmOpcode::PUSH);
+        const uint64_t pop_mask  = -static_cast<uint64_t>(
+            insn.opcode == VmOpcode::POP);
+
+        const uint64_t oram_addr =
+            ((exec.vm_sp - 8) & push_mask) | (exec.vm_sp & pop_mask);
+
+        const uint64_t encoded =
+            imm.mem.encode_lut().apply(insn.plain_a);
+        const uint64_t write_val = encoded & push_mask;
+
+        const bool is_write = static_cast<bool>(push_mask & 1);
+
+        exec.oram_read_result = Oram::access(
+            oram, oram_addr, write_val, is_write);
+    }
+
+    // ── Phase D.handler: HANDLER DISPATCH ───────────────────────────────
     static const auto table = build_handler_table<Policy, Oram>();
     auto r = table[static_cast<uint8_t>(insn.opcode)](
-        exec_, *epoch_, *oram_, *imm_, insn);
+        exec, epoch, oram, imm, insn);
     if (!r) return tl::make_unexpected(r.error());
 
-    // Zero plaintext operands after handler (Theorem 7.1).
-    // plain_a/plain_b are the decoded register values.  Other insn fields
-    // (opcode, reg_a, aux, plaintext_opcode) are still needed by Phases E-K
-    // and are NOT secret (they're from the decrypted instruction, not data).
+    // Zero plaintext operands after handler (Doc 16 Theorem 7.1).
     secure_zero(&insn.plain_a, sizeof(insn.plain_a));
     secure_zero(&insn.plain_b, sizeof(insn.plain_b));
 
     // ── Phases E-I: FPE encode + fingerprint + key ratchet ──────────────
     //
-    // This is the core forward-secrecy pipeline from doc 16 rev.8 section 4.
-    // All cryptographic temporaries are SecureLocal (RAII zeroed on scope exit)
-    // or explicitly zeroed in Phase J.
+    // Core forward-secrecy pipeline (Doc 16 rev.8 §4).
+    // All cryptographic temporaries are SecureLocal (RAII zeroed on scope exit).
     {
-        // Pre-compute Speck key schedule + XEX tweaks for the CURRENT key.
         SecureLocal<Speck64_RoundKeys> rk;
-        Speck64_KeySchedule(exec_.insn_fpe_key, rk.val);
+        Speck64_KeySchedule(exec.insn_fpe_key, rk.val);
         SecureLocal<XEX_Tweaks> tw;
         XEX_ComputeTweaks(rk.val, tw.val);
 
-        // ── Phase E: FPE-encode handler result ──────────────────────────
-        // If the handler wrote plaintext to regs[reg_a], encode it back into
-        // the FPE domain under the current key.  For non-writing opcodes
-        // (JMP, HALT, CMP, etc.), regs[reg_a] still holds its old encoded
-        // value -- encoding it again would produce garbage.
-        if (opcode_writes_reg(insn.opcode)) {
-            exec_.regs[insn.reg_a] = RegVal(
-                FPE_Encode(rk.val, tw.val, insn.reg_a,
-                           exec_.regs[insn.reg_a].bits));
+        // ── Phase E: branchless FPE encode (Doc 19 §4.2 Fix #3) ────────
+        //
+        // WHY branchless (always execute FPE_Encode):
+        //   A data-dependent branch on opcode_writes_reg() leaks 1 bit of
+        //   opcode information via EM/DPA side channel — the attacker can
+        //   distinguish register-writing opcodes from non-writing ones by
+        //   observing the power trace or electromagnetic emissions.
+        //
+        //   Branchless MUX always computes FPE_Encode and selects the
+        //   destination via bitmask:
+        //     writes_reg=true:  encoded value → regs[reg_a]
+        //     writes_reg=false: original value preserved in regs[reg_a]
+        {
+            uint64_t encoded = FPE_Encode(rk.val, tw.val, insn.reg_a,
+                                          exec.regs[insn.reg_a].bits);
+            uint64_t mask = -static_cast<uint64_t>(
+                opcode_writes_reg(insn.opcode));
+            exec.regs[insn.reg_a] = RegVal(
+                (encoded & mask) | (exec.regs[insn.reg_a].bits & ~mask));
         }
-        // All 16 registers are now FPE-encoded under the current key.
 
         // ── Phase F: Fingerprint all 16 encoded registers ───────────────
-        // The fingerprint entangles ALL register state into the key ratchet.
-        // Modifying any register (even one not touched by this instruction)
-        // changes the fingerprint, which changes the next key, which corrupts
-        // all subsequent decryptions.  This is doc 16's "entanglement" property.
+        //
+        // WHY fingerprint ALL regs (Doc 16 "entanglement" property):
+        //   Modifying any register — even one not touched by this instruction
+        //   — changes the fingerprint, which changes the next key, which
+        //   corrupts all subsequent decryptions.
         SecureLocal<uint8_t[16]> fingerprint;
         {
             uint64_t reg_bits[16];
             for (uint8_t i = 0; i < 16; ++i)
-                reg_bits[i] = exec_.regs[i].bits;
-            blake3_keyed_fingerprint(exec_.insn_fpe_key, reg_bits, fingerprint.val);
+                reg_bits[i] = exec.regs[i].bits;
+            blake3_keyed_fingerprint(exec.insn_fpe_key, reg_bits,
+                                     fingerprint.val);
             secure_zero(reg_bits, sizeof(reg_bits));
         }
 
         // ── Phase G: Key ratchet ────────────────────────────────────────
+        //
         // next_key = BLAKE3_KEYED_128(current_key, fingerprint || full_insn)
         //
-        // The ratchet message includes:
-        //   - fingerprint (16 bytes): binds next key to ALL register state
-        //   - full_insn (8 bytes): binds next key to the entire decrypted instruction
-        //     (including opcode, operand types, registers, and aux).
-        //
-        // One-way property of BLAKE3 means current_key cannot be recovered
-        // from next_key -- this is the forward-secrecy guarantee.
+        // WHY full_insn in ratchet (Doc 17 entanglement):
+        //   The ratchet binds the next key to both the register state
+        //   (fingerprint) AND the entire decrypted instruction (8 bytes).
+        //   One-way BLAKE3 guarantees forward secrecy: current_key cannot
+        //   be recovered from next_key.
         SecureLocal<uint8_t[16]> next_key;
         {
-            uint8_t ratchet_msg[24];  // 16 + 8
+            uint8_t ratchet_msg[24];
             std::memcpy(ratchet_msg, fingerprint.val, 16);
             std::memcpy(ratchet_msg + 16, &insn.full_plaintext_insn, 8);
-            blake3_keyed_128(exec_.insn_fpe_key, ratchet_msg, 24,
+            blake3_keyed_128(exec.insn_fpe_key, ratchet_msg, 24,
                              next_key.val, 16);
             secure_zero(ratchet_msg, sizeof(ratchet_msg));
         }
 
-        // ── Phase H: Re-encode all 16 registers from old key to new key ─
-        // Decode each register under the current key, re-encode under the
-        // next key.  After this, all registers are in the new key's domain.
+        // ── Phase H: Re-encode all 16 registers (old key → new key) ────
         {
             SecureLocal<Speck64_RoundKeys> new_rk;
             Speck64_KeySchedule(next_key.val, new_rk.val);
             SecureLocal<XEX_Tweaks> new_tw;
             XEX_ComputeTweaks(new_rk.val, new_tw.val);
 
-            // Doc 16 §4 Phase H: live registers re-encode, dead → Enc(0).
-            uint16_t live = imm_->bb_metadata[exec_.current_bb_index].live_regs_bitmap;
+            uint16_t live = imm.bb_metadata[exec.current_bb_index]
+                                .live_regs_bitmap;
             for (uint8_t i = 0; i < 16; ++i) {
                 if (live & (1u << i)) {
                     SecureLocal<uint64_t> plain;
                     plain.val = FPE_Decode(rk.val, tw.val, i,
-                                           exec_.regs[i].bits);
-                    exec_.regs[i] = RegVal(
+                                           exec.regs[i].bits);
+                    exec.regs[i] = RegVal(
                         FPE_Encode(new_rk.val, new_tw.val, i, plain.val));
                 } else {
-                    // Dead register: canonical zero under new key
-                    exec_.regs[i] = RegVal(
+                    exec.regs[i] = RegVal(
                         FPE_Encode(new_rk.val, new_tw.val, i, 0));
                 }
             }
-            // new_rk, new_tw zeroed by SecureLocal destructor.
         }
 
         // ── Phase I: Commit new key ─────────────────────────────────────
-        std::memcpy(exec_.insn_fpe_key, next_key.val, 16);
-
-        // ── Phase J: secure_zero temporaries ────────────────────────────
-        // SecureLocal destructors handle rk, tw, fingerprint, next_key.
-        // Explicit zeros handled inline above for ratchet_msg, reg_bits.
+        std::memcpy(exec.insn_fpe_key, next_key.val, 16);
     }
-    // All SecureLocal destructors fire here -- rk, tw, fingerprint, next_key
-    // are zeroed.  No FPE temporaries survive past this scope.
+    // Phase J: SecureLocal destructors zero rk, tw, fingerprint, next_key.
 
-    // ── Phase K: advance enc_state (SipHash chain for instruction decryption) ─
-    pipeline::advance_enc_state(exec_, insn.full_plaintext_insn);
+    // ── Phase K: advance enc_state (Doc 17 full-instruction ratchet) ────
+    pipeline::advance_enc_state(exec, insn.full_plaintext_insn);
 
-    // ── Phase L: Advance IP / BB transition ─────────────────────────────
-    if (exec_.branch_taken) {
-        exec_.branch_taken = false;
+    return {};
+}
 
-        // Verify MAC of the BB we're leaving
-        auto mac_r = pipeline::verify_bb_mac(*imm_, exec_, *epoch_);
-        if (!mac_r) return tl::make_unexpected(mac_r.error());
+// ═════════════════════════════════════════════════════════════════════════════
+// VmEngine::step() — delegates to dispatch_unit (no separate codepath)
+//
+// WHY no separate implementation:
+//   The old step() lacked Phase D.oram (PUSH/POP broken) and used branching
+//   Phase L (timing side-channel leak).  Delegating to dispatch_unit()
+//   ensures step() gets the same security guarantees: per-instruction ORAM
+//   scan, branchless Phase E, branchless Phase L.  For DebugPolicy (N=1),
+//   dispatch_unit executes exactly 1 instruction + Phase L — identical
+//   semantics to the old step(), but with no security loopholes.
+// ═════════════════════════════════════════════════════════════════════════════
 
-        auto enter_r = pipeline::enter_basic_block(
-            exec_, *epoch_, *imm_, exec_.branch_target_bb);
-        if (!enter_r) return tl::make_unexpected(enter_r.error());
-
-        // If RET_VM set a resume point, override enter_basic_block's
-        // default vm_ip = entry_ip.  This resumes after the CALL_VM.
-        if (exec_.return_resume_ip != 0) {
-            exec_.vm_ip = exec_.return_resume_ip;
-            exec_.insn_index_in_bb = exec_.return_resume_insn_idx;
-            pipeline::replay_enc_state(exec_, *epoch_, *imm_,
-                                       exec_.return_resume_insn_idx);
-            exec_.return_resume_ip = 0;
-            exec_.return_resume_insn_idx = 0;
-        }
-
-    } else {
-        exec_.vm_ip++;
-
-        // Check if we've reached end of current BB
-        uint32_t bb_end = imm_->bb_metadata[exec_.current_bb_index].entry_ip
-                        + pipeline::current_bb_insn_count(*imm_, exec_);
-
-        if (exec_.vm_ip >= bb_end) {
-            // Verify MAC at BB boundary
-            auto mac_r = pipeline::verify_bb_mac(*imm_, exec_, *epoch_);
-            if (!mac_r) return tl::make_unexpected(mac_r.error());
-
-            // Fallthrough to next sequential BB
-            if (exec_.current_bb_index + 1 < imm_->bb_metadata.size()) {
-                uint32_t next_id = imm_->bb_metadata[exec_.current_bb_index + 1].bb_id;
-                auto enter_r = pipeline::enter_basic_block(
-                    exec_, *epoch_, *imm_, next_id);
-                if (!enter_r) return tl::make_unexpected(enter_r.error());
-            }
-        }
-    }
-
-    return exec_.halted ? VmResult::Halted : VmResult::Stepped;
+template<typename Policy, typename Oram>
+tl::expected<VmResult, DiagnosticCode>
+VmEngine<Policy, Oram>::step() noexcept
+{
+    return dispatch_unit();
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -513,130 +523,15 @@ template<typename Policy, typename Oram>
 tl::expected<VmResult, DiagnosticCode>
 VmEngine<Policy, Oram>::dispatch_unit() noexcept
 {
-    static const auto table = build_handler_table<Policy, Oram>();
     constexpr uint8_t N = Policy::fusion_granularity;
 
     // ── N sub-instructions: full Phase A-K each ─────────────────────────
     for (uint8_t j = 0; j < N; ++j) {
 
-        // ── Phases A-C: FETCH + DECRYPT + DECODE ────────────────────────
-        auto insn_or = pipeline::fetch_decrypt_decode(*imm_, exec_, *epoch_);
-        if (!insn_or) return tl::make_unexpected(insn_or.error());
-        auto insn = *insn_or;
-
-        // ── Phase C': RESOLVE operands + FPE decode ─────────────────────
-        pipeline::resolve_operands(*imm_, exec_, *epoch_, insn);
-
-        // ── Phase D.oram: Unconditional per-sub-instruction ORAM scan ───
-        //
-        // WHY per-sub-instruction (Doc 19 pipeline-level normalization):
-        //   PUSH/POP handlers previously called Oram::read/write inside
-        //   Phase D, making their timing ~14K ns higher than NOP/ALU.
-        //   Moving the scan here ensures every sub-instruction does exactly
-        //   1 scan at the same cost.  PUSH/POP handlers no longer call
-        //   Oram directly — they use exec_.oram_read_result for reads
-        //   and rely on the pipeline having written for writes.
-        //
-        //   Branchless MUX: address, value, and direction are computed
-        //   from the decoded opcode without data-dependent branches.
-        {
-            using Common::VM::VmOpcode;
-            const uint64_t push_mask = -static_cast<uint64_t>(
-                insn.opcode == VmOpcode::PUSH);
-            const uint64_t pop_mask  = -static_cast<uint64_t>(
-                insn.opcode == VmOpcode::POP);
-
-            // Address: vm_sp-8 for PUSH, vm_sp for POP, 0 for others
-            const uint64_t oram_addr =
-                ((exec_.vm_sp - 8) & push_mask) | (exec_.vm_sp & pop_mask);
-
-            // Write value: encode(plain_a) for PUSH, 0 for others
-            const uint64_t encoded =
-                imm_->mem.encode_lut().apply(insn.plain_a);
-            const uint64_t write_val = encoded & push_mask;
-
-            // Direction: PUSH = write (true), everything else = read (false)
-            const bool is_write = static_cast<bool>(push_mask & 1);
-
-            exec_.oram_read_result = Oram::access(
-                *oram_, oram_addr, write_val, is_write);
-        }
-
-        // ── Phase D.handler: HANDLER DISPATCH ───────────────────────────
-        auto r = table[static_cast<uint8_t>(insn.opcode)](
-            exec_, *epoch_, *oram_, *imm_, insn);
+        auto r = execute_one_instruction<Policy, Oram>(
+            exec_, *epoch_, *oram_, *imm_);
         if (!r) return tl::make_unexpected(r.error());
 
-        // Zero plaintext operands after handler (Theorem 7.1).
-        secure_zero(&insn.plain_a, sizeof(insn.plain_a));
-        secure_zero(&insn.plain_b, sizeof(insn.plain_b));
-
-        // ── Phases E-I: FPE encode + fingerprint + key ratchet ──────────
-        {
-            SecureLocal<Speck64_RoundKeys> rk;
-            Speck64_KeySchedule(exec_.insn_fpe_key, rk.val);
-            SecureLocal<XEX_Tweaks> tw;
-            XEX_ComputeTweaks(rk.val, tw.val);
-
-            // Phase E: FPE-encode handler result
-            if (opcode_writes_reg(insn.opcode)) {
-                exec_.regs[insn.reg_a] = RegVal(
-                    FPE_Encode(rk.val, tw.val, insn.reg_a,
-                               exec_.regs[insn.reg_a].bits));
-            }
-
-            // Phase F: Fingerprint all 16 encoded registers
-            SecureLocal<uint8_t[16]> fingerprint;
-            {
-                uint64_t reg_bits[16];
-                for (uint8_t i = 0; i < 16; ++i)
-                    reg_bits[i] = exec_.regs[i].bits;
-                blake3_keyed_fingerprint(exec_.insn_fpe_key, reg_bits, fingerprint.val);
-                secure_zero(reg_bits, sizeof(reg_bits));
-            }
-
-            // Phase G: Key ratchet
-            SecureLocal<uint8_t[16]> next_key;
-            {
-                uint8_t ratchet_msg[24];
-                std::memcpy(ratchet_msg, fingerprint.val, 16);
-                std::memcpy(ratchet_msg + 16, &insn.full_plaintext_insn, 8);
-                blake3_keyed_128(exec_.insn_fpe_key, ratchet_msg, 24,
-                                 next_key.val, 16);
-                secure_zero(ratchet_msg, sizeof(ratchet_msg));
-            }
-
-            // Phase H: Re-encode all 16 registers (old key → new key)
-            {
-                SecureLocal<Speck64_RoundKeys> new_rk;
-                Speck64_KeySchedule(next_key.val, new_rk.val);
-                SecureLocal<XEX_Tweaks> new_tw;
-                XEX_ComputeTweaks(new_rk.val, new_tw.val);
-
-                uint16_t live = imm_->bb_metadata[exec_.current_bb_index].live_regs_bitmap;
-                for (uint8_t i = 0; i < 16; ++i) {
-                    if (live & (1u << i)) {
-                        SecureLocal<uint64_t> plain;
-                        plain.val = FPE_Decode(rk.val, tw.val, i,
-                                               exec_.regs[i].bits);
-                        exec_.regs[i] = RegVal(
-                            FPE_Encode(new_rk.val, new_tw.val, i, plain.val));
-                    } else {
-                        exec_.regs[i] = RegVal(
-                            FPE_Encode(new_rk.val, new_tw.val, i, 0));
-                    }
-                }
-            }
-
-            // Phase I: Commit new key
-            std::memcpy(exec_.insn_fpe_key, next_key.val, 16);
-        }
-        // Phase J: SecureLocal destructors zero all temporaries.
-
-        // ── Phase K: advance enc_state ──────────────────────────────────
-        pipeline::advance_enc_state(exec_, insn.full_plaintext_insn);
-
-        // Advance IP for next fetch (Phase L runs once after all N iterations)
         exec_.vm_ip++;
 
         // Break on HALT — Phase L must still run for BB MAC verification.
@@ -669,30 +564,7 @@ VmEngine<Policy, Oram>::dispatch_unit() noexcept
     //   (c) !at_bb_end && !branch_taken → target = current_bb (identity), restore
     {
         // ── L.1: Snapshot state before transition ────────────────────
-        // Fields modified by enter_basic_block that we may need to restore.
-        struct ExecSnap {
-            uint64_t enc_state;
-            uint32_t insn_index_in_bb;
-            uint64_t vm_ip;
-            uint8_t  bb_chain_state[32];
-            uint8_t  insn_fpe_key[16];
-            uint64_t regs[16];
-            uint32_t current_bb_id;
-            uint32_t current_bb_index;
-            uint32_t current_epoch;
-        };
-        ExecSnap snap;
-        snap.enc_state = exec_.enc_state;
-        snap.insn_index_in_bb = exec_.insn_index_in_bb;
-        snap.vm_ip = exec_.vm_ip;
-        std::memcpy(snap.bb_chain_state, exec_.bb_chain_state, 32);
-        std::memcpy(snap.insn_fpe_key, exec_.insn_fpe_key, 16);
-        for (int r = 0; r < 16; ++r) snap.regs[r] = exec_.regs[r].bits;
-        snap.current_bb_id = exec_.current_bb_id;
-        snap.current_bb_index = exec_.current_bb_index;
-        snap.current_epoch = exec_.current_epoch;
-
-        // Also snapshot VmEpoch (opcode permutation tables)
+        auto snap = ExecSnapshot::capture(exec_);
         VmEpoch epoch_snap = *epoch_;
 
         // ── L.2: Determine target BB (branchless 3-way select) ──────
@@ -705,7 +577,6 @@ VmEngine<Policy, Oram>::dispatch_unit() noexcept
             ? imm_->bb_metadata[exec_.current_bb_index + 1].bb_id
             : exec_.current_bb_id;
 
-        // Branchless target selection: branch > fallthrough > identity
         uint32_t m_br  = -static_cast<uint32_t>(exec_.branch_taken);
         uint32_t m_end = -static_cast<uint32_t>(at_end) & ~m_br;
         uint32_t m_id  = ~m_br & ~m_end;
@@ -724,17 +595,14 @@ VmEngine<Policy, Oram>::dispatch_unit() noexcept
             exec_, *epoch_, *imm_, target);
         if (!enter_r) return tl::make_unexpected(enter_r.error());
 
-        // ── L.5: Always replay_enc_state (0 iterations = no-op) ─────
-        // RET_VM sets return_resume_ip/insn_idx; branchless apply via MUX.
+        // ── L.5: RET_VM resume — branchless apply via MUX ───────────
         {
             uint64_t rmask = -static_cast<uint64_t>(exec_.return_resume_ip != 0);
-            exec_.vm_ip = static_cast<uint64_t>(
-                (exec_.return_resume_ip & rmask) | (exec_.vm_ip & ~rmask));
+            exec_.vm_ip = (exec_.return_resume_ip & rmask)
+                        | (exec_.vm_ip & ~rmask);
             exec_.insn_index_in_bb = static_cast<uint32_t>(
                 (exec_.return_resume_insn_idx & static_cast<uint32_t>(rmask))
               | (exec_.insn_index_in_bb & static_cast<uint32_t>(~rmask)));
-
-            // replay with 0 iterations when no resume → no-op
             pipeline::replay_enc_state(exec_, *epoch_, *imm_,
                                        exec_.return_resume_insn_idx);
             exec_.return_resume_ip = 0;
@@ -742,63 +610,11 @@ VmEngine<Policy, Oram>::dispatch_unit() noexcept
         }
 
         // ── L.6: Branchless commit/restore MUX ──────────────────────
-        // keep = all-1s if need_transition, all-0s otherwise.
-        // For each field: result = (new & keep) | (old & discard).
-        uint64_t keep = -static_cast<uint64_t>(need_transition);
-        uint64_t disc = ~keep;
-
-        exec_.enc_state = (exec_.enc_state & keep) | (snap.enc_state & disc);
-        exec_.insn_index_in_bb = static_cast<uint32_t>(
-            (exec_.insn_index_in_bb & static_cast<uint32_t>(keep))
-          | (snap.insn_index_in_bb & static_cast<uint32_t>(disc)));
-        exec_.vm_ip = (exec_.vm_ip & keep) | (snap.vm_ip & disc);
-        for (int i = 0; i < 32; ++i)
-            exec_.bb_chain_state[i] = static_cast<uint8_t>(
-                (exec_.bb_chain_state[i] & static_cast<uint8_t>(keep))
-              | (snap.bb_chain_state[i] & static_cast<uint8_t>(disc)));
-        for (int i = 0; i < 16; ++i)
-            exec_.insn_fpe_key[i] = static_cast<uint8_t>(
-                (exec_.insn_fpe_key[i] & static_cast<uint8_t>(keep))
-              | (snap.insn_fpe_key[i] & static_cast<uint8_t>(disc)));
-        for (int r = 0; r < 16; ++r)
-            exec_.regs[r] = RegVal(
-                (exec_.regs[r].bits & keep) | (snap.regs[r] & disc));
-        exec_.current_bb_id = static_cast<uint32_t>(
-            (exec_.current_bb_id & static_cast<uint32_t>(keep))
-          | (snap.current_bb_id & static_cast<uint32_t>(disc)));
-        exec_.current_bb_index = static_cast<uint32_t>(
-            (exec_.current_bb_index & static_cast<uint32_t>(keep))
-          | (snap.current_bb_index & static_cast<uint32_t>(disc)));
-        exec_.current_epoch = static_cast<uint32_t>(
-            (exec_.current_epoch & static_cast<uint32_t>(keep))
-          | (snap.current_epoch & static_cast<uint32_t>(disc)));
-
-        // Restore VmEpoch if !need_transition (identity transition discarded)
-        // For opcode_perm[256] + opcode_perm_inv[256]: byte-wise MUX
-        for (int i = 0; i < 256; ++i) {
-            epoch_->opcode_perm[i] = static_cast<uint8_t>(
-                (epoch_->opcode_perm[i] & static_cast<uint8_t>(keep))
-              | (epoch_snap.opcode_perm[i] & static_cast<uint8_t>(disc)));
-            epoch_->opcode_perm_inv[i] = static_cast<uint8_t>(
-                (epoch_->opcode_perm_inv[i] & static_cast<uint8_t>(keep))
-              | (epoch_snap.opcode_perm_inv[i] & static_cast<uint8_t>(disc)));
-        }
-        epoch_->bb_id = static_cast<uint32_t>(
-            (epoch_->bb_id & static_cast<uint32_t>(keep))
-          | (epoch_snap.bb_id & static_cast<uint32_t>(disc)));
-        epoch_->epoch = static_cast<uint32_t>(
-            (epoch_->epoch & static_cast<uint32_t>(keep))
-          | (epoch_snap.epoch & static_cast<uint32_t>(disc)));
-        epoch_->live_regs_bitmap = static_cast<uint16_t>(
-            (epoch_->live_regs_bitmap & static_cast<uint16_t>(keep))
-          | (epoch_snap.live_regs_bitmap & static_cast<uint16_t>(disc)));
+        snap.branchless_restore(exec_, need_transition);
+        epoch_->branchless_select(epoch_snap, need_transition);
 
         secure_zero(&snap, sizeof(snap));
     }
-
-    // Per-DU dummy_scan removed — replaced by per-sub-instruction
-    // unconditional ORAM scan in Phase D.oram above.  Every sub-instruction
-    // now does exactly 1 scan (real for PUSH/POP, dummy for everything else).
 
     return exec_.halted ? VmResult::Halted : VmResult::Stepped;
 }

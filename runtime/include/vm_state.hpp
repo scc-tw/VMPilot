@@ -271,6 +271,103 @@ struct VmEpoch {
     /// is in the .cpp file, not inlined here, to avoid pulling in
     /// vm_encoding.hpp.
     void enter_bb(const BBMetadata& bb) noexcept;
+
+    /// Branchless select between two VmEpoch states (Doc 19 Phase L).
+    ///
+    /// WHY branchless: Phase L always executes enter_basic_block, then
+    /// decides via bitmask MUX whether to keep the result or discard it.
+    /// A conditional memcpy or branch on `keep_new` would leak whether a
+    /// BB transition actually occurred via timing side channel.
+    ///
+    /// Bytewise MUX on opcode_perm[256] + opcode_perm_inv[256] + scalars.
+    void branchless_select(const VmEpoch& snapshot, bool keep_new) noexcept {
+        const uint8_t keep8 = -static_cast<uint8_t>(keep_new);
+        const uint8_t disc8 = ~keep8;
+        for (int i = 0; i < 256; ++i) {
+            opcode_perm[i]     = (opcode_perm[i] & keep8)
+                               | (snapshot.opcode_perm[i] & disc8);
+            opcode_perm_inv[i] = (opcode_perm_inv[i] & keep8)
+                               | (snapshot.opcode_perm_inv[i] & disc8);
+        }
+        const uint32_t k32 = -static_cast<uint32_t>(keep_new);
+        const uint32_t d32 = ~k32;
+        bb_id    = (bb_id & k32)    | (snapshot.bb_id & d32);
+        epoch    = (epoch & k32)    | (snapshot.epoch & d32);
+        live_regs_bitmap = static_cast<uint16_t>(
+            (live_regs_bitmap & static_cast<uint16_t>(k32))
+          | (snapshot.live_regs_bitmap & static_cast<uint16_t>(d32)));
+    }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ExecSnapshot — branchless Phase L snapshot/restore for VmExecution
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Snapshot of VmExecution fields modified by enter_basic_block.
+///
+/// Used by Phase L (Doc 19 §4.2 Fix #1): always execute verify_bb_mac +
+/// enter_basic_block, then branchless MUX decides whether to commit the
+/// new state or restore the snapshot.  This prevents timing from leaking
+/// whether a BB transition occurred.
+struct ExecSnapshot {
+    uint64_t enc_state;
+    uint32_t insn_index_in_bb;
+    uint64_t vm_ip;
+    uint8_t  bb_chain_state[32];
+    uint8_t  insn_fpe_key[16];
+    uint64_t regs[16];
+    uint32_t current_bb_id;
+    uint32_t current_bb_index;
+    uint32_t current_epoch;
+
+    /// Capture current VmExecution state.
+    static ExecSnapshot capture(const VmExecution& exec) noexcept {
+        ExecSnapshot s;
+        s.enc_state = exec.enc_state;
+        s.insn_index_in_bb = exec.insn_index_in_bb;
+        s.vm_ip = exec.vm_ip;
+        std::memcpy(s.bb_chain_state, exec.bb_chain_state, 32);
+        std::memcpy(s.insn_fpe_key, exec.insn_fpe_key, 16);
+        for (int r = 0; r < 16; ++r) s.regs[r] = exec.regs[r].bits;
+        s.current_bb_id = exec.current_bb_id;
+        s.current_bb_index = exec.current_bb_index;
+        s.current_epoch = exec.current_epoch;
+        return s;
+    }
+
+    /// Branchless restore: if !keep_new, overwrite exec with snapshot values.
+    ///
+    /// WHY bytewise MUX (not conditional memcpy):
+    ///   A branch on keep_new leaks whether the transition was committed.
+    ///   Bytewise bitwise MUX executes the same instructions regardless.
+    void branchless_restore(VmExecution& exec, bool keep_new) const noexcept {
+        const uint64_t keep = -static_cast<uint64_t>(keep_new);
+        const uint64_t disc = ~keep;
+        const uint32_t k32 = static_cast<uint32_t>(keep);
+        const uint32_t d32 = static_cast<uint32_t>(disc);
+
+        exec.enc_state = (exec.enc_state & keep) | (enc_state & disc);
+        exec.insn_index_in_bb = (exec.insn_index_in_bb & k32)
+                              | (insn_index_in_bb & d32);
+        exec.vm_ip = (exec.vm_ip & keep) | (vm_ip & disc);
+        for (int i = 0; i < 32; ++i)
+            exec.bb_chain_state[i] = static_cast<uint8_t>(
+                (exec.bb_chain_state[i] & static_cast<uint8_t>(keep))
+              | (bb_chain_state[i] & static_cast<uint8_t>(disc)));
+        for (int i = 0; i < 16; ++i)
+            exec.insn_fpe_key[i] = static_cast<uint8_t>(
+                (exec.insn_fpe_key[i] & static_cast<uint8_t>(keep))
+              | (insn_fpe_key[i] & static_cast<uint8_t>(disc)));
+        for (int r = 0; r < 16; ++r)
+            exec.regs[r] = RegVal(
+                (exec.regs[r].bits & keep) | (regs[r] & disc));
+        exec.current_bb_id = (exec.current_bb_id & k32)
+                            | (current_bb_id & d32);
+        exec.current_bb_index = (exec.current_bb_index & k32)
+                              | (current_bb_index & d32);
+        exec.current_epoch = (exec.current_epoch & k32)
+                            | (current_epoch & d32);
+    }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
