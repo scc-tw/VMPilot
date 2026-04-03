@@ -412,3 +412,61 @@ TEST(ControlFlow, CallVmRetVm) {
     ASSERT_TRUE(r.has_value());
     EXPECT_EQ(r->status, VmResult::Halted);
 }
+
+// ############################################################################
+// VM Internal opcodes — execution correctness
+// ############################################################################
+
+TEST(ControlFlow, CheckIntegrityDoesNotCrash) {
+    uint8_t seed[32]; fill_seed(seed);
+    auto engine = single_bb_engine_cf(seed, 0xB0,
+        {{VmOpcode::CHECK_INTEGRITY, none(), 0, 0, 0},
+         {VmOpcode::HALT, none(), 0, 0, 0}});
+    ASSERT_TRUE(engine.has_value());
+    auto r = engine->execute();
+    ASSERT_TRUE(r.has_value());
+}
+
+TEST(ControlFlow, CheckDebugDoesNotCrash) {
+    uint8_t seed[32]; fill_seed(seed);
+    auto engine = single_bb_engine_cf(seed, 0xB1,
+        {{VmOpcode::CHECK_DEBUG, none(), 0, 0, 0},
+         {VmOpcode::HALT, none(), 0, 0, 0}});
+    ASSERT_TRUE(engine.has_value());
+    auto r = engine->execute();
+    ASSERT_TRUE(r.has_value());
+}
+
+TEST(ControlFlow, MutateIsaDoesNotCrash) {
+    uint8_t seed[32]; fill_seed(seed);
+    auto engine = single_bb_engine_cf(seed, 0xB2,
+        {{VmOpcode::MUTATE_ISA, none(), 0, 0, 0},
+         {VmOpcode::HALT, none(), 0, 0, 0}});
+    ASSERT_TRUE(engine.has_value());
+    auto r = engine->execute();
+    ASSERT_TRUE(r.has_value());
+}
+
+TEST(ControlFlow, HaltAsFirstInstruction) {
+    uint8_t seed[32]; fill_seed(seed);
+    auto engine = single_bb_engine_cf(seed, 0xB3,
+        {{VmOpcode::HALT, none(), 0, 0, 0}});
+    ASSERT_TRUE(engine.has_value());
+    auto r = engine->execute();
+    ASSERT_TRUE(r.has_value());
+    EXPECT_EQ(r->status, VmResult::Halted);
+    EXPECT_EQ(r->return_value, 0u)
+        << "HALT as first instruction: r0 should be default (0)";
+}
+
+TEST(ControlFlow, RetVmWithoutCallFails) {
+    uint8_t seed[32]; fill_seed(seed);
+    auto engine = single_bb_engine_cf(seed, 0xB4,
+        {{VmOpcode::RET_VM, none(), 0, 0, 0},
+         {VmOpcode::HALT, none(), 0, 0, 0}});
+    ASSERT_TRUE(engine.has_value());
+    auto r = engine->execute();
+    ASSERT_FALSE(r.has_value())
+        << "RET_VM without prior CALL_VM must fail (stack underflow)";
+    EXPECT_EQ(r.error(), DiagnosticCode::StackUnderflow);
+}

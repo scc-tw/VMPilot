@@ -645,3 +645,105 @@ TEST(Phase2Engine, SharedImmutableForReentrancy) {
     EXPECT_EQ(imm.use_count(), 2);
     EXPECT_EQ(imm.get(), imm2.get());  // same pointer
 }
+
+// ============================================================================
+// opcode_writes_reg() correctness (moved to common/vm_opcode.hpp)
+// ============================================================================
+
+TEST(OpcodeWritesReg, WritingOpcodes) {
+    // Opcodes that write plaintext to regs[reg_a] — Phase E must FPE-encode
+    EXPECT_TRUE(opcode_writes_reg(VmOpcode::MOVE));
+    EXPECT_TRUE(opcode_writes_reg(VmOpcode::LOAD));
+    EXPECT_TRUE(opcode_writes_reg(VmOpcode::POP));
+    EXPECT_TRUE(opcode_writes_reg(VmOpcode::LOAD_CONST));
+    EXPECT_TRUE(opcode_writes_reg(VmOpcode::LOAD_CTX));
+    EXPECT_TRUE(opcode_writes_reg(VmOpcode::GET_FLAG));
+    EXPECT_TRUE(opcode_writes_reg(VmOpcode::ADD));
+    EXPECT_TRUE(opcode_writes_reg(VmOpcode::SUB));
+    EXPECT_TRUE(opcode_writes_reg(VmOpcode::MUL));
+    EXPECT_TRUE(opcode_writes_reg(VmOpcode::DIV));
+    EXPECT_TRUE(opcode_writes_reg(VmOpcode::NEG));
+    EXPECT_TRUE(opcode_writes_reg(VmOpcode::AND));
+    EXPECT_TRUE(opcode_writes_reg(VmOpcode::XOR));
+    EXPECT_TRUE(opcode_writes_reg(VmOpcode::NOT));
+    EXPECT_TRUE(opcode_writes_reg(VmOpcode::SHL));
+    EXPECT_TRUE(opcode_writes_reg(VmOpcode::SEXT8));
+    EXPECT_TRUE(opcode_writes_reg(VmOpcode::ZEXT32));
+    EXPECT_TRUE(opcode_writes_reg(VmOpcode::NATIVE_CALL));
+    EXPECT_TRUE(opcode_writes_reg(VmOpcode::LOCK_ADD));
+    EXPECT_TRUE(opcode_writes_reg(VmOpcode::ATOMIC_LOAD));
+}
+
+TEST(OpcodeWritesReg, NonWritingOpcodes) {
+    // Opcodes that do NOT write to regs — Phase E must NOT re-encode
+    EXPECT_FALSE(opcode_writes_reg(VmOpcode::JMP));
+    EXPECT_FALSE(opcode_writes_reg(VmOpcode::JCC));
+    EXPECT_FALSE(opcode_writes_reg(VmOpcode::HALT));
+    EXPECT_FALSE(opcode_writes_reg(VmOpcode::NOP));
+    EXPECT_FALSE(opcode_writes_reg(VmOpcode::CMP));
+    EXPECT_FALSE(opcode_writes_reg(VmOpcode::TEST));
+    EXPECT_FALSE(opcode_writes_reg(VmOpcode::SET_FLAG));
+    EXPECT_FALSE(opcode_writes_reg(VmOpcode::STORE));
+    EXPECT_FALSE(opcode_writes_reg(VmOpcode::PUSH));
+    EXPECT_FALSE(opcode_writes_reg(VmOpcode::STORE_CTX));
+    EXPECT_FALSE(opcode_writes_reg(VmOpcode::FENCE));
+    EXPECT_FALSE(opcode_writes_reg(VmOpcode::CHECK_INTEGRITY));
+    EXPECT_FALSE(opcode_writes_reg(VmOpcode::CHECK_DEBUG));
+    EXPECT_FALSE(opcode_writes_reg(VmOpcode::MUTATE_ISA));
+    EXPECT_FALSE(opcode_writes_reg(VmOpcode::REKEY));
+    EXPECT_FALSE(opcode_writes_reg(VmOpcode::SAVE_EPOCH));
+    EXPECT_FALSE(opcode_writes_reg(VmOpcode::RESYNC));
+    EXPECT_FALSE(opcode_writes_reg(VmOpcode::CALL_VM));
+    EXPECT_FALSE(opcode_writes_reg(VmOpcode::RET_VM));
+}
+
+// ============================================================================
+// make_operand_flags() and OP_FLAGS_* constants (vm_insn.hpp)
+// ============================================================================
+
+TEST(VmInsnFlags, MakeOperandFlags) {
+    EXPECT_EQ(make_operand_flags(VM_OPERAND_NONE, VM_OPERAND_NONE), 0u);
+    EXPECT_EQ(make_operand_flags(VM_OPERAND_REG, VM_OPERAND_REG),
+              OP_FLAGS_REG_REG);
+    EXPECT_EQ(make_operand_flags(VM_OPERAND_REG, VM_OPERAND_NONE),
+              OP_FLAGS_REG_NONE);
+    EXPECT_EQ(make_operand_flags(VM_OPERAND_POOL, VM_OPERAND_NONE),
+              OP_FLAGS_POOL);
+    EXPECT_EQ(make_operand_flags(VM_OPERAND_REG, VM_OPERAND_MEM),
+              OP_FLAGS_REG_MEM);
+}
+
+TEST(VmInsnFlags, ConditionNibble) {
+    // Condition nibble occupies bits [3:0]
+    uint8_t flags = make_operand_flags(VM_OPERAND_REG, VM_OPERAND_NONE, 0x0A);
+    VmInsn insn{};
+    insn.flags = flags;
+    EXPECT_EQ(insn.operand_a_type(), VM_OPERAND_REG);
+    EXPECT_EQ(insn.operand_b_type(), VM_OPERAND_NONE);
+    EXPECT_EQ(insn.condition(), 0x0A);
+}
+
+// ============================================================================
+// to_string() completeness
+// ============================================================================
+
+TEST(VmOpcodeTest, ToStringCoversAllOpcodes) {
+    for (uint8_t i = 0; i < VM_OPCODE_COUNT; ++i) {
+        auto op = static_cast<VmOpcode>(i);
+        const char* s = to_string(op);
+        EXPECT_NE(s, nullptr) << "to_string returned nullptr for opcode " << i;
+        EXPECT_GT(std::strlen(s), 0u) << "to_string returned empty for opcode " << i;
+    }
+}
+
+// ============================================================================
+// vm_opcode_category() range check
+// ============================================================================
+
+TEST(VmOpcodeTest, CategoryRangeValid) {
+    for (uint8_t i = 0; i < VM_OPCODE_COUNT; ++i) {
+        auto op = static_cast<VmOpcode>(i);
+        uint8_t cat = vm_opcode_category(op);
+        EXPECT_LE(cat, 7u) << "Category out of range for opcode " << i;
+    }
+}
