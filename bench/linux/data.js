@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775238146533,
+  "lastUpdate": 1775254087605,
   "repoUrl": "https://github.com/scc-tw/VMPilot",
   "entries": {
     "linux": [
@@ -3295,6 +3295,830 @@ window.BENCHMARK_DATA = {
           {
             "name": "MUTATE_ISA (DU/s)",
             "value": 198270,
+            "unit": "DU/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "scc@scc.tw",
+            "name": "scc",
+            "username": "scc-tw"
+          },
+          "committer": {
+            "email": "scc@scc.tw",
+            "name": "scc",
+            "username": "scc-tw"
+          },
+          "distinct": true,
+          "id": "ab10bc2c0a4beb1f8811072cec731c2635840a5a",
+          "message": "test: add opcode_writes_reg, make_operand_flags, VM internal opcode tests\n\n- opcode_writes_reg: exhaustive test for all 55 opcodes (writing vs non-writing)\n- make_operand_flags + OP_FLAGS_*: constexpr flag composition correctness\n- to_string: covers all opcodes (no nullptr, no empty)\n- vm_opcode_category: range [0,7] for all opcodes\n- VmInsn condition nibble extraction\n- VM internal opcodes: CHECK_INTEGRITY, CHECK_DEBUG, MUTATE_ISA execute without crash\n- HALT as first instruction: returns 0\n- RET_VM without CALL_VM: StackUnderflow",
+          "timestamp": "2026-04-04T06:05:51+08:00",
+          "tree_id": "4d67018b2cebcf9d9732eda3dfc5a7846e6ca523",
+          "url": "https://github.com/scc-tw/VMPilot/commit/ab10bc2c0a4beb1f8811072cec731c2635840a5a"
+        },
+        "date": 1775254086794,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "NOP (total)",
+            "value": 5160.36,
+            "unit": "ns/DU",
+            "extra": "median=645045ns  p95=658549ns  stddev=10645.6ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "NOP (handler)",
+            "value": 0,
+            "unit": "ns"
+          },
+          {
+            "name": "NOP (DU/s)",
+            "value": 193785,
+            "unit": "DU/s"
+          },
+          {
+            "name": "MOVE (total)",
+            "value": 5135.83,
+            "unit": "ns/DU",
+            "extra": "median=641979ns  p95=715846ns  stddev=22495.4ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "MOVE (handler)",
+            "value": -24.53,
+            "unit": "ns"
+          },
+          {
+            "name": "MOVE (DU/s)",
+            "value": 194710,
+            "unit": "DU/s"
+          },
+          {
+            "name": "LOAD (total)",
+            "value": 5118.04,
+            "unit": "ns/DU",
+            "extra": "median=639755ns  p95=643462ns  stddev=4339.1ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "LOAD (handler)",
+            "value": -42.32,
+            "unit": "ns"
+          },
+          {
+            "name": "LOAD (DU/s)",
+            "value": 195387,
+            "unit": "DU/s"
+          },
+          {
+            "name": "STORE (total)",
+            "value": 5110.34,
+            "unit": "ns/DU",
+            "extra": "median=638793ns  p95=641437ns  stddev=4256.2ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "STORE (handler)",
+            "value": -50.02,
+            "unit": "ns"
+          },
+          {
+            "name": "STORE (DU/s)",
+            "value": 195682,
+            "unit": "DU/s"
+          },
+          {
+            "name": "PUSH (total)",
+            "value": 5082.61,
+            "unit": "ns/DU",
+            "extra": "median=635326ns  p95=639825ns  stddev=4769.1ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "PUSH (handler)",
+            "value": -77.75,
+            "unit": "ns"
+          },
+          {
+            "name": "PUSH (DU/s)",
+            "value": 196749,
+            "unit": "DU/s"
+          },
+          {
+            "name": "POP (total)",
+            "value": 5150.5,
+            "unit": "ns/DU",
+            "extra": "median=643813ns  p95=661526ns  stddev=8358.4ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "POP (handler)",
+            "value": -9.86,
+            "unit": "ns"
+          },
+          {
+            "name": "POP (DU/s)",
+            "value": 194156,
+            "unit": "DU/s"
+          },
+          {
+            "name": "LOAD_CONST (total)",
+            "value": 5079,
+            "unit": "ns/DU",
+            "extra": "median=634875ns  p95=639874ns  stddev=5554.6ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "LOAD_CONST (handler)",
+            "value": -81.36,
+            "unit": "ns"
+          },
+          {
+            "name": "LOAD_CONST (DU/s)",
+            "value": 196889,
+            "unit": "DU/s"
+          },
+          {
+            "name": "LOAD_CTX (total)",
+            "value": 5101.21,
+            "unit": "ns/DU",
+            "extra": "median=637651ns  p95=642219ns  stddev=5270.1ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "LOAD_CTX (handler)",
+            "value": -59.15,
+            "unit": "ns"
+          },
+          {
+            "name": "LOAD_CTX (DU/s)",
+            "value": 196032,
+            "unit": "DU/s"
+          },
+          {
+            "name": "STORE_CTX (total)",
+            "value": 6655.46,
+            "unit": "ns/DU",
+            "extra": "median=831933ns  p95=880834ns  stddev=69059.1ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "STORE_CTX (handler)",
+            "value": 1495.1,
+            "unit": "ns"
+          },
+          {
+            "name": "STORE_CTX (DU/s)",
+            "value": 150252,
+            "unit": "DU/s"
+          },
+          {
+            "name": "ADD (total)",
+            "value": 5103.61,
+            "unit": "ns/DU",
+            "extra": "median=637951ns  p95=641126ns  stddev=4535.4ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "ADD (handler)",
+            "value": -56.75,
+            "unit": "ns"
+          },
+          {
+            "name": "ADD (DU/s)",
+            "value": 195940,
+            "unit": "DU/s"
+          },
+          {
+            "name": "SUB (total)",
+            "value": 5080.85,
+            "unit": "ns/DU",
+            "extra": "median=635106ns  p95=639164ns  stddev=4406.4ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "SUB (handler)",
+            "value": -79.51,
+            "unit": "ns"
+          },
+          {
+            "name": "SUB (DU/s)",
+            "value": 196818,
+            "unit": "DU/s"
+          },
+          {
+            "name": "MUL (total)",
+            "value": 5133.9,
+            "unit": "ns/DU",
+            "extra": "median=641738ns  p95=667005ns  stddev=9370.2ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "MUL (handler)",
+            "value": -26.46,
+            "unit": "ns"
+          },
+          {
+            "name": "MUL (DU/s)",
+            "value": 194784,
+            "unit": "DU/s"
+          },
+          {
+            "name": "IMUL (total)",
+            "value": 5122.04,
+            "unit": "ns/DU",
+            "extra": "median=640255ns  p95=645165ns  stddev=4504.1ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "IMUL (handler)",
+            "value": -38.32,
+            "unit": "ns"
+          },
+          {
+            "name": "IMUL (DU/s)",
+            "value": 195235,
+            "unit": "DU/s"
+          },
+          {
+            "name": "DIV (total)",
+            "value": 5090.38,
+            "unit": "ns/DU",
+            "extra": "median=636298ns  p95=640496ns  stddev=4270.9ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "DIV (handler)",
+            "value": -69.98,
+            "unit": "ns"
+          },
+          {
+            "name": "DIV (DU/s)",
+            "value": 196449,
+            "unit": "DU/s"
+          },
+          {
+            "name": "IDIV (total)",
+            "value": 5116.59,
+            "unit": "ns/DU",
+            "extra": "median=639574ns  p95=645134ns  stddev=5214.9ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "IDIV (handler)",
+            "value": -43.77,
+            "unit": "ns"
+          },
+          {
+            "name": "IDIV (DU/s)",
+            "value": 195443,
+            "unit": "DU/s"
+          },
+          {
+            "name": "NEG (total)",
+            "value": 5110.58,
+            "unit": "ns/DU",
+            "extra": "median=638822ns  p95=680520ns  stddev=13851.6ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "NEG (handler)",
+            "value": -49.78,
+            "unit": "ns"
+          },
+          {
+            "name": "NEG (DU/s)",
+            "value": 195673,
+            "unit": "DU/s"
+          },
+          {
+            "name": "MOD (total)",
+            "value": 5104.25,
+            "unit": "ns/DU",
+            "extra": "median=638031ns  p95=642509ns  stddev=5104.5ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "MOD (handler)",
+            "value": -56.11,
+            "unit": "ns"
+          },
+          {
+            "name": "MOD (DU/s)",
+            "value": 195915,
+            "unit": "DU/s"
+          },
+          {
+            "name": "AND (total)",
+            "value": 5116.67,
+            "unit": "ns/DU",
+            "extra": "median=639584ns  p95=645445ns  stddev=4849.5ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "AND (handler)",
+            "value": -43.69,
+            "unit": "ns"
+          },
+          {
+            "name": "AND (DU/s)",
+            "value": 195440,
+            "unit": "DU/s"
+          },
+          {
+            "name": "OR (total)",
+            "value": 5115.07,
+            "unit": "ns/DU",
+            "extra": "median=639384ns  p95=640415ns  stddev=4368.6ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "OR (handler)",
+            "value": -45.29,
+            "unit": "ns"
+          },
+          {
+            "name": "OR (DU/s)",
+            "value": 195501,
+            "unit": "DU/s"
+          },
+          {
+            "name": "XOR (total)",
+            "value": 6795.25,
+            "unit": "ns/DU",
+            "extra": "median=849406ns  p95=881315ns  stddev=99381.5ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "XOR (handler)",
+            "value": 1634.89,
+            "unit": "ns"
+          },
+          {
+            "name": "XOR (DU/s)",
+            "value": 147162,
+            "unit": "DU/s"
+          },
+          {
+            "name": "NOT (total)",
+            "value": 6719.18,
+            "unit": "ns/DU",
+            "extra": "median=839898ns  p95=876296ns  stddev=93493.1ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "NOT (handler)",
+            "value": 1558.82,
+            "unit": "ns"
+          },
+          {
+            "name": "NOT (DU/s)",
+            "value": 148828,
+            "unit": "DU/s"
+          },
+          {
+            "name": "SHL (total)",
+            "value": 5178.7,
+            "unit": "ns/DU",
+            "extra": "median=647338ns  p95=654352ns  stddev=10213.9ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "SHL (handler)",
+            "value": 18.34,
+            "unit": "ns"
+          },
+          {
+            "name": "SHL (DU/s)",
+            "value": 193099,
+            "unit": "DU/s"
+          },
+          {
+            "name": "SHR (total)",
+            "value": 5111.7,
+            "unit": "ns/DU",
+            "extra": "median=638963ns  p95=640225ns  stddev=4323.4ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "SHR (handler)",
+            "value": -48.66,
+            "unit": "ns"
+          },
+          {
+            "name": "SHR (DU/s)",
+            "value": 195629,
+            "unit": "DU/s"
+          },
+          {
+            "name": "SAR (total)",
+            "value": 6661.72,
+            "unit": "ns/DU",
+            "extra": "median=832715ns  p95=866017ns  stddev=88889.6ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "SAR (handler)",
+            "value": 1501.36,
+            "unit": "ns"
+          },
+          {
+            "name": "SAR (DU/s)",
+            "value": 150111,
+            "unit": "DU/s"
+          },
+          {
+            "name": "ROL (total)",
+            "value": 5111.7,
+            "unit": "ns/DU",
+            "extra": "median=638962ns  p95=640265ns  stddev=4262.9ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "ROL (handler)",
+            "value": -48.66,
+            "unit": "ns"
+          },
+          {
+            "name": "ROL (DU/s)",
+            "value": 195630,
+            "unit": "DU/s"
+          },
+          {
+            "name": "ROR (total)",
+            "value": 5108.58,
+            "unit": "ns/DU",
+            "extra": "median=638573ns  p95=640766ns  stddev=4630.4ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "ROR (handler)",
+            "value": -51.78,
+            "unit": "ns"
+          },
+          {
+            "name": "ROR (DU/s)",
+            "value": 195749,
+            "unit": "DU/s"
+          },
+          {
+            "name": "CMP (total)",
+            "value": 5082.13,
+            "unit": "ns/DU",
+            "extra": "median=635266ns  p95=639263ns  stddev=4069.5ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "CMP (handler)",
+            "value": -78.23,
+            "unit": "ns"
+          },
+          {
+            "name": "CMP (DU/s)",
+            "value": 196768,
+            "unit": "DU/s"
+          },
+          {
+            "name": "TEST (total)",
+            "value": 5070.18,
+            "unit": "ns/DU",
+            "extra": "median=633773ns  p95=638782ns  stddev=4513.5ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "TEST (handler)",
+            "value": -90.18,
+            "unit": "ns"
+          },
+          {
+            "name": "TEST (DU/s)",
+            "value": 197232,
+            "unit": "DU/s"
+          },
+          {
+            "name": "SET_FLAG (total)",
+            "value": 5028.59,
+            "unit": "ns/DU",
+            "extra": "median=628574ns  p95=655754ns  stddev=10849.0ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "SET_FLAG (handler)",
+            "value": -131.77,
+            "unit": "ns"
+          },
+          {
+            "name": "SET_FLAG (DU/s)",
+            "value": 198863,
+            "unit": "DU/s"
+          },
+          {
+            "name": "GET_FLAG (total)",
+            "value": 5098.64,
+            "unit": "ns/DU",
+            "extra": "median=637330ns  p95=640175ns  stddev=5236.1ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "GET_FLAG (handler)",
+            "value": -61.72,
+            "unit": "ns"
+          },
+          {
+            "name": "GET_FLAG (DU/s)",
+            "value": 196131,
+            "unit": "DU/s"
+          },
+          {
+            "name": "JMP (total)",
+            "value": 5027.22,
+            "unit": "ns/DU",
+            "extra": "median=628403ns  p95=647409ns  stddev=7849.4ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "JMP (handler)",
+            "value": -133.14,
+            "unit": "ns"
+          },
+          {
+            "name": "JMP (DU/s)",
+            "value": 198917,
+            "unit": "DU/s"
+          },
+          {
+            "name": "JCC (total)",
+            "value": 5062.82,
+            "unit": "ns/DU",
+            "extra": "median=632852ns  p95=637741ns  stddev=5077.9ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "JCC (handler)",
+            "value": -97.54,
+            "unit": "ns"
+          },
+          {
+            "name": "JCC (DU/s)",
+            "value": 197519,
+            "unit": "DU/s"
+          },
+          {
+            "name": "NATIVE_CALL (total)",
+            "value": 5174.38,
+            "unit": "ns/DU",
+            "extra": "median=646798ns  p95=682484ns  stddev=11671.9ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "NATIVE_CALL (handler)",
+            "value": 14.02,
+            "unit": "ns"
+          },
+          {
+            "name": "NATIVE_CALL (DU/s)",
+            "value": 193260,
+            "unit": "DU/s"
+          },
+          {
+            "name": "SEXT8 (total)",
+            "value": 5080.77,
+            "unit": "ns/DU",
+            "extra": "median=635096ns  p95=637511ns  stddev=3976.6ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "SEXT8 (handler)",
+            "value": -79.59,
+            "unit": "ns"
+          },
+          {
+            "name": "SEXT8 (DU/s)",
+            "value": 196821,
+            "unit": "DU/s"
+          },
+          {
+            "name": "SEXT16 (total)",
+            "value": 5076.43,
+            "unit": "ns/DU",
+            "extra": "median=634554ns  p95=645474ns  stddev=6069.6ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "SEXT16 (handler)",
+            "value": -83.93,
+            "unit": "ns"
+          },
+          {
+            "name": "SEXT16 (DU/s)",
+            "value": 196989,
+            "unit": "DU/s"
+          },
+          {
+            "name": "SEXT32 (total)",
+            "value": 5085.58,
+            "unit": "ns/DU",
+            "extra": "median=635697ns  p95=773845ns  stddev=40684.1ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "SEXT32 (handler)",
+            "value": -74.78,
+            "unit": "ns"
+          },
+          {
+            "name": "SEXT32 (DU/s)",
+            "value": 196635,
+            "unit": "DU/s"
+          },
+          {
+            "name": "ZEXT8 (total)",
+            "value": 5064.58,
+            "unit": "ns/DU",
+            "extra": "median=633072ns  p95=640496ns  stddev=4869.4ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "ZEXT8 (handler)",
+            "value": -95.78,
+            "unit": "ns"
+          },
+          {
+            "name": "ZEXT8 (DU/s)",
+            "value": 197450,
+            "unit": "DU/s"
+          },
+          {
+            "name": "ZEXT16 (total)",
+            "value": 5091.03,
+            "unit": "ns/DU",
+            "extra": "median=636379ns  p95=646667ns  stddev=6294.3ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "ZEXT16 (handler)",
+            "value": -69.33,
+            "unit": "ns"
+          },
+          {
+            "name": "ZEXT16 (DU/s)",
+            "value": 196424,
+            "unit": "DU/s"
+          },
+          {
+            "name": "ZEXT32 (total)",
+            "value": 5079.25,
+            "unit": "ns/DU",
+            "extra": "median=634906ns  p95=647649ns  stddev=5521.2ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "ZEXT32 (handler)",
+            "value": -81.11,
+            "unit": "ns"
+          },
+          {
+            "name": "ZEXT32 (DU/s)",
+            "value": 196880,
+            "unit": "DU/s"
+          },
+          {
+            "name": "TRUNC8 (total)",
+            "value": 5086.14,
+            "unit": "ns/DU",
+            "extra": "median=635767ns  p95=643070ns  stddev=5336.9ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "TRUNC8 (handler)",
+            "value": -74.22,
+            "unit": "ns"
+          },
+          {
+            "name": "TRUNC8 (DU/s)",
+            "value": 196613,
+            "unit": "DU/s"
+          },
+          {
+            "name": "TRUNC16 (total)",
+            "value": 5097.36,
+            "unit": "ns/DU",
+            "extra": "median=637170ns  p95=655223ns  stddev=7076.4ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "TRUNC16 (handler)",
+            "value": -63,
+            "unit": "ns"
+          },
+          {
+            "name": "TRUNC16 (DU/s)",
+            "value": 196180,
+            "unit": "DU/s"
+          },
+          {
+            "name": "LOCK_ADD (total)",
+            "value": 5091.34,
+            "unit": "ns/DU",
+            "extra": "median=636417ns  p95=640857ns  stddev=4919.5ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "LOCK_ADD (handler)",
+            "value": -69.02,
+            "unit": "ns"
+          },
+          {
+            "name": "LOCK_ADD (DU/s)",
+            "value": 196412,
+            "unit": "DU/s"
+          },
+          {
+            "name": "XCHG (total)",
+            "value": 5118.11,
+            "unit": "ns/DU",
+            "extra": "median=639764ns  p95=658259ns  stddev=7108.1ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "XCHG (handler)",
+            "value": -42.25,
+            "unit": "ns"
+          },
+          {
+            "name": "XCHG (DU/s)",
+            "value": 195385,
+            "unit": "DU/s"
+          },
+          {
+            "name": "CMPXCHG (total)",
+            "value": 5090.14,
+            "unit": "ns/DU",
+            "extra": "median=636268ns  p95=685289ns  stddev=17094.0ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "CMPXCHG (handler)",
+            "value": -70.22,
+            "unit": "ns"
+          },
+          {
+            "name": "CMPXCHG (DU/s)",
+            "value": 196458,
+            "unit": "DU/s"
+          },
+          {
+            "name": "FENCE (total)",
+            "value": 5034.91,
+            "unit": "ns/DU",
+            "extra": "median=629364ns  p95=672406ns  stddev=14114.7ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "FENCE (handler)",
+            "value": -125.45,
+            "unit": "ns"
+          },
+          {
+            "name": "FENCE (DU/s)",
+            "value": 198613,
+            "unit": "DU/s"
+          },
+          {
+            "name": "ATOMIC_LOAD (total)",
+            "value": 5100.88,
+            "unit": "ns/DU",
+            "extra": "median=637610ns  p95=643030ns  stddev=4899.3ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "ATOMIC_LOAD (handler)",
+            "value": -59.48,
+            "unit": "ns"
+          },
+          {
+            "name": "ATOMIC_LOAD (DU/s)",
+            "value": 196045,
+            "unit": "DU/s"
+          },
+          {
+            "name": "NOP (total)",
+            "value": 5058.72,
+            "unit": "ns/DU",
+            "extra": "median=632340ns  p95=635487ns  stddev=4832.6ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "NOP (handler)",
+            "value": -101.64,
+            "unit": "ns"
+          },
+          {
+            "name": "NOP (DU/s)",
+            "value": 197678,
+            "unit": "DU/s"
+          },
+          {
+            "name": "CHECK_INTEGRITY (total)",
+            "value": 5068.58,
+            "unit": "ns/DU",
+            "extra": "median=633572ns  p95=639194ns  stddev=4650.6ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "CHECK_INTEGRITY (handler)",
+            "value": -91.78,
+            "unit": "ns"
+          },
+          {
+            "name": "CHECK_INTEGRITY (DU/s)",
+            "value": 197294,
+            "unit": "DU/s"
+          },
+          {
+            "name": "CHECK_DEBUG (total)",
+            "value": 5065.14,
+            "unit": "ns/DU",
+            "extra": "median=633143ns  p95=635546ns  stddev=4889.8ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "CHECK_DEBUG (handler)",
+            "value": -95.22,
+            "unit": "ns"
+          },
+          {
+            "name": "CHECK_DEBUG (DU/s)",
+            "value": 197428,
+            "unit": "DU/s"
+          },
+          {
+            "name": "MUTATE_ISA (total)",
+            "value": 5068.5,
+            "unit": "ns/DU",
+            "extra": "median=633562ns  p95=641197ns  stddev=5530.0ns  iterations=11  DUs=125"
+          },
+          {
+            "name": "MUTATE_ISA (handler)",
+            "value": -91.86,
+            "unit": "ns"
+          },
+          {
+            "name": "MUTATE_ISA (DU/s)",
+            "value": 197297,
             "unit": "DU/s"
           }
         ]
