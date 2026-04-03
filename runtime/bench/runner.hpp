@@ -50,9 +50,13 @@ std::vector<BenchResult> run_all(const RunConfig& cfg) {
             prog.blob.data(), prog.blob.size(), prog.seed, delta);
         if (!engine) return 0;
 
-        // Untimed: step through setup DUs
-        for (uint32_t i = 0; i < prog.setup_du_count * N; ++i) {
-            auto sr = engine->step();
+        // Untimed: run setup DUs via dispatch_unit (NOT step()).
+        //
+        // WHY dispatch_unit: step() does not have the pipeline-level
+        // ORAM scan (Phase D.oram).  PUSH setup via step() would fail
+        // to write to ORAM, causing POP to read garbage.
+        for (uint32_t i = 0; i < prog.setup_du_count; ++i) {
+            auto sr = engine->dispatch_unit();
             if (!sr || *sr == VmResult::Halted) return 0;
         }
 

@@ -527,7 +527,42 @@ VmEngine<Policy, Oram>::dispatch_unit() noexcept
         // ── Phase C': RESOLVE operands + FPE decode ─────────────────────
         pipeline::resolve_operands(*imm_, exec_, *epoch_, insn);
 
-        // ── Phase D: HANDLER DISPATCH ───────────────────────────────────
+        // ── Phase D.oram: Unconditional per-sub-instruction ORAM scan ───
+        //
+        // WHY per-sub-instruction (Doc 19 pipeline-level normalization):
+        //   PUSH/POP handlers previously called Oram::read/write inside
+        //   Phase D, making their timing ~14K ns higher than NOP/ALU.
+        //   Moving the scan here ensures every sub-instruction does exactly
+        //   1 scan at the same cost.  PUSH/POP handlers no longer call
+        //   Oram directly — they use exec_.oram_read_result for reads
+        //   and rely on the pipeline having written for writes.
+        //
+        //   Branchless MUX: address, value, and direction are computed
+        //   from the decoded opcode without data-dependent branches.
+        {
+            using Common::VM::VmOpcode;
+            const uint64_t push_mask = -static_cast<uint64_t>(
+                insn.opcode == VmOpcode::PUSH);
+            const uint64_t pop_mask  = -static_cast<uint64_t>(
+                insn.opcode == VmOpcode::POP);
+
+            // Address: vm_sp-8 for PUSH, vm_sp for POP, 0 for others
+            const uint64_t oram_addr =
+                ((exec_.vm_sp - 8) & push_mask) | (exec_.vm_sp & pop_mask);
+
+            // Write value: encode(plain_a) for PUSH, 0 for others
+            const uint64_t encoded =
+                imm_->mem.encode_lut().apply(insn.plain_a);
+            const uint64_t write_val = encoded & push_mask;
+
+            // Direction: PUSH = write (true), everything else = read (false)
+            const bool is_write = static_cast<bool>(push_mask & 1);
+
+            exec_.oram_read_result = Oram::access(
+                *oram_, oram_addr, write_val, is_write);
+        }
+
+        // ── Phase D.handler: HANDLER DISPATCH ───────────────────────────
         auto r = table[static_cast<uint8_t>(insn.opcode)](
             exec_, *epoch_, *oram_, *imm_, insn);
         if (!r) return tl::make_unexpected(r.error());
@@ -761,15 +796,9 @@ VmEngine<Policy, Oram>::dispatch_unit() noexcept
         secure_zero(&snap, sizeof(snap));
     }
 
-    // ── Unconditional ORAM dummy scan (Doc 19 §C.1) ───────────────────────
-    //
-    // WHY: normalizes ORAM access frequency to constant rate per dispatch unit.
-    // Without this, DUs containing PUSH/POP produce ORAM scans while DUs with
-    // only ALU ops do not — leaking memory-instruction density.
-    //
-    // For RollingKeyOram: full 64-line scan (read-equivalent, ~1750 ns).
-    // For DirectOram: no-op (DebugPolicy does not need timing normalization).
-    Oram::dummy_scan(*oram_);
+    // Per-DU dummy_scan removed — replaced by per-sub-instruction
+    // unconditional ORAM scan in Phase D.oram above.  Every sub-instruction
+    // now does exactly 1 scan (real for PUSH/POP, dummy for everything else).
 
     return exec_.halted ? VmResult::Halted : VmResult::Stepped;
 }

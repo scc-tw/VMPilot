@@ -34,6 +34,16 @@ void DirectOram::write(VmOramState& state, uint64_t offset, MemVal val) noexcept
 // RollingKeyOram — full oblivious scan (IND-CPA)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Core ORAM scan — fully branchless on is_write.
+///
+/// WHY branchless is_write:
+///   The original implementation branched on is_write inside the 64-line
+///   inner loop.  An attacker with EM/DPA access could distinguish read
+///   from write scans via the branch predictor's micro-architectural state.
+///   The branchless version always performs BOTH the read accumulation AND
+///   the conditional write, then selects via bitmask which word value to
+///   keep.  The data-independent execution trace makes read and write
+///   scans indistinguishable.
 static uint64_t oram_access_impl(VmOramState& state, uint64_t addr,
                                   uint64_t write_value, bool is_write) noexcept {
     const uint32_t target_line   = static_cast<uint32_t>(addr / VM_ORAM_LINE_SIZE);
@@ -41,6 +51,8 @@ static uint64_t oram_access_impl(VmOramState& state, uint64_t addr,
 
     const uint64_t old_nonce = state.nonce;
     state.nonce++;  // always increment — indistinguishable read vs write
+
+    const uint64_t w_sel = -static_cast<uint64_t>(is_write);  // all-1s if write, all-0s if read
 
     uint64_t read_result = 0;
 
@@ -57,18 +69,21 @@ static uint64_t oram_access_impl(VmOramState& state, uint64_t addr,
         for (int i = 0; i < 8; ++i)
             words[i] ^= old_ks[i];
 
-        // 3. Branchless CMOV operate
+        // 3. Branchless read + conditional write
         const bool is_target_line = (line == target_line);
         for (uint32_t w = 0; w < 8; ++w) {
             uint64_t mask = -static_cast<uint64_t>(
                 static_cast<uint64_t>(is_target_line) &
                 static_cast<uint64_t>(w == target_word));
 
-            if (is_write) {
-                words[w] = (words[w] & ~mask) | (write_value & mask);
-            } else {
-                read_result |= (words[w] & mask);
-            }
+            // Always accumulate read result (masked to target word only)
+            read_result |= (words[w] & mask);
+
+            // Compute written word (target word replaced with write_value)
+            uint64_t written = (words[w] & ~mask) | (write_value & mask);
+
+            // Branchless select: if is_write, use written; else keep original
+            words[w] = (written & w_sel) | (words[w] & ~w_sel);
         }
 
         // 4. Re-encrypt with fresh nonce
@@ -84,6 +99,11 @@ static uint64_t oram_access_impl(VmOramState& state, uint64_t addr,
     return read_result;
 }
 
+uint64_t RollingKeyOram::access(VmOramState& state, uint64_t addr,
+                                uint64_t write_value, bool is_write) noexcept {
+    return oram_access_impl(state, addr, write_value, is_write);
+}
+
 MemVal RollingKeyOram::read(VmOramState& state, uint64_t offset) noexcept {
     return MemVal(oram_access_impl(state, offset, 0, false));
 }
@@ -93,9 +113,19 @@ void RollingKeyOram::write(VmOramState& state, uint64_t offset, MemVal val) noex
 }
 
 void RollingKeyOram::dummy_scan(VmOramState& state) noexcept {
-    // Read-equivalent: full 64-line scan + re-encrypt + nonce bump.
-    // Result discarded — the scan's purpose is timing normalization.
     (void)oram_access_impl(state, 0, 0, false);
+}
+
+uint64_t DirectOram::access(VmOramState& state, uint64_t addr,
+                             uint64_t write_value, bool is_write) noexcept {
+    // Direct indexed — no oblivious scan.  Branchless read + conditional write.
+    uint64_t val = 0;
+    if (addr + 8 <= VM_OBLIVIOUS_SIZE) {
+        std::memcpy(&val, state.workspace + addr, 8);
+        if (is_write)
+            std::memcpy(state.workspace + addr, &write_value, 8);
+    }
+    return val;
 }
 
 }  // namespace VMPilot::Runtime

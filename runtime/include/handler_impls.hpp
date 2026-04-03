@@ -140,36 +140,42 @@ struct HandlerTraits<VmOpcode::STORE, P> {
 };
 
 /// PUSH: register -> ORAM stack.
-/// Encode plaintext to memory domain, write via ORAM.  No register result.
+///
+/// Doc 19 pipeline-level ORAM: the ORAM write has already been executed
+/// by Phase D.oram in dispatch_unit (branchless, before handler dispatch).
+/// The handler only updates vm_sp.  No direct Oram::write call.
 template<typename P>
 struct HandlerTraits<VmOpcode::PUSH, P> {
     static constexpr auto security_class = SecurityClass::A;
     using oram_tag = UsesOramTag;
     template<typename Oram>
-    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState& o,
-                               const VmImmutable& im, const DecodedInsn& i) noexcept {
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
+                               const VmImmutable&, const DecodedInsn&) noexcept {
         if (e.vm_sp < 8) return tl::make_unexpected(DiagnosticCode::StackOverflow);
         e.vm_sp -= 8;
-        MemVal mem(im.mem.encode_lut().apply(i.plain_a));
-        Oram::write(o, e.vm_sp, mem);
+        // ORAM write already done by pipeline Phase D.oram at (vm_sp - 8)
+        // with encode_lut().apply(plain_a).
         return {};
     }
 };
 
 /// POP: ORAM stack -> register.
-/// Read MemVal from ORAM, decode from memory domain to plaintext.
-/// Pipeline will FPE-encode regs[dst].
+///
+/// Doc 19 pipeline-level ORAM: the ORAM read has already been executed
+/// by Phase D.oram in dispatch_unit.  The result is in exec.oram_read_result.
+/// The handler decodes and writes to the destination register.
 template<typename P>
 struct HandlerTraits<VmOpcode::POP, P> {
     static constexpr auto security_class = SecurityClass::A;
     using oram_tag = UsesOramTag;
     template<typename Oram>
-    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState& o,
+    static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable& im, const DecodedInsn& i) noexcept {
         if (e.vm_sp >= VM_OBLIVIOUS_SIZE) return tl::make_unexpected(DiagnosticCode::StackUnderflow);
-        MemVal mem = Oram::read(o, e.vm_sp);
+        // ORAM read already done by pipeline Phase D.oram at vm_sp.
+        // Result is in e.oram_read_result (raw MemVal bits).
         e.vm_sp += 8;
-        uint64_t plain = im.mem.decode_lut().apply(mem.bits);
+        uint64_t plain = im.mem.decode_lut().apply(e.oram_read_result);
         e.regs[i.reg_a] = RegVal(plain);
         return {};
     }

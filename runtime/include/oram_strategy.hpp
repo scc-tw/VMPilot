@@ -70,16 +70,25 @@ struct RollingKeyOram {
     /// Scans all 64 cache lines and re-encrypts entire workspace.
     static void write(VmOramState& state, uint64_t offset, MemVal val) noexcept;
 
-    /// Unconditional dummy scan (Doc 19 §C.1, ORAM Invariant).
+    /// Unified ORAM access — always performs a full 64-line scan.
     ///
-    /// WHY: every dispatch_unit must produce the same ORAM access pattern
-    /// regardless of opcode mix.  A DU with PUSH/POP triggers real ORAM
-    /// scans; a DU with only ALU ops does not.  The dummy scan ensures
-    /// at least 1 full scan per DU, normalizing the memory bus frequency
-    /// to constant rate (Doc 19 Appendix C.4).
+    /// WHY unified (Doc 19 pipeline-level normalization):
+    ///   The dispatch_unit pipeline calls this once per sub-instruction,
+    ///   unconditionally.  Branchless MUX in the pipeline selects the
+    ///   address, value, and direction based on the decoded opcode:
+    ///     PUSH: addr=vm_sp-8, value=encoded, is_write=true
+    ///     POP:  addr=vm_sp,   value=0,       is_write=false
+    ///     else: addr=0,       value=0,       is_write=false (dummy)
     ///
-    /// Implementation: read-equivalent — full 64-line scan + re-encrypt +
-    /// nonce bump, identical cost to a real read.  Result discarded.
+    ///   Every sub-instruction does exactly 1 scan at the same cost.
+    ///   PUSH/POP handlers no longer call read/write directly.
+    ///
+    /// @return  read result (meaningful for POP; 0 for PUSH/dummy)
+    [[nodiscard]] static uint64_t access(VmOramState& state, uint64_t addr,
+                                         uint64_t write_value,
+                                         bool is_write) noexcept;
+
+    /// Unconditional dummy scan (legacy — kept for backward compatibility).
     static void dummy_scan(VmOramState& state) noexcept;
 };
 
@@ -103,8 +112,12 @@ struct DirectOram {
     /// Write 8 bytes to workspace at `offset` (direct indexed access).
     static void write(VmOramState& state, uint64_t offset, MemVal val) noexcept;
 
+    /// Unified access for DirectOram — direct indexed, no oblivious scan.
+    [[nodiscard]] static uint64_t access(VmOramState& state, uint64_t addr,
+                                         uint64_t write_value,
+                                         bool is_write) noexcept;
+
     /// No-op dummy scan — DirectOram does not need timing normalization.
-    /// DebugPolicy::constant_time == false, so timing leaks are acceptable.
     static void dummy_scan(VmOramState&) noexcept {}
 };
 

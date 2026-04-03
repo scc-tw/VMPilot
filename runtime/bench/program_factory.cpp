@@ -78,19 +78,37 @@ static TestBB make_nop_bb(uint32_t bb_id, uint8_t epoch_base, uint32_t N) {
     return bb;
 }
 
-/// Build a setup BB of exactly N insns with the given instructions + NOP padding + JMP.
-static TestBB make_setup_bb(uint32_t bb_id, uint8_t epoch_base,
-                            const std::vector<TestInstruction>& setup_insns,
-                            uint32_t target_bb_id, uint32_t N) {
-    auto bb = make_bb(bb_id, epoch_base);
-    for (const auto& insn : setup_insns)
-        bb.instructions.push_back(insn);
-    // Pad with NOPs, leaving room for JMP at end
-    while (bb.instructions.size() + 1 < N)
-        bb.instructions.push_back({VmOpcode::NOP, f_none(), 0, 0, 0});
-    // JMP to first measured BB (or next setup BB)
-    bb.instructions.push_back({VmOpcode::JMP, f_none(), 0, 0, target_bb_id});
-    return bb;
+/// Build setup BBs of exactly N insns each.
+///
+/// For N≥2: one BB with setup_insns + NOP padding + JMP (fits in N insns).
+/// For N=1: one BB per setup instruction (no JMP — fallthrough handles it).
+///
+/// Returns the BBs (may be 1 or many) and updates next_bb_id.
+static std::vector<TestBB> make_setup_bbs(uint32_t& next_bb_id,
+                                          uint8_t epoch_base,
+                                          const std::vector<TestInstruction>& setup_insns,
+                                          uint32_t target_bb_id, uint32_t N) {
+    std::vector<TestBB> result;
+
+    if (N >= 2) {
+        // All setup insns + NOPs + JMP fit in one N-insn BB
+        auto bb = make_bb(next_bb_id++, epoch_base);
+        for (const auto& insn : setup_insns)
+            bb.instructions.push_back(insn);
+        while (bb.instructions.size() + 1 < N)
+            bb.instructions.push_back({VmOpcode::NOP, f_none(), 0, 0, 0});
+        bb.instructions.push_back({VmOpcode::JMP, f_none(), 0, 0, target_bb_id});
+        result.push_back(std::move(bb));
+    } else {
+        // N=1: each setup insn is its own 1-insn BB (fallthrough to next)
+        for (const auto& insn : setup_insns) {
+            auto bb = make_bb(next_bb_id++, epoch_base);
+            bb.instructions.push_back(insn);
+            result.push_back(std::move(bb));
+        }
+    }
+
+    return result;
 }
 
 // ─── Trivial native for NATIVE_CALL benchmarks ────────────────────────
@@ -169,56 +187,49 @@ DUBenchProgram build_du_program(const OpcodeBenchSpec& spec,
     // ── Build setup BBs (untimed) ───────────────────────────────────
     uint32_t first_measured_id = 0;  // set after setup BBs
 
-    switch (spec.setup) {
-        case Setup::Reg1: {
-            pool.push_back(42);
-            auto sb = make_setup_bb(next_bb_id++, 0xA0,
-                {{VmOpcode::LOAD_CONST, f_pool(), spec.reg_a, 0, 0}},
-                0 /* target set later */, N);
+    // Helper: add setup BBs and update setup_du_count.
+    auto add_setup = [&](const std::vector<TestInstruction>& insns) {
+        auto sbs = make_setup_bbs(next_bb_id, 0xA0, insns, 0, N);
+        prog.setup_du_count += static_cast<uint32_t>(sbs.size());
+        for (auto& sb : sbs)
             bbs.push_back(std::move(sb));
-            prog.setup_du_count = 1;
+    };
+
+    switch (spec.setup) {
+        case Setup::Reg1:
+            pool.push_back(42);
+            add_setup({{VmOpcode::LOAD_CONST, f_pool(), spec.reg_a, 0, 0}});
             break;
-        }
-        case Setup::Reg2: {
+
+        case Setup::Reg2:
             pool.push_back(42);
             pool.push_back(3);
-            auto sb = make_setup_bb(next_bb_id++, 0xA0,
-                {{VmOpcode::LOAD_CONST, f_pool(), spec.reg_a, 0, 0},
-                 {VmOpcode::LOAD_CONST, f_pool(), spec.reg_b, 0, 1}},
-                0, N);
-            bbs.push_back(std::move(sb));
-            prog.setup_du_count = 1;
+            add_setup({{VmOpcode::LOAD_CONST, f_pool(), spec.reg_a, 0, 0},
+                       {VmOpcode::LOAD_CONST, f_pool(), spec.reg_b, 0, 1}});
             break;
-        }
-        case Setup::Memory: {
-            pool.push_back(42);
-            auto sb = make_setup_bb(next_bb_id++, 0xA0,
-                {{VmOpcode::LOAD_CONST, f_pool(), 0, 0, 0},
-                 {VmOpcode::STORE, f_rm(), 0, 0, 0}},
-                0, N);
-            bbs.push_back(std::move(sb));
-            prog.setup_du_count = 1;
-            break;
-        }
-        case Setup::OramPush: {
-            pool.push_back(42);
-            auto sb = make_setup_bb(next_bb_id++, 0xA0,
-                {{VmOpcode::LOAD_CONST, f_pool(), 0, 0, 0}},
-                0, N);
-            bbs.push_back(std::move(sb));
-            prog.setup_du_count = 1;
-            break;
-        }
-        case Setup::OramPop: {
-            // Need K PUSHes to fill stack, then K POPs measured.
-            // Setup: 1 LOAD_CONST BB + K PUSH BBs.
-            pool.push_back(42);
-            auto sb = make_setup_bb(next_bb_id++, 0xA0,
-                {{VmOpcode::LOAD_CONST, f_pool(), 0, 0, 0}},
-                0, N);
-            bbs.push_back(std::move(sb));
-            prog.setup_du_count = 1;
 
+        case Setup::Memory:
+            pool.push_back(42);
+            add_setup({{VmOpcode::LOAD_CONST, f_pool(), 0, 0, 0},
+                       {VmOpcode::STORE, f_rm(), 0, 0, 0}});
+            break;
+
+        case Setup::OramPush:
+            pool.push_back(42);
+            add_setup({{VmOpcode::LOAD_CONST, f_pool(), 0, 0, 0}});
+            break;
+
+        case Setup::OramPop: {
+            // Setup: 1 LOAD_CONST BB + K PUSH BBs, all fallthrough (no JMP).
+            // The LOAD_CONST BB must NOT use add_setup() because add_setup's
+            // JMP gets fixed to first_measured_id, skipping the PUSH BBs.
+            pool.push_back(42);
+            {
+                TestInstruction lc{VmOpcode::LOAD_CONST, f_pool(), 0, 0, 0};
+                bbs.push_back(make_measured_bb(next_bb_id++, 0xA0,
+                                               lc, N, false));
+                prog.setup_du_count++;
+            }
             // K PUSH BBs (each is a DU with 1 PUSH + N-1 NOP)
             for (uint32_t i = 0; i < K; ++i) {
                 TestInstruction push_insn{VmOpcode::PUSH, f_r(), 0, 0, 0};
@@ -228,36 +239,32 @@ DUBenchProgram build_du_program(const OpcodeBenchSpec& spec,
             }
             break;
         }
-        case Setup::Pool: {
+
+        case Setup::Pool:
             for (uint32_t i = 0; i < K; ++i)
                 pool.push_back(i + 100);
-            // Pool index cycles: aux = i % pool_count
             break;
-        }
-        case Setup::CtxWrite: {
+
+        case Setup::CtxWrite:
             pool.push_back(0x800);
-            auto sb = make_setup_bb(next_bb_id++, 0xA0,
-                {{VmOpcode::LOAD_CONST, f_pool(), 0, 0, 0}},
-                0, N);
-            bbs.push_back(std::move(sb));
-            prog.setup_du_count = 1;
+            add_setup({{VmOpcode::LOAD_CONST, f_pool(), 0, 0, 0}});
             break;
-        }
-        case Setup::NativeCall: {
-            // One transition entry for all NATIVE_CALL instructions.
-            // All point to the same trivial native.
+
+        case Setup::NativeCall:
             break;
-        }
+
         default:
             break;
     }
 
-    // Fix setup BB JMP targets → first measured BB
+    // Fix setup BB JMP targets → first measured BB (N≥2 only; N=1 uses fallthrough)
     first_measured_id = next_bb_id;
     for (auto& sb : bbs) {
-        auto& last = sb.instructions.back();
-        if (last.opcode == VmOpcode::JMP)
-            last.aux = first_measured_id;
+        if (!sb.instructions.empty()) {
+            auto& last = sb.instructions.back();
+            if (last.opcode == VmOpcode::JMP)
+                last.aux = first_measured_id;
+        }
     }
 
     // ── Build K measured BBs ────────────────────────────────────────

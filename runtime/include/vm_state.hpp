@@ -196,6 +196,17 @@ struct alignas(64) VmExecution {
 
     uint64_t trash_regs[VM_REG_COUNT] = {};
 
+    // ── ORAM staging (Doc 19 pipeline-level normalization) ──────────────
+
+    /// Result from the per-sub-instruction unconditional ORAM scan.
+    ///
+    /// WHY staging: ORAM scans are moved from PUSH/POP handlers into the
+    /// dispatch_unit pipeline so every sub-instruction does exactly 1 scan.
+    /// POP handler reads this field instead of calling Oram::read directly.
+    /// PUSH handler ignores it (write-only, result is meaningless).
+    /// NOP/ALU handlers ignore it (dummy scan at offset 0, result discarded).
+    uint64_t oram_read_result = 0;
+
     // ── Doc 16 forward-secrecy state ────────────────────────────────────
 
     /// Current Speck-FPE key for register encoding/decoding.
