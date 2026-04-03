@@ -120,6 +120,16 @@ struct VmImmutable {
 
     /// GSS alias LUT (copied from blob, 256 bytes).
     uint8_t alias_lut[256];
+
+    /// Maximum insn_count_in_bb across all BBs in this blob.
+    ///
+    /// WHY (Doc 19 §4.2 Fix #2): verify_bb_mac must iterate a FIXED number
+    /// of times regardless of actual BB length, otherwise the O(BB_length)
+    /// loop leaks BB size via timing.  This field is computed once during
+    /// VmEngine::create() as max(bb.insn_count_in_bb for all BBs).
+    /// verify_bb_mac always iterates max_bb_insn_count times, with dummy
+    /// SipHash iterations for indices beyond the actual BB.
+    uint32_t max_bb_insn_count = 0;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

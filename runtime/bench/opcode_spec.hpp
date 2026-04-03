@@ -1,9 +1,12 @@
 #pragma once
 /// @file opcode_spec.hpp
-/// @brief Declarative opcode benchmark specifications.
+/// @brief Declarative opcode benchmark specifications — Doc 19 DU model.
 ///
-/// To add a benchmark for a new opcode, append one entry to SPECS[].
-/// The ProgramFactory reads the Shape and auto-generates the test program.
+/// Each opcode is benchmarked as a Doc 19 dispatch unit:
+///   [real_opcode, NOP, NOP, ..., NOP]  (N = Policy::fusion_granularity)
+///
+/// Setup requirements (register init, ORAM stack fill, guest memory)
+/// are handled by setup BBs stepped through untimed before measurement.
 
 #include <vm/vm_opcode.hpp>
 
@@ -14,100 +17,96 @@ namespace VMPilot::Bench {
 
 using Common::VM::VmOpcode;
 
-/// What kind of operand setup does the opcode need?
-enum class Shape : uint8_t {
-    RegReg,       ///< dst = dst OP src   (ADD, SUB, CMP, AND, SHL ...)
-    RegOnly,      ///< dst = OP(dst)      (NEG, NOT, SEXT8, ZEXT16 ...)
-    NoOperand,    ///< no operands        (NOP, FENCE, CHECK_INTEGRITY ...)
-    // ── Shapes below are Phase 2+ ──
-    PoolReg,      ///< dst = pool[aux]    (LOAD_CONST)
-    Memory,       ///< dst = mem[aux]     (LOAD, STORE, LOCK_ADD ...)
-    Oram,         ///< PUSH / POP
-    CtxAccess,    ///< LOAD_CTX / STORE_CTX
-    Custom,       ///< hand-written factory (JMP, JCC, NATIVE_CALL ...)
+/// What setup does this opcode need before measurement?
+enum class Setup : uint8_t {
+    None,         ///< No setup (NOP, FENCE, CHECK_*)
+    Reg1,         ///< 1 LOAD_CONST (NEG, NOT, SEXT*, ZEXT*, TRUNC*, GET_FLAG)
+    Reg2,         ///< 2 LOAD_CONST (ADD, SUB, MUL, CMP, AND, SHL, MOVE ...)
+    Memory,       ///< LOAD_CONST + STORE to guest mem (LOAD, STORE, atomics)
+    OramPush,     ///< LOAD_CONST (PUSH reads from reg)
+    OramPop,      ///< LOAD_CONST + N PUSHes to fill stack (POP reads from ORAM)
+    Pool,         ///< Constant pool entries (LOAD_CONST)
+    CtxRead,      ///< No setup (LOAD_CTX reads vm_ip/sp/bb_id/epoch)
+    CtxWrite,     ///< 1 LOAD_CONST (STORE_CTX writes to vm_sp)
+    Branch,       ///< JMP/JCC — opcode placed at DU end, targets next BB
+    NativeCall,   ///< NATIVE_CALL — needs transition entry
 };
 
 struct OpcodeBenchSpec {
     VmOpcode    opcode;
-    Shape       shape;
-    uint8_t     reg_a;      ///< destination / first register
-    uint8_t     reg_b;      ///< source / second register (RegReg only)
-    uint32_t    aux;        ///< aux field value
-    const char* name;       ///< display name (nullptr → to_string(opcode))
-    uint32_t    max_n;      ///< 0 → use default; e.g. PUSH/POP → 200
+    Setup       setup;
+    uint8_t     reg_a;
+    uint8_t     reg_b;
+    uint32_t    aux;
+    const char* name;       ///< nullptr → to_string(opcode)
 };
 
-/// Master table — all 55 opcodes.  Shapes that cannot be auto-generated
-/// from the spec table alone (Custom) are built via hand-written factories
-/// in program_factory.cpp.
 // clang-format off
 inline constexpr OpcodeBenchSpec SPECS[] = {
     // ── Cat 0: Data Movement ────────────────────────────────────────
-    {VmOpcode::MOVE,       Shape::RegReg,    0, 1, 0, nullptr,   0},
-    {VmOpcode::LOAD,       Shape::Memory,    0, 0, 0, nullptr,   0},
-    {VmOpcode::STORE,      Shape::Memory,    0, 0, 0, nullptr,   0},
-    {VmOpcode::PUSH,       Shape::Oram,      0, 0, 0, nullptr, 200},
-    {VmOpcode::POP,        Shape::Oram,      0, 0, 0, nullptr, 200},
-    {VmOpcode::LOAD_CONST, Shape::PoolReg,   0, 0, 0, nullptr,   0},
-    {VmOpcode::LOAD_CTX,   Shape::CtxAccess, 0, 0, 0, nullptr,   0},  // aux=0 → vm_ip
-    {VmOpcode::STORE_CTX,  Shape::CtxAccess, 0, 0, 1, nullptr,   0},  // aux=1 → vm_sp
+    {VmOpcode::MOVE,       Setup::Reg2,      0, 1, 0, nullptr},
+    {VmOpcode::LOAD,       Setup::Memory,    0, 0, 0, nullptr},
+    {VmOpcode::STORE,      Setup::Memory,    0, 0, 0, nullptr},
+    {VmOpcode::PUSH,       Setup::OramPush,  0, 0, 0, nullptr},
+    {VmOpcode::POP,        Setup::OramPop,   0, 0, 0, nullptr},
+    {VmOpcode::LOAD_CONST, Setup::Pool,      0, 0, 0, nullptr},
+    {VmOpcode::LOAD_CTX,   Setup::CtxRead,   0, 0, 0, nullptr},
+    {VmOpcode::STORE_CTX,  Setup::CtxWrite,  0, 0, 1, nullptr},
 
     // ── Cat 1: Arithmetic ───────────────────────────────────────────
-    {VmOpcode::ADD,        Shape::RegReg,    0, 1, 0, nullptr, 0},
-    {VmOpcode::SUB,        Shape::RegReg,    0, 1, 0, nullptr, 0},
-    {VmOpcode::MUL,        Shape::RegReg,    0, 1, 0, nullptr, 0},
-    {VmOpcode::IMUL,       Shape::RegReg,    0, 1, 0, nullptr, 0},
-    {VmOpcode::DIV,        Shape::RegReg,    0, 1, 0, nullptr, 0},
-    {VmOpcode::IDIV,       Shape::RegReg,    0, 1, 0, nullptr, 0},
-    {VmOpcode::NEG,        Shape::RegOnly,   0, 0, 0, nullptr, 0},
-    {VmOpcode::MOD,        Shape::RegReg,    0, 1, 0, nullptr, 0},
+    {VmOpcode::ADD,        Setup::Reg2, 0, 1, 0, nullptr},
+    {VmOpcode::SUB,        Setup::Reg2, 0, 1, 0, nullptr},
+    {VmOpcode::MUL,        Setup::Reg2, 0, 1, 0, nullptr},
+    {VmOpcode::IMUL,       Setup::Reg2, 0, 1, 0, nullptr},
+    {VmOpcode::DIV,        Setup::Reg2, 0, 1, 0, nullptr},
+    {VmOpcode::IDIV,       Setup::Reg2, 0, 1, 0, nullptr},
+    {VmOpcode::NEG,        Setup::Reg1, 0, 0, 0, nullptr},
+    {VmOpcode::MOD,        Setup::Reg2, 0, 1, 0, nullptr},
 
     // ── Cat 2: Logic ────────────────────────────────────────────────
-    {VmOpcode::AND,        Shape::RegReg,    0, 1, 0, nullptr, 0},
-    {VmOpcode::OR,         Shape::RegReg,    0, 1, 0, nullptr, 0},
-    {VmOpcode::XOR,        Shape::RegReg,    0, 1, 0, nullptr, 0},
-    {VmOpcode::NOT,        Shape::RegOnly,   0, 0, 0, nullptr, 0},
-    {VmOpcode::SHL,        Shape::RegReg,    0, 1, 0, nullptr, 0},
-    {VmOpcode::SHR,        Shape::RegReg,    0, 1, 0, nullptr, 0},
-    {VmOpcode::SAR,        Shape::RegReg,    0, 1, 0, nullptr, 0},
-    {VmOpcode::ROL,        Shape::RegReg,    0, 1, 0, nullptr, 0},
-    {VmOpcode::ROR,        Shape::RegReg,    0, 1, 0, nullptr, 0},
+    {VmOpcode::AND,        Setup::Reg2, 0, 1, 0, nullptr},
+    {VmOpcode::OR,         Setup::Reg2, 0, 1, 0, nullptr},
+    {VmOpcode::XOR,        Setup::Reg2, 0, 1, 0, nullptr},
+    {VmOpcode::NOT,        Setup::Reg1, 0, 0, 0, nullptr},
+    {VmOpcode::SHL,        Setup::Reg2, 0, 1, 0, nullptr},
+    {VmOpcode::SHR,        Setup::Reg2, 0, 1, 0, nullptr},
+    {VmOpcode::SAR,        Setup::Reg2, 0, 1, 0, nullptr},
+    {VmOpcode::ROL,        Setup::Reg2, 0, 1, 0, nullptr},
+    {VmOpcode::ROR,        Setup::Reg2, 0, 1, 0, nullptr},
 
     // ── Cat 3: Comparison ───────────────────────────────────────────
-    {VmOpcode::CMP,        Shape::RegReg,    0, 1, 0, nullptr, 0},
-    {VmOpcode::TEST,       Shape::RegReg,    0, 1, 0, nullptr, 0},
-    {VmOpcode::SET_FLAG,   Shape::NoOperand, 0, 0, 1, nullptr, 0},
-    {VmOpcode::GET_FLAG,   Shape::RegOnly,   0, 0, 0, nullptr, 0},
+    {VmOpcode::CMP,        Setup::Reg2, 0, 1, 0, nullptr},
+    {VmOpcode::TEST,       Setup::Reg2, 0, 1, 0, nullptr},
+    {VmOpcode::SET_FLAG,   Setup::None, 0, 0, 1, nullptr},
+    {VmOpcode::GET_FLAG,   Setup::Reg1, 0, 0, 0, nullptr},
 
     // ── Cat 4: Control Flow ─────────────────────────────────────────
-    {VmOpcode::JMP,         Shape::Custom, 0, 0, 0, nullptr,  50},
-    {VmOpcode::JCC,         Shape::Custom, 0, 0, 0, nullptr,  50},
-    {VmOpcode::NATIVE_CALL, Shape::Custom, 0, 0, 0, nullptr, 200},
-    // CALL_VM, RET_VM, HALT — skipped (nesting/termination constraints)
+    {VmOpcode::JMP,         Setup::Branch,     0, 0, 0, nullptr},
+    {VmOpcode::JCC,         Setup::Branch,     0, 0, 0, nullptr},
+    {VmOpcode::NATIVE_CALL, Setup::NativeCall, 0, 0, 0, nullptr},
 
     // ── Cat 5: Width/Extension ──────────────────────────────────────
-    {VmOpcode::SEXT8,      Shape::RegOnly,   0, 0, 0, nullptr, 0},
-    {VmOpcode::SEXT16,     Shape::RegOnly,   0, 0, 0, nullptr, 0},
-    {VmOpcode::SEXT32,     Shape::RegOnly,   0, 0, 0, nullptr, 0},
-    {VmOpcode::ZEXT8,      Shape::RegOnly,   0, 0, 0, nullptr, 0},
-    {VmOpcode::ZEXT16,     Shape::RegOnly,   0, 0, 0, nullptr, 0},
-    {VmOpcode::ZEXT32,     Shape::RegOnly,   0, 0, 0, nullptr, 0},
-    {VmOpcode::TRUNC8,     Shape::RegOnly,   0, 0, 0, nullptr, 0},
-    {VmOpcode::TRUNC16,    Shape::RegOnly,   0, 0, 0, nullptr, 0},
+    {VmOpcode::SEXT8,      Setup::Reg1, 0, 0, 0, nullptr},
+    {VmOpcode::SEXT16,     Setup::Reg1, 0, 0, 0, nullptr},
+    {VmOpcode::SEXT32,     Setup::Reg1, 0, 0, 0, nullptr},
+    {VmOpcode::ZEXT8,      Setup::Reg1, 0, 0, 0, nullptr},
+    {VmOpcode::ZEXT16,     Setup::Reg1, 0, 0, 0, nullptr},
+    {VmOpcode::ZEXT32,     Setup::Reg1, 0, 0, 0, nullptr},
+    {VmOpcode::TRUNC8,     Setup::Reg1, 0, 0, 0, nullptr},
+    {VmOpcode::TRUNC16,    Setup::Reg1, 0, 0, 0, nullptr},
 
     // ── Cat 6: Atomic ───────────────────────────────────────────────
-    {VmOpcode::LOCK_ADD,    Shape::Memory, 0, 1, 0, nullptr, 0},
-    {VmOpcode::XCHG,        Shape::Memory, 0, 1, 0, nullptr, 0},
-    {VmOpcode::CMPXCHG,     Shape::Memory, 0, 1, 0, nullptr, 0},
-    {VmOpcode::FENCE,       Shape::NoOperand, 0, 0, 0, nullptr, 0},
-    {VmOpcode::ATOMIC_LOAD, Shape::Memory, 0, 0, 0, nullptr, 0},
+    {VmOpcode::LOCK_ADD,    Setup::Memory, 0, 1, 0, nullptr},
+    {VmOpcode::XCHG,       Setup::Memory, 0, 1, 0, nullptr},
+    {VmOpcode::CMPXCHG,    Setup::Memory, 0, 1, 0, nullptr},
+    {VmOpcode::FENCE,      Setup::None,   0, 0, 0, nullptr},
+    {VmOpcode::ATOMIC_LOAD, Setup::Memory, 0, 0, 0, nullptr},
 
     // ── Cat 7: VM Internal ──────────────────────────────────────────
-    {VmOpcode::NOP,             Shape::NoOperand, 0, 0, 0, nullptr, 0},
-    {VmOpcode::CHECK_INTEGRITY, Shape::NoOperand, 0, 0, 0, nullptr, 0},
-    {VmOpcode::CHECK_DEBUG,     Shape::NoOperand, 0, 0, 0, nullptr, 0},
-    {VmOpcode::MUTATE_ISA,      Shape::NoOperand, 0, 0, 0, nullptr, 0},
-    // REKEY, SAVE_EPOCH, RESYNC — skipped (require enc_state tracking / nesting)
+    {VmOpcode::NOP,             Setup::None, 0, 0, 0, nullptr},
+    {VmOpcode::CHECK_INTEGRITY, Setup::None, 0, 0, 0, nullptr},
+    {VmOpcode::CHECK_DEBUG,     Setup::None, 0, 0, 0, nullptr},
+    {VmOpcode::MUTATE_ISA,      Setup::None, 0, 0, 0, nullptr},
 };
 // clang-format on
 

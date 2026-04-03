@@ -1,5 +1,12 @@
 /// @file program_factory.cpp
-/// @brief Generates encrypted VM blobs for each opcode benchmark shape.
+/// @brief Build Doc 19 dispatch-unit benchmark programs.
+///
+/// Each program = setup BBs (untimed) + K measured BBs.
+/// Each BB = exactly N instructions (1 real + N-1 NOP), mimicking a
+/// Doc 19 fixed-width dispatch unit.
+///
+/// All BBs across all benchmarks have the same length N, guaranteeing
+/// identical max_bb_insn_count and therefore identical verify_bb_mac cost.
 
 #include "program_factory.hpp"
 #include "test_blob_builder.hpp"
@@ -12,8 +19,9 @@ namespace VMPilot::Bench {
 using namespace Common::VM;
 using Test::TestBB;
 using Test::TestInstruction;
+using Test::TestNativeCall;
 
-// ─── Flag helpers ───────────────────────────────────────────────────────
+// ─── Helpers ───────────────────────────────────────────────────────────
 
 static uint8_t f_rr() {
     return static_cast<uint8_t>((VM_OPERAND_REG << 6) | (VM_OPERAND_REG << 4));
@@ -29,288 +37,292 @@ static uint8_t f_rm() {
 }
 static uint8_t f_none() { return 0; }
 
-// ─── Seed helpers ───────────────────────────────────────────────────────
-
 static void fill_seed(uint8_t seed[32], uint8_t base = 0x42) {
     for (int i = 0; i < 32; ++i)
         seed[i] = static_cast<uint8_t>(base + i);
-}
-
-static void fill_epoch_seed(uint8_t out[32], uint8_t base) {
-    for (int i = 0; i < 32; ++i)
-        out[i] = static_cast<uint8_t>(base + i);
 }
 
 static TestBB make_bb(uint32_t id, uint8_t epoch_base) {
     TestBB bb{};
     bb.bb_id = id; bb.epoch = 0;
     bb.live_regs_bitmap = 0xFFFF; bb.flags = 0;
-    fill_epoch_seed(bb.epoch_seed, epoch_base);
+    for (int i = 0; i < 32; ++i)
+        bb.epoch_seed[i] = static_cast<uint8_t>(epoch_base + i);
     return bb;
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// Shape builders
-// ═══════════════════════════════════════════════════════════════════════
-
-// ── RegReg ──────────────────────────────────────────────────────────────
-static BenchProgram build_reg_reg(const OpcodeBenchSpec& spec, uint32_t N) {
-    BenchProgram prog;
-    prog.opcode = spec.opcode;
-    prog.measured_insn_count = N;
-    fill_seed(prog.seed);
-
-    auto bb = make_bb(1, 0xB0);
-    bb.instructions.push_back({VmOpcode::LOAD_CONST, f_pool(), spec.reg_a, 0, 0});
-    bb.instructions.push_back({VmOpcode::LOAD_CONST, f_pool(), spec.reg_b, 0, 1});
-    TestInstruction body{spec.opcode, f_rr(), spec.reg_a, spec.reg_b, spec.aux};
-    for (uint32_t i = 0; i < N; ++i) bb.instructions.push_back(body);
-    bb.instructions.push_back({VmOpcode::HALT, f_none(), 0, 0, 0});
-
-    prog.total_insn_count = static_cast<uint32_t>(bb.instructions.size());
-    prog.blob = Test::build_test_blob(prog.seed, {bb}, {42, 3}, false, {});
-    return prog;
-}
-
-// ── RegOnly ─────────────────────────────────────────────────────────────
-static BenchProgram build_reg_only(const OpcodeBenchSpec& spec, uint32_t N) {
-    BenchProgram prog;
-    prog.opcode = spec.opcode;
-    prog.measured_insn_count = N;
-    fill_seed(prog.seed);
-
-    auto bb = make_bb(1, 0xB1);
-    bb.instructions.push_back({VmOpcode::LOAD_CONST, f_pool(), spec.reg_a, 0, 0});
-    TestInstruction body{spec.opcode, f_r(), spec.reg_a, 0, spec.aux};
-    for (uint32_t i = 0; i < N; ++i) bb.instructions.push_back(body);
-    bb.instructions.push_back({VmOpcode::HALT, f_none(), 0, 0, 0});
-
-    prog.total_insn_count = static_cast<uint32_t>(bb.instructions.size());
-    prog.blob = Test::build_test_blob(prog.seed, {bb}, {42}, false, {});
-    return prog;
-}
-
-// ── NoOperand ───────────────────────────────────────────────────────────
-static BenchProgram build_no_operand(const OpcodeBenchSpec& spec, uint32_t N) {
-    BenchProgram prog;
-    prog.opcode = spec.opcode;
-    prog.measured_insn_count = N;
-    fill_seed(prog.seed);
-
-    auto bb = make_bb(1, 0xB2);
-    TestInstruction body{spec.opcode, f_none(), 0, 0, spec.aux};
-    for (uint32_t i = 0; i < N; ++i) bb.instructions.push_back(body);
-    bb.instructions.push_back({VmOpcode::HALT, f_none(), 0, 0, 0});
-
-    prog.total_insn_count = static_cast<uint32_t>(bb.instructions.size());
-    prog.blob = Test::build_test_blob(prog.seed, {bb}, {}, false, {});
-    return prog;
-}
-
-// ── Memory (LOAD, STORE, atomics) ───────────────────────────────────────
-static BenchProgram build_memory(const OpcodeBenchSpec& spec, uint32_t N) {
-    BenchProgram prog;
-    prog.opcode = spec.opcode;
-    prog.measured_insn_count = N;
-    prog.needs_guest_memory = true;
-    fill_seed(prog.seed);
-
-    auto bb = make_bb(1, 0xB3);
-    // Setup: load a value and store it to mem[0] so reads have valid data
-    bb.instructions.push_back({VmOpcode::LOAD_CONST, f_pool(), 0, 0, 0});
-    bb.instructions.push_back({VmOpcode::STORE, f_rm(), 0, 0, 0});
-
-    TestInstruction body{spec.opcode, f_rm(), spec.reg_a, spec.reg_b, 0};
-    for (uint32_t i = 0; i < N; ++i) bb.instructions.push_back(body);
-    bb.instructions.push_back({VmOpcode::HALT, f_none(), 0, 0, 0});
-
-    prog.total_insn_count = static_cast<uint32_t>(bb.instructions.size());
-    prog.blob = Test::build_test_blob(prog.seed, {bb}, {42}, false, {});
-    return prog;
-}
-
-// ── Oram (PUSH / POP) ──────────────────────────────────────────────────
-static BenchProgram build_push(uint32_t N) {
-    BenchProgram prog;
-    prog.opcode = VmOpcode::PUSH;
-    prog.measured_insn_count = N;
-    fill_seed(prog.seed);
-
-    auto bb = make_bb(1, 0xB4);
-    bb.instructions.push_back({VmOpcode::LOAD_CONST, f_pool(), 0, 0, 0});
-    for (uint32_t i = 0; i < N; ++i)
-        bb.instructions.push_back({VmOpcode::PUSH, f_r(), 0, 0, 0});
-    bb.instructions.push_back({VmOpcode::HALT, f_none(), 0, 0, 0});
-
-    prog.total_insn_count = static_cast<uint32_t>(bb.instructions.size());
-    prog.blob = Test::build_test_blob(prog.seed, {bb}, {42}, false, {});
-    return prog;
-}
-
-static BenchProgram build_pop(uint32_t N) {
-    BenchProgram prog;
-    prog.opcode = VmOpcode::POP;
-    prog.measured_insn_count = N;
-    fill_seed(prog.seed);
-
-    auto bb = make_bb(1, 0xB5);
-    bb.instructions.push_back({VmOpcode::LOAD_CONST, f_pool(), 0, 0, 0});
-    // Setup: push N items
-    for (uint32_t i = 0; i < N; ++i)
-        bb.instructions.push_back({VmOpcode::PUSH, f_r(), 0, 0, 0});
-    // Measured: pop N items
-    for (uint32_t i = 0; i < N; ++i)
-        bb.instructions.push_back({VmOpcode::POP, f_r(), 0, 0, 0});
-    bb.instructions.push_back({VmOpcode::HALT, f_none(), 0, 0, 0});
-
-    prog.total_insn_count = static_cast<uint32_t>(bb.instructions.size());
-    prog.blob = Test::build_test_blob(prog.seed, {bb}, {42}, false, {});
-    return prog;
-}
-
-// ── PoolReg (LOAD_CONST) ────────────────────────────────────────────────
-static BenchProgram build_pool_reg(uint32_t N) {
-    BenchProgram prog;
-    prog.opcode = VmOpcode::LOAD_CONST;
-    prog.measured_insn_count = N;
-    fill_seed(prog.seed);
-
-    auto bb = make_bb(1, 0xB6);
-    std::vector<uint64_t> pool;
-    pool.reserve(N);
-    for (uint32_t i = 0; i < N; ++i) {
-        pool.push_back(i + 100);
-        bb.instructions.push_back({VmOpcode::LOAD_CONST, f_pool(), 0, 0, i});
+/// Build one measured BB: [real_opcode, NOP×(N-1)] or [NOP×(N-1), real_opcode] for branches.
+static TestBB make_measured_bb(uint32_t bb_id, uint8_t epoch_base,
+                               const TestInstruction& real_insn,
+                               uint32_t N, bool branch_at_end) {
+    auto bb = make_bb(bb_id, epoch_base);
+    if (branch_at_end) {
+        // Branch opcodes go at position N-1 (last in DU)
+        for (uint32_t i = 0; i + 1 < N; ++i)
+            bb.instructions.push_back({VmOpcode::NOP, f_none(), 0, 0, 0});
+        bb.instructions.push_back(real_insn);
+    } else {
+        // Non-branch opcodes go at position 0
+        bb.instructions.push_back(real_insn);
+        for (uint32_t i = 1; i < N; ++i)
+            bb.instructions.push_back({VmOpcode::NOP, f_none(), 0, 0, 0});
     }
-    bb.instructions.push_back({VmOpcode::HALT, f_none(), 0, 0, 0});
-
-    prog.total_insn_count = static_cast<uint32_t>(bb.instructions.size());
-    prog.blob = Test::build_test_blob(prog.seed, {bb}, pool, false, {});
-    return prog;
+    return bb;
 }
 
-// ── CtxAccess (LOAD_CTX / STORE_CTX) ────────────────────────────────────
-static BenchProgram build_ctx_access(const OpcodeBenchSpec& spec, uint32_t N) {
-    BenchProgram prog;
-    prog.opcode = spec.opcode;
-    prog.measured_insn_count = N;
-    fill_seed(prog.seed);
-
-    auto bb = make_bb(1, 0xB7);
-    if (spec.opcode == VmOpcode::STORE_CTX)
-        bb.instructions.push_back({VmOpcode::LOAD_CONST, f_pool(), 0, 0, 0});
-
+/// Build one NOP-only BB of length N.
+static TestBB make_nop_bb(uint32_t bb_id, uint8_t epoch_base, uint32_t N) {
+    auto bb = make_bb(bb_id, epoch_base);
     for (uint32_t i = 0; i < N; ++i)
-        bb.instructions.push_back({spec.opcode, f_r(), 0, 0, spec.aux});
-    bb.instructions.push_back({VmOpcode::HALT, f_none(), 0, 0, 0});
-
-    std::vector<uint64_t> pool;
-    if (spec.opcode == VmOpcode::STORE_CTX) pool.push_back(0x800);
-    prog.total_insn_count = static_cast<uint32_t>(bb.instructions.size());
-    prog.blob = Test::build_test_blob(prog.seed, {bb}, pool, false, {});
-    return prog;
+        bb.instructions.push_back({VmOpcode::NOP, f_none(), 0, 0, 0});
+    return bb;
 }
 
-// ── Custom: JMP / JCC (measures BB transition cost) ─────────────────────
-static BenchProgram build_jmp_bench(VmOpcode op, uint32_t N) {
-    BenchProgram prog;
-    prog.opcode = op;
-    prog.measured_insn_count = N;
-    fill_seed(prog.seed);
-
-    // BB1: setup counter, JMP → BB2
-    // BB2: SUB r0, r1; CMP r0, r1; JCC NE → BB2; JMP → BB3
-    // BB3: HALT
-    auto bb1 = make_bb(1, 0xC0);
-    auto bb2 = make_bb(2, 0xC1);
-    auto bb3 = make_bb(3, 0xC2);
-
-    bb1.instructions = {
-        {VmOpcode::LOAD_CONST, f_pool(), 0, 0, 0},
-        {VmOpcode::LOAD_CONST, f_pool(), 1, 0, 1},
-        {VmOpcode::JMP, f_none(), 0, 0, 2},
-    };
-
-    uint8_t jcc_ne = static_cast<uint8_t>(
-        (VM_OPERAND_NONE << 6) | (VM_OPERAND_NONE << 4) | 1);
-    bb2.instructions = {
-        {VmOpcode::SUB, f_rr(), 0, 1, 0},
-        {VmOpcode::CMP, f_rr(), 0, 1, 0},
-        {VmOpcode::JCC, jcc_ne, 0, 0, 2},
-        {VmOpcode::JMP, f_none(), 0, 0, 3},
-    };
-
-    bb3.instructions = {{VmOpcode::HALT, f_none(), 0, 0, 0}};
-
-    prog.total_insn_count = 3 + N * 4 + 1;
-    prog.blob = Test::build_test_blob(prog.seed, {bb1, bb2, bb3},
-                                       {static_cast<uint64_t>(N), 1},
-                                       false, {});
-    return prog;
+/// Build a setup BB of exactly N insns with the given instructions + NOP padding + JMP.
+static TestBB make_setup_bb(uint32_t bb_id, uint8_t epoch_base,
+                            const std::vector<TestInstruction>& setup_insns,
+                            uint32_t target_bb_id, uint32_t N) {
+    auto bb = make_bb(bb_id, epoch_base);
+    for (const auto& insn : setup_insns)
+        bb.instructions.push_back(insn);
+    // Pad with NOPs, leaving room for JMP at end
+    while (bb.instructions.size() + 1 < N)
+        bb.instructions.push_back({VmOpcode::NOP, f_none(), 0, 0, 0});
+    // JMP to first measured BB (or next setup BB)
+    bb.instructions.push_back({VmOpcode::JMP, f_none(), 0, 0, target_bb_id});
+    return bb;
 }
 
-// ── Custom: NATIVE_CALL ─────────────────────────────────────────────────
+// ─── Trivial native for NATIVE_CALL benchmarks ────────────────────────
+
 static uint64_t trivial_native(uint64_t, uint64_t, uint64_t, uint64_t,
                                 uint64_t, uint64_t, uint64_t, uint64_t) {
     return 0;
-}
-
-static BenchProgram build_native_call(uint32_t N) {
-    BenchProgram prog;
-    prog.opcode = VmOpcode::NATIVE_CALL;
-    prog.measured_insn_count = N;
-    prog.needs_native = true;
-    prog.native_fn = reinterpret_cast<uint64_t>(&trivial_native);
-    fill_seed(prog.seed);
-
-    auto bb = make_bb(1, 0xC3);
-    std::vector<Test::TestNativeCall> ncs;
-    for (uint32_t i = 0; i < N; ++i) {
-        bb.instructions.push_back({VmOpcode::NATIVE_CALL, f_none(), 0, 0, i});
-        Test::TestNativeCall nc{};
-        nc.call_site_ip = i;
-        nc.arg_count = 0;
-        nc.target_addr = prog.native_fn;
-        ncs.push_back(nc);
-    }
-    bb.instructions.push_back({VmOpcode::HALT, f_none(), 0, 0, 0});
-
-    prog.total_insn_count = static_cast<uint32_t>(bb.instructions.size());
-    prog.blob = Test::build_test_blob(prog.seed, {bb}, {}, false, ncs);
-    return prog;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
 // Public API
 // ═══════════════════════════════════════════════════════════════════════
 
-static constexpr uint32_t DEFAULT_N = 500;
+DUBenchProgram build_du_program(const OpcodeBenchSpec& spec,
+                                uint32_t K, uint32_t N) {
+    DUBenchProgram prog;
+    prog.opcode = spec.opcode;
+    prog.du_count = K;
+    prog.du_width = N;
+    fill_seed(prog.seed);
 
-BenchProgram build_opcode_program(const OpcodeBenchSpec& spec, uint32_t N) {
-    if (N == 0)
-        N = (spec.max_n > 0) ? spec.max_n : DEFAULT_N;
+    std::vector<TestBB> bbs;
+    std::vector<uint64_t> pool;
+    std::vector<TestNativeCall> ncs;
+    uint32_t next_bb_id = 1;
+    const bool is_branch = (spec.setup == Setup::Branch);
 
-    switch (spec.shape) {
-        case Shape::RegReg:    return build_reg_reg(spec, N);
-        case Shape::RegOnly:   return build_reg_only(spec, N);
-        case Shape::NoOperand: return build_no_operand(spec, N);
-        case Shape::Memory:    return build_memory(spec, N);
-        case Shape::PoolReg:   return build_pool_reg(N);
-        case Shape::CtxAccess: return build_ctx_access(spec, N);
-        case Shape::Oram:
-            return (spec.opcode == VmOpcode::POP) ? build_pop(N) : build_push(N);
-        case Shape::Custom:
-            if (spec.opcode == VmOpcode::JMP)         return build_jmp_bench(VmOpcode::JMP, N);
-            if (spec.opcode == VmOpcode::JCC)         return build_jmp_bench(VmOpcode::JCC, N);
-            if (spec.opcode == VmOpcode::NATIVE_CALL) return build_native_call(N);
-            return {};
+    // ── Determine the real instruction ──────────────────────────────
+    TestInstruction real_insn{};
+    real_insn.opcode = spec.opcode;
+    real_insn.reg_a  = spec.reg_a;
+    real_insn.reg_b  = spec.reg_b;
+    real_insn.aux    = spec.aux;
+
+    switch (spec.setup) {
+        case Setup::None:
+        case Setup::CtxRead:
+            real_insn.flags = f_none();
+            if (spec.opcode == VmOpcode::LOAD_CTX)
+                real_insn.flags = f_r();
+            break;
+        case Setup::Reg1:
+            real_insn.flags = f_r();
+            break;
+        case Setup::Reg2:
+            real_insn.flags = f_rr();
+            break;
+        case Setup::Memory:
+            real_insn.flags = f_rm();
+            real_insn.aux = 0;  // guest mem offset 0
+            prog.needs_guest_memory = true;
+            break;
+        case Setup::OramPush:
+            real_insn.flags = f_r();
+            break;
+        case Setup::OramPop:
+            real_insn.flags = f_r();
+            break;
+        case Setup::Pool:
+            real_insn.flags = f_pool();
+            break;
+        case Setup::CtxWrite:
+            real_insn.flags = f_r();
+            break;
+        case Setup::Branch:
+            real_insn.flags = f_none();
+            // aux = target BB ID, set per measured BB below
+            break;
+        case Setup::NativeCall:
+            real_insn.flags = f_none();
+            prog.needs_native = true;
+            prog.native_fn = reinterpret_cast<uint64_t>(&trivial_native);
+            break;
     }
-    return {};
+
+    // ── Build setup BBs (untimed) ───────────────────────────────────
+    uint32_t first_measured_id = 0;  // set after setup BBs
+
+    switch (spec.setup) {
+        case Setup::Reg1: {
+            pool.push_back(42);
+            auto sb = make_setup_bb(next_bb_id++, 0xA0,
+                {{VmOpcode::LOAD_CONST, f_pool(), spec.reg_a, 0, 0}},
+                0 /* target set later */, N);
+            bbs.push_back(std::move(sb));
+            prog.setup_du_count = 1;
+            break;
+        }
+        case Setup::Reg2: {
+            pool.push_back(42);
+            pool.push_back(3);
+            auto sb = make_setup_bb(next_bb_id++, 0xA0,
+                {{VmOpcode::LOAD_CONST, f_pool(), spec.reg_a, 0, 0},
+                 {VmOpcode::LOAD_CONST, f_pool(), spec.reg_b, 0, 1}},
+                0, N);
+            bbs.push_back(std::move(sb));
+            prog.setup_du_count = 1;
+            break;
+        }
+        case Setup::Memory: {
+            pool.push_back(42);
+            auto sb = make_setup_bb(next_bb_id++, 0xA0,
+                {{VmOpcode::LOAD_CONST, f_pool(), 0, 0, 0},
+                 {VmOpcode::STORE, f_rm(), 0, 0, 0}},
+                0, N);
+            bbs.push_back(std::move(sb));
+            prog.setup_du_count = 1;
+            break;
+        }
+        case Setup::OramPush: {
+            pool.push_back(42);
+            auto sb = make_setup_bb(next_bb_id++, 0xA0,
+                {{VmOpcode::LOAD_CONST, f_pool(), 0, 0, 0}},
+                0, N);
+            bbs.push_back(std::move(sb));
+            prog.setup_du_count = 1;
+            break;
+        }
+        case Setup::OramPop: {
+            // Need K PUSHes to fill stack, then K POPs measured.
+            // Setup: 1 LOAD_CONST BB + K PUSH BBs.
+            pool.push_back(42);
+            auto sb = make_setup_bb(next_bb_id++, 0xA0,
+                {{VmOpcode::LOAD_CONST, f_pool(), 0, 0, 0}},
+                0, N);
+            bbs.push_back(std::move(sb));
+            prog.setup_du_count = 1;
+
+            // K PUSH BBs (each is a DU with 1 PUSH + N-1 NOP)
+            for (uint32_t i = 0; i < K; ++i) {
+                TestInstruction push_insn{VmOpcode::PUSH, f_r(), 0, 0, 0};
+                bbs.push_back(make_measured_bb(next_bb_id++, 0xA1,
+                                               push_insn, N, false));
+                prog.setup_du_count++;
+            }
+            break;
+        }
+        case Setup::Pool: {
+            for (uint32_t i = 0; i < K; ++i)
+                pool.push_back(i + 100);
+            // Pool index cycles: aux = i % pool_count
+            break;
+        }
+        case Setup::CtxWrite: {
+            pool.push_back(0x800);
+            auto sb = make_setup_bb(next_bb_id++, 0xA0,
+                {{VmOpcode::LOAD_CONST, f_pool(), 0, 0, 0}},
+                0, N);
+            bbs.push_back(std::move(sb));
+            prog.setup_du_count = 1;
+            break;
+        }
+        case Setup::NativeCall: {
+            // One transition entry for all NATIVE_CALL instructions.
+            // All point to the same trivial native.
+            break;
+        }
+        default:
+            break;
+    }
+
+    // Fix setup BB JMP targets → first measured BB
+    first_measured_id = next_bb_id;
+    for (auto& sb : bbs) {
+        auto& last = sb.instructions.back();
+        if (last.opcode == VmOpcode::JMP)
+            last.aux = first_measured_id;
+    }
+
+    // ── Build K measured BBs ────────────────────────────────────────
+    for (uint32_t i = 0; i < K; ++i) {
+        uint32_t bb_id = next_bb_id++;
+        uint8_t epoch_base = static_cast<uint8_t>(0xB0 + (i & 0x0F));
+
+        if (is_branch) {
+            // Branch at end of DU, target = next BB
+            TestInstruction br = real_insn;
+            br.aux = (i + 1 < K) ? (bb_id + 1) : bb_id;  // last BB: self (will HALT)
+            bbs.push_back(make_measured_bb(bb_id, epoch_base, br, N, true));
+        } else if (spec.setup == Setup::Pool) {
+            TestInstruction lc = real_insn;
+            lc.aux = i % static_cast<uint32_t>(pool.size());
+            bbs.push_back(make_measured_bb(bb_id, epoch_base, lc, N, false));
+        } else if (spec.setup == Setup::NativeCall) {
+            TestInstruction nc_insn = real_insn;
+            nc_insn.aux = 0;  // all use transition entry 0
+            bbs.push_back(make_measured_bb(bb_id, epoch_base, nc_insn, N, false));
+        } else {
+            bbs.push_back(make_measured_bb(bb_id, epoch_base, real_insn, N, false));
+        }
+    }
+
+    // Replace last measured BB's last instruction with HALT
+    if (!bbs.empty()) {
+        auto& last_bb = bbs.back();
+        last_bb.instructions.back() = {VmOpcode::HALT, f_none(), 0, 0, 0};
+    }
+
+    // ── Build native call transition entries ─────────────────────────
+    if (spec.setup == Setup::NativeCall) {
+        TestNativeCall nc{};
+        nc.call_site_ip = 0;  // placeholder, not used for timing
+        nc.arg_count = 0;
+        nc.target_addr = prog.native_fn;
+        ncs.push_back(nc);
+    }
+
+    // ── Assemble blob ───────────────────────────────────────────────
+    prog.blob = Test::build_test_blob(prog.seed, bbs, pool, false, ncs);
+    return prog;
 }
 
-BenchProgram build_nop_baseline(uint32_t N) {
-    OpcodeBenchSpec nop{VmOpcode::NOP, Shape::NoOperand, 0, 0, 0, "NOP_BASELINE", 0};
-    return build_no_operand(nop, N);
+DUBenchProgram build_du_baseline(uint32_t K, uint32_t N) {
+    DUBenchProgram prog;
+    prog.opcode = VmOpcode::NOP;
+    prog.du_count = K;
+    prog.du_width = N;
+    fill_seed(prog.seed);
+
+    std::vector<TestBB> bbs;
+    for (uint32_t i = 0; i < K; ++i) {
+        uint32_t bb_id = i + 1;
+        uint8_t epoch_base = static_cast<uint8_t>(0xB0 + (i & 0x0F));
+        bbs.push_back(make_nop_bb(bb_id, epoch_base, N));
+    }
+
+    // Last BB: replace last NOP with HALT
+    if (!bbs.empty())
+        bbs.back().instructions.back() = {VmOpcode::HALT, f_none(), 0, 0, 0};
+
+    prog.blob = Test::build_test_blob(prog.seed, bbs, {}, false, {});
+    return prog;
 }
 
 }  // namespace VMPilot::Bench

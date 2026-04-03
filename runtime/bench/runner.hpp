@@ -1,6 +1,14 @@
 #pragma once
 /// @file runner.hpp
-/// @brief Benchmark runner — creates engines, times execute(), collects samples.
+/// @brief Doc 19 DU benchmark runner — measures ns_per_dispatch_unit.
+///
+/// Each opcode is benchmarked as a Doc 19 dispatch unit (1 real + N-1 NOP).
+/// All programs have BBs of identical length N, so verify_bb_mac cost is
+/// constant across benchmarks.  The runner:
+///   1. Creates VmEngine from the benchmark blob
+///   2. Steps through setup DUs (untimed)
+///   3. Times execute() for K measured DUs
+///   4. Reports ns_per_du and delta from NOP baseline
 
 #include "bench_clock.hpp"
 #include "bench_stats.hpp"
@@ -21,27 +29,34 @@ using Runtime::VmResult;
 
 struct RunConfig {
     uint32_t iterations = 11;   ///< samples per benchmark (odd → clean median)
-    uint32_t insns      = 500;  ///< repetitions per opcode
+    uint32_t du_count   = 125;  ///< dispatch units per benchmark
     uint32_t warmup     = 2;    ///< discarded warm-up runs
 };
 
 /// Guest memory buffer for Memory/Atomic benchmarks.
-/// Aligned and large enough for any benchmark workload.
 alignas(64) static uint64_t g_guest_mem[64] = {};
 
-/// Run all registered specs and return results with baseline subtraction.
 template<typename Policy, typename Oram>
 std::vector<BenchResult> run_all(const RunConfig& cfg) {
-    const uint32_t N = cfg.insns;
+    constexpr uint32_t N = Policy::fusion_granularity;
+    const uint32_t K = cfg.du_count;
     const uint32_t total_samples = cfg.warmup + cfg.iterations;
 
-    auto time_program = [&](const BenchProgram& prog) -> uint64_t {
+    auto time_program = [&](const DUBenchProgram& prog) -> uint64_t {
         int64_t delta = prog.needs_guest_memory
             ? static_cast<int64_t>(reinterpret_cast<uintptr_t>(g_guest_mem))
             : 0;
         auto engine = VmEngine<Policy, Oram>::create(
             prog.blob.data(), prog.blob.size(), prog.seed, delta);
         if (!engine) return 0;
+
+        // Untimed: step through setup DUs
+        for (uint32_t i = 0; i < prog.setup_du_count * N; ++i) {
+            auto sr = engine->step();
+            if (!sr || *sr == VmResult::Halted) return 0;
+        }
+
+        // Timed: execute remaining (K measured DUs)
         auto t0 = Clock::now();
         auto r  = engine->execute();
         auto t1 = Clock::now();
@@ -49,7 +64,7 @@ std::vector<BenchResult> run_all(const RunConfig& cfg) {
     };
 
     // ── NOP baseline ────────────────────────────────────────────────
-    auto nop_prog = build_nop_baseline(N);
+    auto nop_prog = build_du_baseline(K, N);
     std::vector<uint64_t> nop_samples;
     nop_samples.reserve(cfg.iterations);
     for (uint32_t s = 0; s < total_samples; ++s) {
@@ -57,8 +72,8 @@ std::vector<BenchResult> run_all(const RunConfig& cfg) {
         if (s >= cfg.warmup && ns > 0) nop_samples.push_back(ns);
     }
     auto nop_result = compute_stats("NOP_BASELINE", VmOpcode::NOP,
-                                     nop_prog.measured_insn_count, nop_samples);
-    double baseline = nop_result.ns_per_insn;
+                                     K, nop_samples);
+    double baseline = nop_result.ns_per_insn;  // ns_per_du
 
     // ── Per-opcode benchmarks ───────────────────────────────────────
     std::vector<BenchResult> results;
@@ -67,7 +82,7 @@ std::vector<BenchResult> run_all(const RunConfig& cfg) {
     for (size_t si = 0; si < SPEC_COUNT; ++si) {
         const auto& spec = SPECS[si];
 
-        auto prog = build_opcode_program(spec, N);
+        auto prog = build_du_program(spec, K, N);
         if (prog.blob.empty()) continue;
 
         const char* name = spec.name ? spec.name
@@ -77,18 +92,16 @@ std::vector<BenchResult> run_all(const RunConfig& cfg) {
         std::vector<uint64_t> samples;
         samples.reserve(cfg.iterations);
         for (uint32_t s = 0; s < total_samples; ++s) {
-            // Reset guest memory between runs
             std::memset(g_guest_mem, 0, sizeof(g_guest_mem));
             uint64_t ns = time_program(prog);
             if (s >= cfg.warmup && ns > 0) samples.push_back(ns);
         }
 
-        auto result = compute_stats(name, spec.opcode,
-                                     prog.measured_insn_count, samples);
+        auto result = compute_stats(name, spec.opcode, K, samples);
         result.handler_ns = result.ns_per_insn - baseline;
         results.push_back(result);
 
-        std::fprintf(stderr, "%8.1f ns/insn  (handler: %+.1f ns)\n",
+        std::fprintf(stderr, "%8.1f ns/DU  (Δ: %+.1f ns)\n",
                      result.ns_per_insn, result.handler_ns);
     }
 

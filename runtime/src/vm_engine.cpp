@@ -122,6 +122,19 @@ VmEngine<Policy, Oram>::create(
     // 7. Copy alias LUT
     std::memcpy(m->alias_lut, m->blob.alias_lut(), 256);
 
+    // 7b. Compute max BB instruction count for constant-time MAC verification.
+    //
+    // WHY (Doc 19 §4.2 Fix #2): verify_bb_mac must iterate a fixed number of
+    // times regardless of actual BB length, otherwise the O(BB_length) loop
+    // leaks BB size via timing.
+    {
+        uint32_t max_insns = 0;
+        for (const auto& md : m->bb_metadata)
+            if (md.insn_count_in_bb > max_insns)
+                max_insns = md.insn_count_in_bb;
+        m->max_bb_insn_count = max_insns;
+    }
+
     // 8. Blob integrity hash (uses integrity_key, NOT stored_seed)
     blake3_keyed_hash(m->integrity_key,
                       m->blob_storage.data(), m->blob_storage.size(),

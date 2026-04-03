@@ -431,6 +431,8 @@ verify_bb_mac(const VmImmutable& imm,
         return tl::make_unexpected(DiagnosticCode::InvalidBBTransition);
 
     const BBMetadata& bb = imm.bb_metadata[bb_idx];
+    const uint32_t real_count = bb.insn_count_in_bb;
+    const uint32_t padded_count = imm.max_bb_insn_count;
 
     // Derive bb_enc_seed for this BB
     uint8_t enc_seed_bytes[8];
@@ -439,20 +441,38 @@ verify_bb_mac(const VmImmutable& imm,
     uint64_t enc_state = 0;
     std::memcpy(&enc_state, enc_seed_bytes, 8);
 
-    // Re-decrypt all instructions in this BB
+    // Re-decrypt all instructions in this BB + dummy iterations for padding.
+    //
+    // WHY fixed iteration count (Doc 19 §4.2 Fix #2):
+    //   verify_bb_mac is called per dispatch_unit in the branchless Phase L.
+    //   If the loop iterates insn_count_in_bb times, an attacker can measure
+    //   DU timing to determine BB length — leaking code structure.
+    //   By always iterating max_bb_insn_count, the MAC verification takes
+    //   constant time regardless of actual BB length.  Dummy iterations
+    //   perform the same SipHash work on zero-padded data.
     auto insns = imm.blob.instructions();
-    std::vector<uint8_t> plaintext_bytes(bb.insn_count_in_bb * 8);
+    const uint32_t total_insn_count = imm.blob.header().insn_count;
 
-    for (uint32_t j = 0; j < bb.insn_count_in_bb; ++j) {
+    // Stack buffer for MAC computation (only real instructions contribute)
+    std::vector<uint8_t> plaintext_bytes(real_count * 8);
+
+    for (uint32_t j = 0; j < padded_count; ++j) {
+        const bool is_real = (j < real_count);
+
+        // Always perform SipHash keystream + XOR (same cost for real/dummy)
         uint64_t encrypted = 0;
-        std::memcpy(&encrypted, &insns[bb.entry_ip + j], 8);
+        if (is_real && (bb.entry_ip + j) < total_insn_count)
+            std::memcpy(&encrypted, &insns[bb.entry_ip + j], 8);
+        // Dummy: encrypted stays 0; SipHash + XOR still execute
 
         uint64_t ks = siphash_keystream(imm.fast_key, enc_state, j);
         uint64_t plain = encrypted ^ ks;
 
-        std::memcpy(plaintext_bytes.data() + j * 8, &plain, 8);
+        // Only write real plaintext to MAC buffer
+        if (is_real)
+            std::memcpy(plaintext_bytes.data() + j * 8, &plain, 8);
 
-        // Check for REKEY instruction -- must replay its enc_state mutation
+        // Always check REKEY (dummy iterations: sem_op won't match REKEY)
         VmInsn vinst{};
         std::memcpy(&vinst, &plain, 8);
         {
@@ -473,10 +493,11 @@ verify_bb_mac(const VmImmutable& imm,
                 enc_state = siphash_2_4(rk_mat, es, 8);
             }
         }
+        // Always advance enc_state (dummy: advances on garbage, discarded)
         enc_state = update_enc_state_impl(enc_state, plain);
     }
 
-    // Compute expected MAC
+    // MAC is computed over REAL instructions only (matches blob builder)
     uint8_t computed_mac[8];
     blake3_keyed_hash(imm.integrity_key,
                       plaintext_bytes.data(),

@@ -28,7 +28,7 @@ inline void emit_json(const char* commit,
     std::printf("    \"policy\": \"%s\",\n", policy);
     std::printf("    \"oram\": \"%s\"\n", oram);
     std::printf("  },\n");
-    std::printf("  \"baseline_ns_per_insn\": %.2f,\n", baseline_ns_per_insn);
+    std::printf("  \"baseline_ns_per_du\": %.2f,\n", baseline_ns_per_insn);
     std::printf("  \"results\": [\n");
 
     for (size_t i = 0; i < results.size(); ++i) {
@@ -36,7 +36,7 @@ inline void emit_json(const char* commit,
         std::printf("    {\n");
         std::printf("      \"opcode\": \"%s\",\n", to_string(r.opcode));
         std::printf("      \"category\": %u,\n", r.category);
-        std::printf("      \"insn_count\": %u,\n", r.insn_count);
+        std::printf("      \"du_count\": %u,\n", r.insn_count);
         std::printf("      \"iterations\": %u,\n", r.iterations);
         std::printf("      \"min_ns\": %llu,\n",
                     static_cast<unsigned long long>(r.min_ns));
@@ -46,9 +46,9 @@ inline void emit_json(const char* commit,
                     static_cast<unsigned long long>(r.p95_ns));
         std::printf("      \"mean_ns\": %.2f,\n", r.mean_ns);
         std::printf("      \"stddev_ns\": %.2f,\n", r.stddev_ns);
-        std::printf("      \"ns_per_insn\": %.2f,\n", r.ns_per_insn);
-        std::printf("      \"handler_ns\": %.2f,\n", r.handler_ns);
-        std::printf("      \"ips\": %.0f\n", r.ips);
+        std::printf("      \"ns_per_du\": %.2f,\n", r.ns_per_insn);
+        std::printf("      \"delta_ns\": %.2f,\n", r.handler_ns);
+        std::printf("      \"du_per_sec\": %.0f\n", r.ips);
         std::printf("    }%s\n", (i + 1 < results.size()) ? "," : "");
     }
 
