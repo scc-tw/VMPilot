@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775206333259,
+  "lastUpdate": 1775222144557,
   "repoUrl": "https://github.com/scc-tw/VMPilot",
   "entries": {
     "windows": [
@@ -3295,6 +3295,828 @@ window.BENCHMARK_DATA = {
           {
             "name": "MUTATE_ISA (IPS)",
             "value": 43979,
+            "unit": "insn/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "scc@sccdeMacBook-Air.local",
+            "name": "scc"
+          },
+          "committer": {
+            "email": "scc@sccdeMacBook-Air.local",
+            "name": "scc"
+          },
+          "distinct": true,
+          "id": "6b140f104a2e10bb1421cc4607cb459926853019",
+          "message": "fix: replace std::deque with std::list in ThreadPool to fix ASan false positives\n\nApple libc++ (clang-1700+) deque ASan annotations incorrectly poison\nvalid elements in the work-stealing queue, causing container-overflow\naborts in std::function move-assignment across 8 test suites. All deque\naccesses are correctly mutex-serialized — no data race exists.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-04-03T18:44:27+08:00",
+          "tree_id": "e6ee06e6abac7b9cbac01acca8e7a092f2efb23a",
+          "url": "https://github.com/scc-tw/VMPilot/commit/6b140f104a2e10bb1421cc4607cb459926853019"
+        },
+        "date": 1775222137351,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "NOP (total)",
+            "value": 25455.2,
+            "unit": "ns/insn",
+            "extra": "median=12727600ns  p95=13551400ns  stddev=512260.0ns  iterations=11  insns=500"
+          },
+          {
+            "name": "NOP (handler)",
+            "value": 0,
+            "unit": "ns"
+          },
+          {
+            "name": "NOP (IPS)",
+            "value": 39285,
+            "unit": "insn/s"
+          },
+          {
+            "name": "MOVE (total)",
+            "value": 23527.4,
+            "unit": "ns/insn",
+            "extra": "median=11763700ns  p95=13788600ns  stddev=771454.5ns  iterations=11  insns=500"
+          },
+          {
+            "name": "MOVE (handler)",
+            "value": -1927.8,
+            "unit": "ns"
+          },
+          {
+            "name": "MOVE (IPS)",
+            "value": 42504,
+            "unit": "insn/s"
+          },
+          {
+            "name": "LOAD (total)",
+            "value": 24162.8,
+            "unit": "ns/insn",
+            "extra": "median=12081400ns  p95=18070200ns  stddev=2607539.4ns  iterations=11  insns=500"
+          },
+          {
+            "name": "LOAD (handler)",
+            "value": -1292.4,
+            "unit": "ns"
+          },
+          {
+            "name": "LOAD (IPS)",
+            "value": 41386,
+            "unit": "insn/s"
+          },
+          {
+            "name": "STORE (total)",
+            "value": 23086.8,
+            "unit": "ns/insn",
+            "extra": "median=11543400ns  p95=11803100ns  stddev=81285.2ns  iterations=11  insns=500"
+          },
+          {
+            "name": "STORE (handler)",
+            "value": -2368.4,
+            "unit": "ns"
+          },
+          {
+            "name": "STORE (IPS)",
+            "value": 43315,
+            "unit": "insn/s"
+          },
+          {
+            "name": "PUSH (total)",
+            "value": 23523.8,
+            "unit": "ns/insn",
+            "extra": "median=11761900ns  p95=16194800ns  stddev=1445480.6ns  iterations=11  insns=500"
+          },
+          {
+            "name": "PUSH (handler)",
+            "value": -1931.4,
+            "unit": "ns"
+          },
+          {
+            "name": "PUSH (IPS)",
+            "value": 42510,
+            "unit": "insn/s"
+          },
+          {
+            "name": "POP (total)",
+            "value": 76098,
+            "unit": "ns/insn",
+            "extra": "median=38049000ns  p95=45264300ns  stddev=2194349.4ns  iterations=11  insns=500"
+          },
+          {
+            "name": "POP (handler)",
+            "value": 50642.8,
+            "unit": "ns"
+          },
+          {
+            "name": "POP (IPS)",
+            "value": 13141,
+            "unit": "insn/s"
+          },
+          {
+            "name": "LOAD_CONST (total)",
+            "value": 22895.4,
+            "unit": "ns/insn",
+            "extra": "median=11447700ns  p95=17534700ns  stddev=1819891.5ns  iterations=11  insns=500"
+          },
+          {
+            "name": "LOAD_CONST (handler)",
+            "value": -2559.8,
+            "unit": "ns"
+          },
+          {
+            "name": "LOAD_CONST (IPS)",
+            "value": 43677,
+            "unit": "insn/s"
+          },
+          {
+            "name": "LOAD_CTX (total)",
+            "value": 23918,
+            "unit": "ns/insn",
+            "extra": "median=11959000ns  p95=16008000ns  stddev=1540495.4ns  iterations=11  insns=500"
+          },
+          {
+            "name": "LOAD_CTX (handler)",
+            "value": -1537.2,
+            "unit": "ns"
+          },
+          {
+            "name": "LOAD_CTX (IPS)",
+            "value": 41810,
+            "unit": "insn/s"
+          },
+          {
+            "name": "STORE_CTX (total)",
+            "value": 23729.6,
+            "unit": "ns/insn",
+            "extra": "median=11864800ns  p95=14704200ns  stddev=1075596.1ns  iterations=11  insns=500"
+          },
+          {
+            "name": "STORE_CTX (handler)",
+            "value": -1725.6,
+            "unit": "ns"
+          },
+          {
+            "name": "STORE_CTX (IPS)",
+            "value": 42141,
+            "unit": "insn/s"
+          },
+          {
+            "name": "ADD (total)",
+            "value": 23111.8,
+            "unit": "ns/insn",
+            "extra": "median=11555900ns  p95=18025200ns  stddev=1864903.3ns  iterations=11  insns=500"
+          },
+          {
+            "name": "ADD (handler)",
+            "value": -2343.4,
+            "unit": "ns"
+          },
+          {
+            "name": "ADD (IPS)",
+            "value": 43268,
+            "unit": "insn/s"
+          },
+          {
+            "name": "SUB (total)",
+            "value": 23466,
+            "unit": "ns/insn",
+            "extra": "median=11733000ns  p95=15213100ns  stddev=1314296.7ns  iterations=11  insns=500"
+          },
+          {
+            "name": "SUB (handler)",
+            "value": -1989.2,
+            "unit": "ns"
+          },
+          {
+            "name": "SUB (IPS)",
+            "value": 42615,
+            "unit": "insn/s"
+          },
+          {
+            "name": "MUL (total)",
+            "value": 23969.4,
+            "unit": "ns/insn",
+            "extra": "median=11984700ns  p95=12131600ns  stddev=118333.3ns  iterations=11  insns=500"
+          },
+          {
+            "name": "MUL (handler)",
+            "value": -1485.8,
+            "unit": "ns"
+          },
+          {
+            "name": "MUL (IPS)",
+            "value": 41720,
+            "unit": "insn/s"
+          },
+          {
+            "name": "IMUL (total)",
+            "value": 23474,
+            "unit": "ns/insn",
+            "extra": "median=11737000ns  p95=17454400ns  stddev=1770230.8ns  iterations=11  insns=500"
+          },
+          {
+            "name": "IMUL (handler)",
+            "value": -1981.2,
+            "unit": "ns"
+          },
+          {
+            "name": "IMUL (IPS)",
+            "value": 42600,
+            "unit": "insn/s"
+          },
+          {
+            "name": "DIV (total)",
+            "value": 25954.8,
+            "unit": "ns/insn",
+            "extra": "median=12977400ns  p95=14556300ns  stddev=1101140.2ns  iterations=11  insns=500"
+          },
+          {
+            "name": "DIV (handler)",
+            "value": 499.6,
+            "unit": "ns"
+          },
+          {
+            "name": "DIV (IPS)",
+            "value": 38529,
+            "unit": "insn/s"
+          },
+          {
+            "name": "IDIV (total)",
+            "value": 23714.8,
+            "unit": "ns/insn",
+            "extra": "median=11857400ns  p95=12140400ns  stddev=103836.0ns  iterations=11  insns=500"
+          },
+          {
+            "name": "IDIV (handler)",
+            "value": -1740.4,
+            "unit": "ns"
+          },
+          {
+            "name": "IDIV (IPS)",
+            "value": 42168,
+            "unit": "insn/s"
+          },
+          {
+            "name": "NEG (total)",
+            "value": 22967,
+            "unit": "ns/insn",
+            "extra": "median=11483500ns  p95=11935700ns  stddev=203288.6ns  iterations=11  insns=500"
+          },
+          {
+            "name": "NEG (handler)",
+            "value": -2488.2,
+            "unit": "ns"
+          },
+          {
+            "name": "NEG (IPS)",
+            "value": 43541,
+            "unit": "insn/s"
+          },
+          {
+            "name": "MOD (total)",
+            "value": 26109.4,
+            "unit": "ns/insn",
+            "extra": "median=13054700ns  p95=17451700ns  stddev=1459316.6ns  iterations=11  insns=500"
+          },
+          {
+            "name": "MOD (handler)",
+            "value": 654.2,
+            "unit": "ns"
+          },
+          {
+            "name": "MOD (IPS)",
+            "value": 38300,
+            "unit": "insn/s"
+          },
+          {
+            "name": "AND (total)",
+            "value": 23621.8,
+            "unit": "ns/insn",
+            "extra": "median=11810900ns  p95=13967800ns  stddev=690630.0ns  iterations=11  insns=500"
+          },
+          {
+            "name": "AND (handler)",
+            "value": -1833.4,
+            "unit": "ns"
+          },
+          {
+            "name": "AND (IPS)",
+            "value": 42334,
+            "unit": "insn/s"
+          },
+          {
+            "name": "OR (total)",
+            "value": 26455.4,
+            "unit": "ns/insn",
+            "extra": "median=13227700ns  p95=17527500ns  stddev=1280229.9ns  iterations=11  insns=500"
+          },
+          {
+            "name": "OR (handler)",
+            "value": 1000.2,
+            "unit": "ns"
+          },
+          {
+            "name": "OR (IPS)",
+            "value": 37799,
+            "unit": "insn/s"
+          },
+          {
+            "name": "XOR (total)",
+            "value": 26100.4,
+            "unit": "ns/insn",
+            "extra": "median=13050200ns  p95=17358500ns  stddev=1572897.1ns  iterations=11  insns=500"
+          },
+          {
+            "name": "XOR (handler)",
+            "value": 645.2,
+            "unit": "ns"
+          },
+          {
+            "name": "XOR (IPS)",
+            "value": 38314,
+            "unit": "insn/s"
+          },
+          {
+            "name": "NOT (total)",
+            "value": 23003,
+            "unit": "ns/insn",
+            "extra": "median=11501500ns  p95=17686100ns  stddev=2062498.6ns  iterations=11  insns=500"
+          },
+          {
+            "name": "NOT (handler)",
+            "value": -2452.2,
+            "unit": "ns"
+          },
+          {
+            "name": "NOT (IPS)",
+            "value": 43473,
+            "unit": "insn/s"
+          },
+          {
+            "name": "SHL (total)",
+            "value": 23173.8,
+            "unit": "ns/insn",
+            "extra": "median=11586900ns  p95=11853200ns  stddev=90360.9ns  iterations=11  insns=500"
+          },
+          {
+            "name": "SHL (handler)",
+            "value": -2281.4,
+            "unit": "ns"
+          },
+          {
+            "name": "SHL (IPS)",
+            "value": 43152,
+            "unit": "insn/s"
+          },
+          {
+            "name": "SHR (total)",
+            "value": 23035.4,
+            "unit": "ns/insn",
+            "extra": "median=11517700ns  p95=11641700ns  stddev=57775.7ns  iterations=11  insns=500"
+          },
+          {
+            "name": "SHR (handler)",
+            "value": -2419.8,
+            "unit": "ns"
+          },
+          {
+            "name": "SHR (IPS)",
+            "value": 43411,
+            "unit": "insn/s"
+          },
+          {
+            "name": "SAR (total)",
+            "value": 23451.4,
+            "unit": "ns/insn",
+            "extra": "median=11725700ns  p95=17251500ns  stddev=1667873.0ns  iterations=11  insns=500"
+          },
+          {
+            "name": "SAR (handler)",
+            "value": -2003.8,
+            "unit": "ns"
+          },
+          {
+            "name": "SAR (IPS)",
+            "value": 42641,
+            "unit": "insn/s"
+          },
+          {
+            "name": "ROL (total)",
+            "value": 23414.6,
+            "unit": "ns/insn",
+            "extra": "median=11707300ns  p95=13336200ns  stddev=631069.2ns  iterations=11  insns=500"
+          },
+          {
+            "name": "ROL (handler)",
+            "value": -2040.6,
+            "unit": "ns"
+          },
+          {
+            "name": "ROL (IPS)",
+            "value": 42708,
+            "unit": "insn/s"
+          },
+          {
+            "name": "ROR (total)",
+            "value": 23624.6,
+            "unit": "ns/insn",
+            "extra": "median=11812300ns  p95=13514700ns  stddev=787176.9ns  iterations=11  insns=500"
+          },
+          {
+            "name": "ROR (handler)",
+            "value": -1830.6,
+            "unit": "ns"
+          },
+          {
+            "name": "ROR (IPS)",
+            "value": 42329,
+            "unit": "insn/s"
+          },
+          {
+            "name": "CMP (total)",
+            "value": 27290.8,
+            "unit": "ns/insn",
+            "extra": "median=13645400ns  p95=15072500ns  stddev=1293695.2ns  iterations=11  insns=500"
+          },
+          {
+            "name": "CMP (handler)",
+            "value": 1835.6,
+            "unit": "ns"
+          },
+          {
+            "name": "CMP (IPS)",
+            "value": 36642,
+            "unit": "insn/s"
+          },
+          {
+            "name": "TEST (total)",
+            "value": 23774.2,
+            "unit": "ns/insn",
+            "extra": "median=11887100ns  p95=12884200ns  stddev=453973.2ns  iterations=11  insns=500"
+          },
+          {
+            "name": "TEST (handler)",
+            "value": -1681,
+            "unit": "ns"
+          },
+          {
+            "name": "TEST (IPS)",
+            "value": 42062,
+            "unit": "insn/s"
+          },
+          {
+            "name": "SET_FLAG (total)",
+            "value": 23577.6,
+            "unit": "ns/insn",
+            "extra": "median=11788800ns  p95=17866500ns  stddev=2072821.0ns  iterations=11  insns=500"
+          },
+          {
+            "name": "SET_FLAG (handler)",
+            "value": -1877.6,
+            "unit": "ns"
+          },
+          {
+            "name": "SET_FLAG (IPS)",
+            "value": 42413,
+            "unit": "insn/s"
+          },
+          {
+            "name": "GET_FLAG (total)",
+            "value": 23191.4,
+            "unit": "ns/insn",
+            "extra": "median=11595700ns  p95=16659600ns  stddev=1494386.2ns  iterations=11  insns=500"
+          },
+          {
+            "name": "GET_FLAG (handler)",
+            "value": -2263.8,
+            "unit": "ns"
+          },
+          {
+            "name": "GET_FLAG (IPS)",
+            "value": 43119,
+            "unit": "insn/s"
+          },
+          {
+            "name": "JMP (total)",
+            "value": 17806,
+            "unit": "ns/insn",
+            "extra": "median=8903000ns  p95=11705100ns  stddev=805146.1ns  iterations=11  insns=500"
+          },
+          {
+            "name": "JMP (handler)",
+            "value": -7649.2,
+            "unit": "ns"
+          },
+          {
+            "name": "JMP (IPS)",
+            "value": 56161,
+            "unit": "insn/s"
+          },
+          {
+            "name": "JCC (total)",
+            "value": 19417.8,
+            "unit": "ns/insn",
+            "extra": "median=9708900ns  p95=11671800ns  stddev=727056.8ns  iterations=11  insns=500"
+          },
+          {
+            "name": "JCC (handler)",
+            "value": -6037.4,
+            "unit": "ns"
+          },
+          {
+            "name": "JCC (IPS)",
+            "value": 51499,
+            "unit": "insn/s"
+          },
+          {
+            "name": "NATIVE_CALL (total)",
+            "value": 25571.8,
+            "unit": "ns/insn",
+            "extra": "median=12785900ns  p95=18923800ns  stddev=2295410.8ns  iterations=11  insns=500"
+          },
+          {
+            "name": "NATIVE_CALL (handler)",
+            "value": 116.6,
+            "unit": "ns"
+          },
+          {
+            "name": "NATIVE_CALL (IPS)",
+            "value": 39106,
+            "unit": "insn/s"
+          },
+          {
+            "name": "SEXT8 (total)",
+            "value": 25507.2,
+            "unit": "ns/insn",
+            "extra": "median=12753600ns  p95=17932700ns  stddev=2187755.1ns  iterations=11  insns=500"
+          },
+          {
+            "name": "SEXT8 (handler)",
+            "value": 52,
+            "unit": "ns"
+          },
+          {
+            "name": "SEXT8 (IPS)",
+            "value": 39205,
+            "unit": "insn/s"
+          },
+          {
+            "name": "SEXT16 (total)",
+            "value": 23526.2,
+            "unit": "ns/insn",
+            "extra": "median=11763100ns  p95=12391500ns  stddev=291314.3ns  iterations=11  insns=500"
+          },
+          {
+            "name": "SEXT16 (handler)",
+            "value": -1929,
+            "unit": "ns"
+          },
+          {
+            "name": "SEXT16 (IPS)",
+            "value": 42506,
+            "unit": "insn/s"
+          },
+          {
+            "name": "SEXT32 (total)",
+            "value": 25766.2,
+            "unit": "ns/insn",
+            "extra": "median=12883100ns  p95=16928500ns  stddev=1807012.8ns  iterations=11  insns=500"
+          },
+          {
+            "name": "SEXT32 (handler)",
+            "value": 311,
+            "unit": "ns"
+          },
+          {
+            "name": "SEXT32 (IPS)",
+            "value": 38811,
+            "unit": "insn/s"
+          },
+          {
+            "name": "ZEXT8 (total)",
+            "value": 22909.8,
+            "unit": "ns/insn",
+            "extra": "median=11454900ns  p95=11969900ns  stddev=204087.7ns  iterations=11  insns=500"
+          },
+          {
+            "name": "ZEXT8 (handler)",
+            "value": -2545.4,
+            "unit": "ns"
+          },
+          {
+            "name": "ZEXT8 (IPS)",
+            "value": 43649,
+            "unit": "insn/s"
+          },
+          {
+            "name": "ZEXT16 (total)",
+            "value": 24648.4,
+            "unit": "ns/insn",
+            "extra": "median=12324200ns  p95=16574900ns  stddev=1565967.6ns  iterations=11  insns=500"
+          },
+          {
+            "name": "ZEXT16 (handler)",
+            "value": -806.8,
+            "unit": "ns"
+          },
+          {
+            "name": "ZEXT16 (IPS)",
+            "value": 40571,
+            "unit": "insn/s"
+          },
+          {
+            "name": "ZEXT32 (total)",
+            "value": 27493,
+            "unit": "ns/insn",
+            "extra": "median=13746500ns  p95=17242700ns  stddev=1750784.1ns  iterations=11  insns=500"
+          },
+          {
+            "name": "ZEXT32 (handler)",
+            "value": 2037.8,
+            "unit": "ns"
+          },
+          {
+            "name": "ZEXT32 (IPS)",
+            "value": 36373,
+            "unit": "insn/s"
+          },
+          {
+            "name": "TRUNC8 (total)",
+            "value": 23467,
+            "unit": "ns/insn",
+            "extra": "median=11733500ns  p95=17859300ns  stddev=1932083.9ns  iterations=11  insns=500"
+          },
+          {
+            "name": "TRUNC8 (handler)",
+            "value": -1988.2,
+            "unit": "ns"
+          },
+          {
+            "name": "TRUNC8 (IPS)",
+            "value": 42613,
+            "unit": "insn/s"
+          },
+          {
+            "name": "TRUNC16 (total)",
+            "value": 23057.6,
+            "unit": "ns/insn",
+            "extra": "median=11528800ns  p95=17987100ns  stddev=2692488.2ns  iterations=11  insns=500"
+          },
+          {
+            "name": "TRUNC16 (handler)",
+            "value": -2397.6,
+            "unit": "ns"
+          },
+          {
+            "name": "TRUNC16 (IPS)",
+            "value": 43370,
+            "unit": "insn/s"
+          },
+          {
+            "name": "LOCK_ADD (total)",
+            "value": 25212,
+            "unit": "ns/insn",
+            "extra": "median=12606000ns  p95=14787200ns  stddev=917236.3ns  iterations=11  insns=500"
+          },
+          {
+            "name": "LOCK_ADD (handler)",
+            "value": -243.2,
+            "unit": "ns"
+          },
+          {
+            "name": "LOCK_ADD (IPS)",
+            "value": 39664,
+            "unit": "insn/s"
+          },
+          {
+            "name": "XCHG (total)",
+            "value": 31811.2,
+            "unit": "ns/insn",
+            "extra": "median=15905600ns  p95=18335500ns  stddev=1954291.8ns  iterations=11  insns=500"
+          },
+          {
+            "name": "XCHG (handler)",
+            "value": 6356,
+            "unit": "ns"
+          },
+          {
+            "name": "XCHG (IPS)",
+            "value": 31435,
+            "unit": "insn/s"
+          },
+          {
+            "name": "CMPXCHG (total)",
+            "value": 25436.2,
+            "unit": "ns/insn",
+            "extra": "median=12718100ns  p95=13523100ns  stddev=437088.7ns  iterations=11  insns=500"
+          },
+          {
+            "name": "CMPXCHG (handler)",
+            "value": -19,
+            "unit": "ns"
+          },
+          {
+            "name": "CMPXCHG (IPS)",
+            "value": 39314,
+            "unit": "insn/s"
+          },
+          {
+            "name": "FENCE (total)",
+            "value": 25250.8,
+            "unit": "ns/insn",
+            "extra": "median=12625400ns  p95=18282100ns  stddev=2527038.1ns  iterations=11  insns=500"
+          },
+          {
+            "name": "FENCE (handler)",
+            "value": -204.4,
+            "unit": "ns"
+          },
+          {
+            "name": "FENCE (IPS)",
+            "value": 39603,
+            "unit": "insn/s"
+          },
+          {
+            "name": "ATOMIC_LOAD (total)",
+            "value": 23326.6,
+            "unit": "ns/insn",
+            "extra": "median=11663300ns  p95=12675500ns  stddev=314763.6ns  iterations=11  insns=500"
+          },
+          {
+            "name": "ATOMIC_LOAD (handler)",
+            "value": -2128.6,
+            "unit": "ns"
+          },
+          {
+            "name": "ATOMIC_LOAD (IPS)",
+            "value": 42870,
+            "unit": "insn/s"
+          },
+          {
+            "name": "NOP (total)",
+            "value": 25411.2,
+            "unit": "ns/insn",
+            "extra": "median=12705600ns  p95=13343700ns  stddev=260480.5ns  iterations=11  insns=500"
+          },
+          {
+            "name": "NOP (handler)",
+            "value": -44,
+            "unit": "ns"
+          },
+          {
+            "name": "NOP (IPS)",
+            "value": 39353,
+            "unit": "insn/s"
+          },
+          {
+            "name": "CHECK_INTEGRITY (total)",
+            "value": 31807.6,
+            "unit": "ns/insn",
+            "extra": "median=15903800ns  p95=17872100ns  stddev=2366298.8ns  iterations=11  insns=500"
+          },
+          {
+            "name": "CHECK_INTEGRITY (handler)",
+            "value": 6352.4,
+            "unit": "ns"
+          },
+          {
+            "name": "CHECK_INTEGRITY (IPS)",
+            "value": 31439,
+            "unit": "insn/s"
+          },
+          {
+            "name": "CHECK_DEBUG (total)",
+            "value": 24929,
+            "unit": "ns/insn",
+            "extra": "median=12464500ns  p95=16603300ns  stddev=1518859.6ns  iterations=11  insns=500"
+          },
+          {
+            "name": "CHECK_DEBUG (handler)",
+            "value": -526.2,
+            "unit": "ns"
+          },
+          {
+            "name": "CHECK_DEBUG (IPS)",
+            "value": 40114,
+            "unit": "insn/s"
+          },
+          {
+            "name": "MUTATE_ISA (total)",
+            "value": 31221,
+            "unit": "ns/insn",
+            "extra": "median=15610500ns  p95=17922200ns  stddev=2360171.2ns  iterations=11  insns=500"
+          },
+          {
+            "name": "MUTATE_ISA (handler)",
+            "value": 5765.8,
+            "unit": "ns"
+          },
+          {
+            "name": "MUTATE_ISA (IPS)",
+            "value": 32030,
             "unit": "insn/s"
           }
         ]
