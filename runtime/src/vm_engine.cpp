@@ -592,58 +592,171 @@ VmEngine<Policy, Oram>::dispatch_unit() noexcept
         exec_.vm_ip++;
 
         // Break on HALT — Phase L must still run for BB MAC verification.
-        // In step(), Phase L executes even when halted (the BB boundary
-        // check triggers verify_bb_mac).  Returning early here would skip
-        // MAC verification, allowing a tampered blob to execute without
-        // detection until after HALT.
         if (exec_.halted)
             break;
+
+        // Break at BB boundary — prevents fetching into the next BB's
+        // instruction space when the current BB is shorter than N.
+        // Once Phase 6 chaff expansion is in place, BB lengths are always
+        // multiples of N and this check becomes dead code.
+        {
+            uint32_t bb_end_check = imm_->bb_metadata[exec_.current_bb_index].entry_ip
+                                  + pipeline::current_bb_insn_count(*imm_, exec_);
+            if (exec_.vm_ip >= bb_end_check || exec_.branch_taken)
+                break;
+        }
     }
 
-    // ── Phase L: BB transition (once per dispatch unit) ─────────────────
+    // ── Phase L: Unified branchless BB transition (Doc 19 §4.2) ────────
     //
-    // WHY only once: the fusability predicate (Doc 18 Def 3.1) guarantees
-    // that only the last of N sub-instructions may be a branch.  For
-    // non-branch instructions, Phase L is just vm_ip++ (already done above).
-    // The BB boundary check and branch logic need only run once at the end.
+    // WHY branchless: the branching if/else in Phase L leaks whether a BB
+    // transition occurred via timing (verify_bb_mac + enter_basic_block are
+    // ~8000 ns; skipping them is measurably different).  The branchless
+    // approach always executes both operations, then uses bitwise MUX to
+    // decide whether to keep the new state or restore the snapshot.
     //
-    // NOTE: This round uses the current branching Phase L.  Doc 19 Phase 4
-    // will replace this with a branchless snapshot/MUX in the next round.
-    if (exec_.branch_taken) {
-        exec_.branch_taken = false;
+    // Three cases handled without data-dependent branches:
+    //   (a) branch_taken → target = branch_target_bb, commit
+    //   (b) at_bb_end && !branch_taken → target = next_seq_bb, commit
+    //   (c) !at_bb_end && !branch_taken → target = current_bb (identity), restore
+    {
+        // ── L.1: Snapshot state before transition ────────────────────
+        // Fields modified by enter_basic_block that we may need to restore.
+        struct ExecSnap {
+            uint64_t enc_state;
+            uint32_t insn_index_in_bb;
+            uint64_t vm_ip;
+            uint8_t  bb_chain_state[32];
+            uint8_t  insn_fpe_key[16];
+            uint64_t regs[16];
+            uint32_t current_bb_id;
+            uint32_t current_bb_index;
+            uint32_t current_epoch;
+        };
+        ExecSnap snap;
+        snap.enc_state = exec_.enc_state;
+        snap.insn_index_in_bb = exec_.insn_index_in_bb;
+        snap.vm_ip = exec_.vm_ip;
+        std::memcpy(snap.bb_chain_state, exec_.bb_chain_state, 32);
+        std::memcpy(snap.insn_fpe_key, exec_.insn_fpe_key, 16);
+        for (int r = 0; r < 16; ++r) snap.regs[r] = exec_.regs[r].bits;
+        snap.current_bb_id = exec_.current_bb_id;
+        snap.current_bb_index = exec_.current_bb_index;
+        snap.current_epoch = exec_.current_epoch;
 
+        // Also snapshot VmEpoch (opcode permutation tables)
+        VmEpoch epoch_snap = *epoch_;
+
+        // ── L.2: Determine target BB (branchless 3-way select) ──────
+        uint32_t bb_end = imm_->bb_metadata[exec_.current_bb_index].entry_ip
+                        + pipeline::current_bb_insn_count(*imm_, exec_);
+        bool at_end = (exec_.vm_ip >= bb_end);
+        bool need_transition = exec_.branch_taken | at_end;
+
+        uint32_t next_seq_id = (exec_.current_bb_index + 1 < imm_->bb_metadata.size())
+            ? imm_->bb_metadata[exec_.current_bb_index + 1].bb_id
+            : exec_.current_bb_id;
+
+        // Branchless target selection: branch > fallthrough > identity
+        uint32_t m_br  = -static_cast<uint32_t>(exec_.branch_taken);
+        uint32_t m_end = -static_cast<uint32_t>(at_end) & ~m_br;
+        uint32_t m_id  = ~m_br & ~m_end;
+
+        uint32_t target = (exec_.branch_target_bb & m_br)
+                        | (next_seq_id & m_end)
+                        | (exec_.current_bb_id & m_id);
+
+        // ── L.3: Always verify BB MAC ───────────────────────────────
         auto mac_r = pipeline::verify_bb_mac(*imm_, exec_, *epoch_);
         if (!mac_r) return tl::make_unexpected(mac_r.error());
 
+        // ── L.4: Always enter_basic_block ───────────────────────────
+        exec_.branch_taken = false;
         auto enter_r = pipeline::enter_basic_block(
-            exec_, *epoch_, *imm_, exec_.branch_target_bb);
+            exec_, *epoch_, *imm_, target);
         if (!enter_r) return tl::make_unexpected(enter_r.error());
 
-        if (exec_.return_resume_ip != 0) {
-            exec_.vm_ip = exec_.return_resume_ip;
-            exec_.insn_index_in_bb = exec_.return_resume_insn_idx;
+        // ── L.5: Always replay_enc_state (0 iterations = no-op) ─────
+        // RET_VM sets return_resume_ip/insn_idx; branchless apply via MUX.
+        {
+            uint64_t rmask = -static_cast<uint64_t>(exec_.return_resume_ip != 0);
+            exec_.vm_ip = static_cast<uint64_t>(
+                (exec_.return_resume_ip & rmask) | (exec_.vm_ip & ~rmask));
+            exec_.insn_index_in_bb = static_cast<uint32_t>(
+                (exec_.return_resume_insn_idx & static_cast<uint32_t>(rmask))
+              | (exec_.insn_index_in_bb & static_cast<uint32_t>(~rmask)));
+
+            // replay with 0 iterations when no resume → no-op
             pipeline::replay_enc_state(exec_, *epoch_, *imm_,
                                        exec_.return_resume_insn_idx);
             exec_.return_resume_ip = 0;
             exec_.return_resume_insn_idx = 0;
         }
-    } else {
-        // Check if we've reached end of current BB (fallthrough)
-        uint32_t bb_end = imm_->bb_metadata[exec_.current_bb_index].entry_ip
-                        + pipeline::current_bb_insn_count(*imm_, exec_);
 
-        if (exec_.vm_ip >= bb_end) {
-            auto mac_r = pipeline::verify_bb_mac(*imm_, exec_, *epoch_);
-            if (!mac_r) return tl::make_unexpected(mac_r.error());
+        // ── L.6: Branchless commit/restore MUX ──────────────────────
+        // keep = all-1s if need_transition, all-0s otherwise.
+        // For each field: result = (new & keep) | (old & discard).
+        uint64_t keep = -static_cast<uint64_t>(need_transition);
+        uint64_t disc = ~keep;
 
-            if (exec_.current_bb_index + 1 < imm_->bb_metadata.size()) {
-                uint32_t next_id = imm_->bb_metadata[exec_.current_bb_index + 1].bb_id;
-                auto enter_r = pipeline::enter_basic_block(
-                    exec_, *epoch_, *imm_, next_id);
-                if (!enter_r) return tl::make_unexpected(enter_r.error());
-            }
+        exec_.enc_state = (exec_.enc_state & keep) | (snap.enc_state & disc);
+        exec_.insn_index_in_bb = static_cast<uint32_t>(
+            (exec_.insn_index_in_bb & static_cast<uint32_t>(keep))
+          | (snap.insn_index_in_bb & static_cast<uint32_t>(disc)));
+        exec_.vm_ip = (exec_.vm_ip & keep) | (snap.vm_ip & disc);
+        for (int i = 0; i < 32; ++i)
+            exec_.bb_chain_state[i] = static_cast<uint8_t>(
+                (exec_.bb_chain_state[i] & static_cast<uint8_t>(keep))
+              | (snap.bb_chain_state[i] & static_cast<uint8_t>(disc)));
+        for (int i = 0; i < 16; ++i)
+            exec_.insn_fpe_key[i] = static_cast<uint8_t>(
+                (exec_.insn_fpe_key[i] & static_cast<uint8_t>(keep))
+              | (snap.insn_fpe_key[i] & static_cast<uint8_t>(disc)));
+        for (int r = 0; r < 16; ++r)
+            exec_.regs[r] = RegVal(
+                (exec_.regs[r].bits & keep) | (snap.regs[r] & disc));
+        exec_.current_bb_id = static_cast<uint32_t>(
+            (exec_.current_bb_id & static_cast<uint32_t>(keep))
+          | (snap.current_bb_id & static_cast<uint32_t>(disc)));
+        exec_.current_bb_index = static_cast<uint32_t>(
+            (exec_.current_bb_index & static_cast<uint32_t>(keep))
+          | (snap.current_bb_index & static_cast<uint32_t>(disc)));
+        exec_.current_epoch = static_cast<uint32_t>(
+            (exec_.current_epoch & static_cast<uint32_t>(keep))
+          | (snap.current_epoch & static_cast<uint32_t>(disc)));
+
+        // Restore VmEpoch if !need_transition (identity transition discarded)
+        // For opcode_perm[256] + opcode_perm_inv[256]: byte-wise MUX
+        for (int i = 0; i < 256; ++i) {
+            epoch_->opcode_perm[i] = static_cast<uint8_t>(
+                (epoch_->opcode_perm[i] & static_cast<uint8_t>(keep))
+              | (epoch_snap.opcode_perm[i] & static_cast<uint8_t>(disc)));
+            epoch_->opcode_perm_inv[i] = static_cast<uint8_t>(
+                (epoch_->opcode_perm_inv[i] & static_cast<uint8_t>(keep))
+              | (epoch_snap.opcode_perm_inv[i] & static_cast<uint8_t>(disc)));
         }
+        epoch_->bb_id = static_cast<uint32_t>(
+            (epoch_->bb_id & static_cast<uint32_t>(keep))
+          | (epoch_snap.bb_id & static_cast<uint32_t>(disc)));
+        epoch_->epoch = static_cast<uint32_t>(
+            (epoch_->epoch & static_cast<uint32_t>(keep))
+          | (epoch_snap.epoch & static_cast<uint32_t>(disc)));
+        epoch_->live_regs_bitmap = static_cast<uint16_t>(
+            (epoch_->live_regs_bitmap & static_cast<uint16_t>(keep))
+          | (epoch_snap.live_regs_bitmap & static_cast<uint16_t>(disc)));
+
+        secure_zero(&snap, sizeof(snap));
     }
+
+    // ── Unconditional ORAM dummy scan (Doc 19 §C.1) ───────────────────────
+    //
+    // WHY: normalizes ORAM access frequency to constant rate per dispatch unit.
+    // Without this, DUs containing PUSH/POP produce ORAM scans while DUs with
+    // only ALU ops do not — leaking memory-instruction density.
+    //
+    // For RollingKeyOram: full 64-line scan (read-equivalent, ~1750 ns).
+    // For DirectOram: no-op (DebugPolicy does not need timing normalization).
+    Oram::dummy_scan(*oram_);
 
     return exec_.halted ? VmResult::Halted : VmResult::Stepped;
 }

@@ -69,6 +69,18 @@ struct RollingKeyOram {
     /// Write an 8-byte MemVal to the oblivious workspace at `offset`.
     /// Scans all 64 cache lines and re-encrypts entire workspace.
     static void write(VmOramState& state, uint64_t offset, MemVal val) noexcept;
+
+    /// Unconditional dummy scan (Doc 19 §C.1, ORAM Invariant).
+    ///
+    /// WHY: every dispatch_unit must produce the same ORAM access pattern
+    /// regardless of opcode mix.  A DU with PUSH/POP triggers real ORAM
+    /// scans; a DU with only ALU ops does not.  The dummy scan ensures
+    /// at least 1 full scan per DU, normalizing the memory bus frequency
+    /// to constant rate (Doc 19 Appendix C.4).
+    ///
+    /// Implementation: read-equivalent — full 64-line scan + re-encrypt +
+    /// nonce bump, identical cost to a real read.  Result discarded.
+    static void dummy_scan(VmOramState& state) noexcept;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -90,6 +102,10 @@ struct DirectOram {
 
     /// Write 8 bytes to workspace at `offset` (direct indexed access).
     static void write(VmOramState& state, uint64_t offset, MemVal val) noexcept;
+
+    /// No-op dummy scan — DirectOram does not need timing normalization.
+    /// DebugPolicy::constant_time == false, so timing leaks are acceptable.
+    static void dummy_scan(VmOramState&) noexcept {}
 };
 
 }  // namespace VMPilot::Runtime

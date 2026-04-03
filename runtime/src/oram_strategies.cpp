@@ -92,4 +92,10 @@ void RollingKeyOram::write(VmOramState& state, uint64_t offset, MemVal val) noex
     oram_access_impl(state, offset, val.bits, true);
 }
 
+void RollingKeyOram::dummy_scan(VmOramState& state) noexcept {
+    // Read-equivalent: full 64-line scan + re-encrypt + nonce bump.
+    // Result discarded — the scan's purpose is timing normalization.
+    (void)oram_access_impl(state, 0, 0, false);
+}
+
 }  // namespace VMPilot::Runtime
