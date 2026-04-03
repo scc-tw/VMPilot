@@ -539,6 +539,12 @@ struct HandlerTraits<VmOpcode::SAR, P> {
 };
 
 /// ROL: dst = rotate_left(a, b & 63)
+///
+/// Uses the standard UB-free rotate idiom: (x << n) | (x >> ((-n) & 63)).
+/// The naive (x >> (64 - n)) is undefined behavior when n == 0 because
+/// shifting a uint64_t by 64 violates C++17 §8.8 [expr.shift].
+/// The (-n) & 63 trick maps n=0 to >>0 (identity), avoiding the UB while
+/// remaining constant-time (no branch on shift amount).
 template<typename P>
 struct HandlerTraits<VmOpcode::ROL, P> {
     static constexpr auto security_class = SecurityClass::A;
@@ -546,12 +552,14 @@ struct HandlerTraits<VmOpcode::ROL, P> {
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
         uint64_t amt = i.plain_b & 63;
-        e.regs[i.reg_a] = RegVal((i.plain_a << amt) | (i.plain_a >> (64 - amt)));
+        e.regs[i.reg_a] = RegVal((i.plain_a << amt) | (i.plain_a >> ((-amt) & 63)));
         return {};
     }
 };
 
 /// ROR: dst = rotate_right(a, b & 63)
+///
+/// Same UB-free idiom as ROL — see ROL comment for rationale.
 template<typename P>
 struct HandlerTraits<VmOpcode::ROR, P> {
     static constexpr auto security_class = SecurityClass::A;
@@ -559,7 +567,7 @@ struct HandlerTraits<VmOpcode::ROR, P> {
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
         uint64_t amt = i.plain_b & 63;
-        e.regs[i.reg_a] = RegVal((i.plain_a >> amt) | (i.plain_a << (64 - amt)));
+        e.regs[i.reg_a] = RegVal((i.plain_a >> amt) | (i.plain_a << ((-amt) & 63)));
         return {};
     }
 };
