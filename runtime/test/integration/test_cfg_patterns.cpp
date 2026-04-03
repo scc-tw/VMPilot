@@ -26,14 +26,6 @@ using namespace VMPilot::Test;
 // Helpers
 // ============================================================================
 
-static void fill_seed(uint8_t seed[32]) {
-    for (int i = 0; i < 32; ++i) seed[i] = static_cast<uint8_t>(i + 1);
-}
-
-static void fill_epoch(uint8_t seed[32], uint8_t base) {
-    for (int i = 0; i < 32; ++i) seed[i] = static_cast<uint8_t>(base + i);
-}
-
 static uint8_t pool_none() {
     return static_cast<uint8_t>((VM_OPERAND_POOL << 6) | (VM_OPERAND_NONE << 4));
 }
@@ -506,4 +498,37 @@ TEST(CfgPatterns, SelfJmpWithExit) {
     ASSERT_TRUE(r.has_value());
     // 0+1=1 (LT 2→self), 1+1=2 (not LT 2→exit)
     EXPECT_EQ(r->return_value, 2u);
+}
+
+// ############################################################################
+// EngineCrossBB: JMP to second BB (from test_engine_comprehensive.cpp)
+// ############################################################################
+
+TEST(CfgPatterns, EngineCrossBB_JmpToSecondBB) {
+    uint8_t seed[32]; fill_seed(seed);
+
+    // BB1: JMP -> BB2.  BB2: LOAD_CONST r0=77, HALT
+    TestBB bb1{}; bb1.bb_id = 1; bb1.epoch = 0;
+    bb1.live_regs_bitmap = 0xFFFF; bb1.flags = 0;
+    fill_epoch(bb1.epoch_seed, 0xA1);
+    bb1.instructions = {
+        {VmOpcode::JMP, flags_none(), 0, 0, 2},   // JMP -> bb_id=2
+    };
+
+    TestBB bb2{}; bb2.bb_id = 2; bb2.epoch = 0;
+    bb2.live_regs_bitmap = 0xFFFF; bb2.flags = 0;
+    fill_epoch(bb2.epoch_seed, 0xA2);
+    bb2.instructions = {
+        {VmOpcode::LOAD_CONST, pool_none(), 0, 0, 0},
+        {VmOpcode::HALT, flags_none(), 0, 0, 0},
+    };
+
+    TestPoolEntry pe{77, 1, 0};  // BB2 index=1, reg 0
+    auto blob = build_test_blob_ex(seed, {bb1, bb2}, {pe});
+    auto engine = VmEngine<DebugPolicy, DirectOram>::create(
+        blob.data(), blob.size(), seed);
+    ASSERT_TRUE(engine.has_value());
+    auto r = engine->execute();
+    ASSERT_TRUE(r.has_value());
+    EXPECT_EQ(r->return_value, 77u);
 }

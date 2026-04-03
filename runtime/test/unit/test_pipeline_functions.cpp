@@ -1,15 +1,9 @@
-/// @file test_phase3_handlers.cpp
-/// @brief Tests for Phase 3: traits-based handler system (doc 16).
+/// @file test_pipeline_functions.cpp
+/// @brief Tests for pipeline functions: handler table build verification.
 ///
-/// Validates:
-///   1. build_handler_table compiles for all policy x ORAM combinations
-///   2. Handler table has non-null entries for all 55 opcodes
-///   3. MOVE handler: plain_b -> regs[dst]
-///   4. XOR handler: plain_a ^ plain_b -> regs[dst]
-///   5. HALT handler: sets halted flag
-///   6. NOP handler: writes plain_b to trash registers (GSS chaff)
-///   7. DecodedInsn carries plain_a/plain_b fields
-///   8. NATIVE_CALL returns NativeCallBridgeFailed when no entries exist
+/// Extracted from test_phase3_handlers.cpp into unit/ directory.
+
+#include "test_blob_builder.hpp"
 
 #include "handler_impls.hpp"
 #include "decoded_insn.hpp"
@@ -26,9 +20,10 @@
 
 using namespace VMPilot::Runtime;
 using namespace VMPilot::Common::VM;
+using namespace VMPilot::Test;
 
 // ============================================================================
-// 1. Table Build Tests
+// Handler Table Build: all policies have non-null handlers for 55 opcodes
 // ============================================================================
 
 TEST(Phase3Table, BuildsForAllCombinations) {
@@ -56,7 +51,7 @@ TEST(Phase3Table, OpcodeCountMatches) {
 }
 
 // ============================================================================
-// 2. MOVE Handler
+// MOVE Handler
 // ============================================================================
 
 TEST(Phase3Move, CopiesPlaintextToDst) {
@@ -81,7 +76,7 @@ TEST(Phase3Move, CopiesPlaintextToDst) {
 }
 
 // ============================================================================
-// 3. XOR Handler
+// XOR Handler
 // ============================================================================
 
 TEST(Phase3Xor, PlaintextXor) {
@@ -126,7 +121,7 @@ TEST(Phase3Xor, SelfXorIsZero) {
 }
 
 // ============================================================================
-// 4. HALT Handler
+// HALT Handler
 // ============================================================================
 
 TEST(Phase3Halt, SetsHaltedFlag) {
@@ -147,7 +142,7 @@ TEST(Phase3Halt, SetsHaltedFlag) {
 }
 
 // ============================================================================
-// 5. NOP Handler (GSS chaff)
+// NOP Handler (GSS chaff)
 // ============================================================================
 
 TEST(Phase3Nop, WritesToTrashRegs) {
@@ -169,7 +164,7 @@ TEST(Phase3Nop, WritesToTrashRegs) {
 }
 
 // ============================================================================
-// 6. DecodedInsn Layout
+// DecodedInsn Layout
 // ============================================================================
 
 TEST(Phase3DecodedInsn, CarriesPlaintextOperands) {
@@ -189,7 +184,7 @@ TEST(Phase3DecodedInsn, CarriesPlaintextOperands) {
 }
 
 // ============================================================================
-// 7. NATIVE_CALL returns error when no entries exist
+// NATIVE_CALL returns error when no entries exist
 // ============================================================================
 
 TEST(Phase3Stubs, NativeCallReturnsNotImplemented) {

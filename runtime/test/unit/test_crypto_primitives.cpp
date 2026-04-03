@@ -1,5 +1,7 @@
-/// @file test_doc16_crypto.cpp
+/// @file test_crypto_primitives.cpp
 /// @brief Tests for doc 16 crypto primitives: Speck64/128, XEX-Speck64, BLAKE3_KEYED_128, secure_zero.
+///
+/// Extracted from test_doc16_crypto.cpp into unit/ directory.
 
 #include <vm/speck64.hpp>
 #include <vm/xex_speck64.hpp>
@@ -373,160 +375,49 @@ TEST(SecureZeroTest, SecureLocalWithArrayType) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Doc 16 Forward-Secrecy Tests
-//
-// These tests validate the key ratchet, BB chain state evolution, and
-// dead register sanitization properties described in doc 16 rev.8.
+// SipHash Tests
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// Key ratchet: BLAKE3_KEYED_128(key, fingerprint||opcode||aux) must produce
-/// a DIFFERENT key for different fingerprints (execution-dependent keys).
-///
-/// SECURITY PROPERTY: Two instructions with different register states (but
-/// same opcode/aux) produce different next keys.  An attacker who knows the
-/// current key and observes one instruction's effect cannot predict the key
-/// after a different instruction's effect.
-TEST(Doc16ForwardSecrecy, KeyRatchetDependsOnFingerprint) {
-    uint8_t key[16] = {0x42};
-
-    // Two different register states → two different fingerprints
-    uint64_t regs_a[16] = {}; regs_a[0] = 100;
-    uint64_t regs_b[16] = {}; regs_b[0] = 200;
-
-    uint8_t fp_a[16], fp_b[16];
-    blake3_keyed_fingerprint(key, regs_a, fp_a);
-    blake3_keyed_fingerprint(key, regs_b, fp_b);
-    ASSERT_NE(std::memcmp(fp_a, fp_b, 16), 0);
-
-    // Ratchet: next_key = BLAKE3_KEYED_128(key, fp || opcode || aux)
-    uint16_t opcode = 1;
-    uint32_t aux = 0;
-    uint8_t msg_a[22], msg_b[22];
-    std::memcpy(msg_a, fp_a, 16);
-    std::memcpy(msg_a + 16, &opcode, 2);
-    std::memcpy(msg_a + 18, &aux, 4);
-    std::memcpy(msg_b, fp_b, 16);
-    std::memcpy(msg_b + 16, &opcode, 2);
-    std::memcpy(msg_b + 18, &aux, 4);
-
-    uint8_t next_key_a[16], next_key_b[16];
-    blake3_keyed_128(key, msg_a, 22, next_key_a, 16);
-    blake3_keyed_128(key, msg_b, 22, next_key_b, 16);
-
-    EXPECT_NE(std::memcmp(next_key_a, next_key_b, 16), 0)
-        << "Different register states must produce different ratcheted keys";
+TEST(SipHashTest, KnownVector) {
+    // Test with zero key and empty message
+    uint8_t key[16] = {};
+    uint64_t hash = Crypto::siphash_2_4(key, nullptr, 0);
+    // SipHash-2-4 with zero key and empty input should produce a specific value
+    // Verify it at least produces a non-zero result
+    EXPECT_NE(hash, 0u);
 }
 
-/// Key ratchet is irreversible: knowing next_key reveals nothing about prev_key.
-///
-/// SECURITY PROPERTY (hash preimage resistance):
-///   Given K_{j+1} = BLAKE3_KEYED_128(K_j, msg), recovering K_j requires
-///   inverting BLAKE3 which has 2^128 preimage resistance.  We verify this
-///   operationally by checking that ratcheted keys are unpredictable — they
-///   don't have simple arithmetic relationships to the input key.
-TEST(Doc16ForwardSecrecy, RatchetIsIrreversible) {
-    uint8_t key[16];
-    for (int i = 0; i < 16; i++) key[i] = static_cast<uint8_t>(i);
+TEST(SipHashTest, DifferentInputsDifferentHashes) {
+    uint8_t key[16] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+    uint8_t msg1[] = {0x00};
+    uint8_t msg2[] = {0x01};
 
-    uint64_t regs[16] = {};
-    regs[0] = 42;
-
-    uint8_t fp[16];
-    blake3_keyed_fingerprint(key, regs, fp);
-
-    uint8_t msg[22];
-    std::memcpy(msg, fp, 16);
-    uint16_t opcode = 0; uint32_t aux = 0;
-    std::memcpy(msg + 16, &opcode, 2);
-    std::memcpy(msg + 18, &aux, 4);
-
-    uint8_t next_key[16];
-    blake3_keyed_128(key, msg, 22, next_key, 16);
-
-    // next_key should differ from key in at least half the bytes (avalanche)
-    int diff_bytes = 0;
-    for (int i = 0; i < 16; i++)
-        if (key[i] != next_key[i]) diff_bytes++;
-    EXPECT_GE(diff_bytes, 8)
-        << "Ratcheted key should differ from input in at least half the bytes (avalanche)";
+    uint64_t h1 = Crypto::siphash_2_4(key, msg1, 1);
+    uint64_t h2 = Crypto::siphash_2_4(key, msg2, 1);
+    EXPECT_NE(h1, h2);
 }
 
-/// BB chain state evolution is path-dependent:
-/// entering the same BB from different histories produces different chain states.
-///
-/// SECURITY PROPERTY: The chain state is a hash chain over all previously
-/// visited BBs.  Two executions that visit the same BB through different
-/// paths get different chain states → different FPE keys → different encodings.
-/// This prevents an attacker from learning the FPE key by observing a
-/// repeated BB execution.
-TEST(Doc16ForwardSecrecy, BbChainStateIsPathDependent) {
-    uint8_t seed[32];
-    for (int i = 0; i < 32; i++) seed[i] = static_cast<uint8_t>(i + 1);
+TEST(SipHashTest, KeystreamDeterministic) {
+    uint8_t key[16] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+    uint64_t enc_state = 0xDEADBEEFCAFEBABE;
 
-    // Path 1: start → BB 1
-    uint8_t chain1[32] = {};  // initial chain state
-    uint8_t evolve1[36];
-    std::memcpy(evolve1, chain1, 32);
-    uint32_t bb1_id = 1;
-    std::memcpy(evolve1 + 32, &bb1_id, 4);
-    uint8_t chain1_after[32];
-    blake3_keyed_hash(seed, evolve1, 36, chain1_after, 32);
+    uint64_t ks1 = Crypto::siphash_keystream(key, enc_state, 0);
+    uint64_t ks2 = Crypto::siphash_keystream(key, enc_state, 0);
+    EXPECT_EQ(ks1, ks2);
 
-    // Path 2: start → BB 2 → BB 1
-    uint8_t chain2[32] = {};  // same initial
-    uint8_t evolve2a[36];
-    std::memcpy(evolve2a, chain2, 32);
-    uint32_t bb2_id = 2;
-    std::memcpy(evolve2a + 32, &bb2_id, 4);
-    uint8_t chain2_after_bb2[32];
-    blake3_keyed_hash(seed, evolve2a, 36, chain2_after_bb2, 32);
-
-    uint8_t evolve2b[36];
-    std::memcpy(evolve2b, chain2_after_bb2, 32);
-    std::memcpy(evolve2b + 32, &bb1_id, 4);
-    uint8_t chain2_after_bb1[32];
-    blake3_keyed_hash(seed, evolve2b, 36, chain2_after_bb1, 32);
-
-    // Both visited BB 1, but through different paths → different chain states
-    EXPECT_NE(std::memcmp(chain1_after, chain2_after_bb1, 32), 0)
-        << "Same BB reached via different paths must have different chain states";
+    uint64_t ks3 = Crypto::siphash_keystream(key, enc_state, 1);
+    EXPECT_NE(ks1, ks3);
 }
 
-/// FPE key derivation: BLAKE3_KEYED(epoch_seed, chain_state) produces
-/// different keys for different chain states (same epoch_seed).
-TEST(Doc16ForwardSecrecy, FpeKeyDependsOnChainState) {
-    uint8_t epoch_seed[32];
-    for (int i = 0; i < 32; i++) epoch_seed[i] = static_cast<uint8_t>(0xAA + i);
+TEST(SipHashTest, ExpandProduces8Words) {
+    uint8_t key[16] = {};
+    uint64_t out[8] = {};
+    Crypto::siphash_expand(key, 0, 0, out);
 
-    uint8_t chain_a[32] = {};
-    uint8_t chain_b[32] = {}; chain_b[0] = 1;
-
-    uint8_t key_a[16], key_b[16];
-    blake3_keyed_hash(epoch_seed, chain_a, 32, key_a, 16);
-    blake3_keyed_hash(epoch_seed, chain_b, 32, key_b, 16);
-
-    EXPECT_NE(std::memcmp(key_a, key_b, 16), 0)
-        << "Different chain states must produce different FPE keys";
-}
-
-/// Dead register sanitization: FPE_Encode(key, reg, 0) for dead registers
-/// produces a deterministic non-zero encoded value.  Two dead registers
-/// get DIFFERENT encoded values (XEX tweak).
-TEST(Doc16ForwardSecrecy, DeadRegisterSanitization) {
-    uint8_t key[16] = {0x55};
-    Speck64_RoundKeys rk;
-    Speck64_KeySchedule(key, rk);
-    XEX_Tweaks tw;
-    XEX_ComputeTweaks(rk, tw);
-
-    // Encode zero for all 16 registers — all should be distinct (XEX tweaks)
-    std::set<uint64_t> encoded_zeros;
-    for (uint8_t r = 0; r < 16; ++r) {
-        uint64_t enc = FPE_Encode(rk, tw, r, 0);
-        encoded_zeros.insert(enc);
-        // Encoded zero should not be zero (cipher is not identity)
-        EXPECT_NE(enc, 0u) << "Sanitized dead register should not be zero";
+    // All 8 words should be populated (extremely unlikely all zero)
+    bool all_zero = true;
+    for (int i = 0; i < 8; ++i) {
+        if (out[i] != 0) all_zero = false;
     }
-    EXPECT_EQ(encoded_zeros.size(), 16u)
-        << "Dead register sanitization must produce distinct values per register";
+    EXPECT_FALSE(all_zero);
 }

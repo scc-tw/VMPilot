@@ -27,14 +27,6 @@ using namespace VMPilot::Test;
 // Helpers
 // ============================================================================
 
-static void fill_seed(uint8_t seed[32]) {
-    for (int i = 0; i < 32; ++i) seed[i] = static_cast<uint8_t>(i + 1);
-}
-
-static void fill_epoch(uint8_t seed[32], uint8_t base) {
-    for (int i = 0; i < 32; ++i) seed[i] = static_cast<uint8_t>(base + i);
-}
-
 static uint8_t pool_none() {
     return static_cast<uint8_t>((VM_OPERAND_POOL << 6) | (VM_OPERAND_NONE << 4));
 }

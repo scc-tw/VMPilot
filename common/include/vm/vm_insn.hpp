@@ -56,6 +56,26 @@ struct VmInsn {
 
 static_assert(sizeof(VmInsn) == 8, "VmInsn must be exactly 8 bytes");
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Operand flag composition
+//
+// The flags byte encodes: [7:6]=op_a_type, [5:4]=op_b_type, [3:0]=condition.
+// These constexpr helpers produce the flags byte for common operand patterns.
+// Used by compiler (instruction emission), blob builder, and chaff expansion.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Compose a flags byte from operand types and condition nibble.
+constexpr uint8_t make_operand_flags(uint8_t a_type, uint8_t b_type,
+                                     uint8_t condition = 0) noexcept {
+    return static_cast<uint8_t>((a_type << 6) | (b_type << 4) | (condition & 0x0F));
+}
+
+constexpr uint8_t OP_FLAGS_NONE     = 0;
+constexpr uint8_t OP_FLAGS_REG_REG  = make_operand_flags(VM_OPERAND_REG, VM_OPERAND_REG);
+constexpr uint8_t OP_FLAGS_REG_NONE = make_operand_flags(VM_OPERAND_REG, VM_OPERAND_NONE);
+constexpr uint8_t OP_FLAGS_POOL     = make_operand_flags(VM_OPERAND_POOL, VM_OPERAND_NONE);
+constexpr uint8_t OP_FLAGS_REG_MEM  = make_operand_flags(VM_OPERAND_REG, VM_OPERAND_MEM);
+
 }  // namespace VMPilot::Common::VM
 
 #endif  // __COMMON_VM_INSN_HPP__

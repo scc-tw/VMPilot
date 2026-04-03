@@ -1,7 +1,8 @@
-/// @file test_width_extension.cpp
+/// @file opcode/test_width_extension.cpp
 /// @brief Tests for width/extension opcodes: SEXT8/16/32, ZEXT8/16/32, TRUNC8/16.
 ///
 /// Each opcode is tested with a basic value and an edge case.
+/// Moved from test/test_width_extension.cpp.
 
 #include "test_blob_builder.hpp"
 
@@ -24,14 +25,6 @@ using namespace VMPilot::Test;
 // ============================================================================
 // Helpers
 // ============================================================================
-
-static void fill_seed(uint8_t seed[32]) {
-    for (int i = 0; i < 32; ++i) seed[i] = static_cast<uint8_t>(i + 1);
-}
-
-static void fill_epoch(uint8_t seed[32], uint8_t base) {
-    for (int i = 0; i < 32; ++i) seed[i] = static_cast<uint8_t>(base + i);
-}
 
 static uint8_t pool_none() {
     return static_cast<uint8_t>((VM_OPERAND_POOL << 6) | (VM_OPERAND_NONE << 4));

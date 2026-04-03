@@ -103,60 +103,93 @@ if(ENABLE_TESTS)
         gtest_discover_tests(${name})
     endfunction()
 
-    # ── Core runtime tests ──
+    # ══════════════════════════════════════════════════════════════════════
+    # New test structure (organized by concern, not by implementation phase)
+    # ══════════════════════════════════════════════════════════════════════
 
-    vmpilot_add_runtime_test(runtime_smoke_test     SOURCES test/smoke_test.cpp)
-    vmpilot_add_runtime_test(test_phase1_foundation SOURCES test/test_phase1_foundation.cpp)
-    vmpilot_add_runtime_test(test_phase2_state      SOURCES test/test_phase2_state.cpp)
-    vmpilot_add_runtime_test(test_phase3_handlers   SOURCES test/test_phase3_handlers.cpp)
-    vmpilot_add_runtime_test(test_phase4_engine     SOURCES test/test_phase4_engine.cpp)
-    vmpilot_add_runtime_test(test_engine_comprehensive
-        SOURCES test/test_engine_comprehensive.cpp)
+    # ── unit/ — isolated component tests ──
 
-    # TLS test needs Threads
-    add_executable(test_tls_helpers test/test_tls_helpers.cpp)
+    foreach(_t IN ITEMS
+        test_crypto_primitives
+        test_blob_view
+        test_oram_strategies
+        test_state_types
+        test_pipeline_functions
+    )
+        vmpilot_add_runtime_test(${_t} SOURCES test/unit/${_t}.cpp)
+    endforeach()
+
+    # ── opcode/ — per-opcode correctness (happy path + edge case) ──
+
+    foreach(_t IN ITEMS
+        test_data_movement
+        test_arithmetic
+        test_logic_bitwise
+        test_comparison_branch
+        test_width_extension
+        test_control_flow
+    )
+        vmpilot_add_runtime_test(${_t} SOURCES test/opcode/${_t}.cpp)
+    endforeach()
+
+    # ── integration/ — cross-component interactions ──
+
+    foreach(_t IN ITEMS
+        test_cfg_patterns
+        test_native_call
+        test_policy_matrix
+    )
+        vmpilot_add_runtime_test(${_t} SOURCES test/integration/${_t}.cpp)
+    endforeach()
+
+    vmpilot_add_runtime_test(test_vm_runner
+        SOURCES test/integration/test_vm_runner.cpp
+        EXTRA_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+    # ── security/ — Doc 15-19 cryptographic invariants ──
+
+    foreach(_t IN ITEMS
+        test_encryption_chain
+        test_forward_secrecy
+        test_timing_invariants
+        test_mac_integrity
+        test_execution_independence
+    )
+        vmpilot_add_runtime_test(${_t} SOURCES test/security/${_t}.cpp)
+    endforeach()
+
+    # ── robustness/ — error paths + boundary values ──
+
+    foreach(_t IN ITEMS
+        test_error_paths
+        test_boundary_values
+        test_stack_limits
+    )
+        vmpilot_add_runtime_test(${_t} SOURCES test/robustness/${_t}.cpp)
+    endforeach()
+
+    # ── concurrency/ — thread safety + reentrancy (needs Threads) ──
+
+    foreach(_t IN ITEMS test_parallel_engines test_reentrancy)
+        add_executable(${_t} test/concurrency/${_t}.cpp)
+        target_include_directories(${_t}
+            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test)
+        target_link_libraries(${_t}
+            PRIVATE VMPilot_Runtime Threads::Threads GTest::gtest_main
+                    vmpilot_options vmpilot_sanitizer)
+        gtest_discover_tests(${_t})
+    endforeach()
+
+    # ── platform/ — platform-specific (TLS needs Threads) ──
+
+    add_executable(test_tls_helpers test/platform/test_tls_helpers.cpp)
     target_include_directories(test_tls_helpers PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test)
     target_link_libraries(test_tls_helpers
         PRIVATE VMPilot_Runtime Threads::Threads GTest::gtest_main
                 vmpilot_options vmpilot_sanitizer)
     gtest_discover_tests(test_tls_helpers)
 
-    # ── Doc 16 crypto primitive tests ──
-
-    vmpilot_add_runtime_test(test_doc16_crypto SOURCES test/test_doc16_crypto.cpp)
-
-    # ── Security property coverage tests (Doc 15/16/17/19 audit gaps) ──
-
-    vmpilot_add_runtime_test(test_security_properties SOURCES test/test_security_properties.cpp)
-
-    # ── Doc 17/19 ratchet + dispatch unit crypto property tests ──
-
-    vmpilot_add_runtime_test(test_doc17_doc19_crypto SOURCES test/test_doc17_doc19_crypto.cpp)
-
-    # ── Opcode coverage tests (doc 16 compliance) ──
-
-    foreach(_t IN ITEMS
-        test_jcc_conditions
-        test_width_extension
-        test_shift_rotate
-        test_push_pop_oram
-        test_cfg_patterns
-        test_load_store
-        test_call_depth
-        test_error_paths
-        test_native_call_variants
-        test_cmp_edge_cases
-        test_ctx_ops
-        test_policy_consistency
-    )
-        vmpilot_add_runtime_test(${_t} SOURCES test/${_t}.cpp)
-    endforeach()
-
-    # ── VmRunner factory tests ──
-
-    vmpilot_add_runtime_test(test_vm_runner
-        SOURCES test/test_vm_runner.cpp
-        EXTRA_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    # Old test files deleted — all migrated to subdirectories above
 endif()
 
 # ── Benchmarks (opt-in) ─────────────────────────────────────────────────

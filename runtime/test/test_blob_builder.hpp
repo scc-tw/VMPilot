@@ -601,6 +601,80 @@ inline std::vector<uint8_t> build_test_blob_ex(
     return blob;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Test fixture initialization
+//
+// These belong here (not in a helpers.hpp dumping ground) because they are
+// blob fixture initialization — every call to build_test_blob needs a seed
+// and epoch.  They are the same abstraction level as build_test_blob itself.
+// ─────────────────────────────────────────────────────────────────────────────
+
+inline void fill_seed(uint8_t seed[32], uint8_t base = 1) {
+    for (int i = 0; i < 32; ++i)
+        seed[i] = static_cast<uint8_t>(base + i);
+}
+
+inline void fill_epoch(uint8_t out[32], uint8_t base = 0x50) {
+    for (int i = 0; i < 32; ++i)
+        out[i] = static_cast<uint8_t>(base + i);
+}
+
+/// Convenience: build a TestBB with default fields.
+inline TestBB make_test_bb(uint32_t bb_id, uint8_t epoch_base,
+                           std::vector<TestInstruction> insns,
+                           uint16_t live_regs = 0xFFFF) {
+    TestBB bb{};
+    bb.bb_id = bb_id;
+    bb.epoch = 0;
+    bb.live_regs_bitmap = live_regs;
+    bb.flags = 0;
+    fill_epoch(bb.epoch_seed, epoch_base);
+    bb.instructions = std::move(insns);
+    return bb;
+}
+
+}  // namespace VMPilot::Test
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Engine factory — wraps build_test_blob + VmEngine::create
+//
+// Belongs here because it is the same abstraction layer as build_test_blob:
+// "give me instructions, get a running engine."  Not a generic helper — it is
+// the test-side counterpart of the production VmRunner.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#include "vm_engine.hpp"
+#include "vm_policy.hpp"
+
+namespace VMPilot::Test {
+
+template<typename Policy = Runtime::DebugPolicy,
+         typename Oram = typename Runtime::DefaultOramFor<Policy>::type>
+auto make_single_bb_engine(
+    const uint8_t seed[32], uint8_t epoch_base,
+    const std::vector<TestInstruction>& insns,
+    const std::vector<uint64_t>& pool = {})
+    -> tl::expected<Runtime::VmEngine<Policy, Oram>, Common::DiagnosticCode>
+{
+    auto bb = make_test_bb(1, epoch_base, insns);
+    auto blob = build_test_blob(seed, {bb}, pool);
+    return Runtime::VmEngine<Policy, Oram>::create(
+        blob.data(), blob.size(), seed);
+}
+
+template<typename Policy = Runtime::DebugPolicy,
+         typename Oram = typename Runtime::DefaultOramFor<Policy>::type>
+auto make_multi_bb_engine(
+    const uint8_t seed[32],
+    const std::vector<TestBB>& bbs,
+    const std::vector<uint64_t>& pool = {})
+    -> tl::expected<Runtime::VmEngine<Policy, Oram>, Common::DiagnosticCode>
+{
+    auto blob = build_test_blob(seed, bbs, pool);
+    return Runtime::VmEngine<Policy, Oram>::create(
+        blob.data(), blob.size(), seed);
+}
+
 }  // namespace VMPilot::Test
 
 #endif  // __RUNTIME_TEST_BLOB_BUILDER_HPP__

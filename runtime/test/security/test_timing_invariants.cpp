@@ -1,16 +1,11 @@
-/// @file test_security_properties.cpp
-/// @brief Tests for cryptographic and security properties required by
-///        Doc 15, 16, 17, 19 that were not covered by existing tests.
+/// @file test_timing_invariants.cpp
+/// @brief Timing invariant and determinism tests for constant-time security.
 ///
-/// Properties tested:
-///   #1  BB MAC verification correctness (Doc 15 §2.3, Doc 16 §5)
-///   #2  CFG hijack rejection (Doc 17 §3.2)
-///   #3  Per-instruction ORAM scan invariant (Doc 19 Appendix C, Def C.1)
-///   #4  Fixed-iteration verify_bb_mac (Doc 19 §4.2 Fix #2)
-///   #5  Branchless Phase L — all three cases (Doc 19 §4.2 Fix #1)
-///   #6  ExecSnapshot branchless_restore correctness
-///   #7  Branchless Phase E — non-writing opcodes (Doc 19 §4.2 Fix #3)
-///   #8  Per-execution independence via RDRAND nonce (Doc 16 §12 S4)
+/// Extracted from:
+///   test_doc17_doc19_crypto.cpp Group B — Doc 19 Theorem 4.1 isomorphism
+///   test_doc17_doc19_crypto.cpp Group D — Enhanced NOP ghost dataflow
+///   test_security_properties.cpp — ORAM scan invariant, fixed-iteration MAC,
+///                                  branchless Phase L, branchless Phase E
 
 #include "test_blob_builder.hpp"
 
@@ -39,14 +34,9 @@ using namespace VMPilot::Test;
 // Helpers
 // ============================================================================
 
-static void fill_seed(uint8_t seed[32]) {
-    for (int i = 0; i < 32; ++i) seed[i] = static_cast<uint8_t>(i + 1);
-}
 
-static void fill_epoch(uint8_t seed[32], uint8_t base = 0x50) {
-    for (int i = 0; i < 32; ++i) seed[i] = static_cast<uint8_t>(base + i);
-}
 
+/// Operand type flag helpers.
 static constexpr uint8_t f_pool_none() {
     return static_cast<uint8_t>((VM_OPERAND_POOL << 6) | (VM_OPERAND_NONE << 4));
 }
@@ -59,13 +49,84 @@ static constexpr uint8_t f_r() {
 static constexpr uint8_t f_none() { return 0; }
 
 // ============================================================================
-// #1: BB MAC verification correctness (Doc 15 §2.3)
+// Group B: Doc 19 — dispatch_unit State Isomorphism (Theorem 4.1)
 //
-// BLAKE3_keyed(integrity_key, all_plaintext_insns_in_BB)[0:8] must match
-// the stored MAC.  Flipping any bit in any instruction must cause rejection.
+// Theorem: dispatch_unit(sigma_0) = A(...A(sigma_0, p_0)..., p_{N-1})
+//
+// For non-branch instructions within a single BB:
+//   N x step()  ==  1 x dispatch_unit()
+//
+// Compared fields: regs[0..15], insn_fpe_key, enc_state, vm_ip,
+//                  insn_index_in_bb, vm_flags.
 // ============================================================================
 
-TEST(SecurityProperties, BbMacRejectsInstructionTamper) {
+/// Helper: compare mutable exec state of two engines.
+static void assert_state_identical(const VmExecution& a, const VmExecution& b,
+                                   const char* context) {
+    for (int r = 0; r < 16; ++r) {
+        EXPECT_EQ(a.regs[r].bits, b.regs[r].bits)
+            << context << ": regs[" << r << "] mismatch";
+    }
+    EXPECT_EQ(std::memcmp(a.insn_fpe_key, b.insn_fpe_key, 16), 0)
+        << context << ": insn_fpe_key mismatch";
+    EXPECT_EQ(a.enc_state, b.enc_state)
+        << context << ": enc_state mismatch";
+    EXPECT_EQ(a.vm_ip, b.vm_ip)
+        << context << ": vm_ip mismatch";
+    EXPECT_EQ(a.insn_index_in_bb, b.insn_index_in_bb)
+        << context << ": insn_index_in_bb mismatch";
+    EXPECT_EQ(a.vm_flags, b.vm_flags)
+        << context << ": vm_flags mismatch";
+}
+
+/// B1. Determinism with HighSecPolicy (N=4).
+///
+/// step() delegates to dispatch_unit() — so 1×step() == 1×dispatch_unit()
+/// structurally (same function).  This test verifies that two identically
+/// initialized engines produce bit-identical state after one dispatch unit.
+TEST(Doc19Isomorphism, HighSec_N4) {
+    uint8_t seed[32]; fill_seed(seed);
+
+    TestBB bb{};
+    bb.bb_id = 1; bb.epoch = 0;
+    bb.live_regs_bitmap = 0xFFFF; bb.flags = 0;
+    fill_epoch(bb.epoch_seed);
+
+    // 5 insns: 4 for the DU + HALT
+    bb.instructions = {
+        {VmOpcode::LOAD_CONST, f_pool_none(), 0, 0, 0},  // r0 = 100
+        {VmOpcode::ADD, f_rr(), 0, 1, 0},
+        {VmOpcode::SUB, f_rr(), 0, 1, 0},
+        {VmOpcode::NOP, f_rr(), 2, 3, 0x12345678},
+        {VmOpcode::HALT, f_none(), 0, 0, 0},
+    };
+
+    auto blob = build_test_blob(seed, {bb}, {100});
+
+    auto parent = VmEngine<HighSecPolicy, DirectOram>::create(
+        blob.data(), blob.size(), seed);
+    ASSERT_TRUE(parent.has_value());
+    auto imm = parent->shared_immutable();
+
+    auto ea = VmEngine<HighSecPolicy, DirectOram>::create_reentrant(imm);
+    auto eb = VmEngine<HighSecPolicy, DirectOram>::create_reentrant(imm);
+    ASSERT_TRUE(ea.has_value());
+    ASSERT_TRUE(eb.has_value());
+
+    // Engine A: 1 x step() (which IS dispatch_unit)
+    auto ra = ea->step();
+    ASSERT_TRUE(ra.has_value()) << "step() failed";
+
+    // Engine B: 1 x dispatch_unit()
+    auto rb = eb->dispatch_unit();
+    ASSERT_TRUE(rb.has_value()) << "dispatch_unit() failed";
+
+    assert_state_identical(ea->execution(), eb->execution(),
+                           "HighSec N=4 isomorphism");
+}
+
+/// B2. Determinism with StandardPolicy (N=2).
+TEST(Doc19Isomorphism, Standard_N2) {
     uint8_t seed[32]; fill_seed(seed);
 
     TestBB bb{};
@@ -79,32 +140,29 @@ TEST(SecurityProperties, BbMacRejectsInstructionTamper) {
         {VmOpcode::HALT, f_none(), 0, 0, 0},
     };
 
-    auto blob = build_test_blob(seed, {bb}, {42});
+    auto blob = build_test_blob(seed, {bb}, {7});
 
-    // Tamper: flip a bit in the ENCRYPTED instruction section (not the MAC)
-    BlobHeader hdr;
-    std::memcpy(&hdr, blob.data(), sizeof(hdr));
-    uint32_t insn_off = blob_section_insn(hdr);
-    // Flip bit in the second instruction's encrypted bytes
-    blob[insn_off + 8] ^= 0x01;
-
-    auto engine = VmEngine<DebugPolicy, DirectOram>::create(
+    auto parent = VmEngine<StandardPolicy, DirectOram>::create(
         blob.data(), blob.size(), seed);
-    ASSERT_TRUE(engine.has_value())
-        << "create() succeeds (MAC is checked at BB boundary, not load)";
+    ASSERT_TRUE(parent.has_value());
+    auto imm = parent->shared_immutable();
 
-    auto result = engine->execute();
-    ASSERT_FALSE(result.has_value())
-        << "Tampered instruction must cause execution failure";
-    // May be BBMacVerificationFailed or InstructionDecryptFailed (cascade)
+    auto ea = VmEngine<StandardPolicy, DirectOram>::create_reentrant(imm);
+    auto eb = VmEngine<StandardPolicy, DirectOram>::create_reentrant(imm);
+    ASSERT_TRUE(ea.has_value());
+    ASSERT_TRUE(eb.has_value());
+
+    auto ra = ea->step();
+    ASSERT_TRUE(ra.has_value());
+    auto rb = eb->dispatch_unit();
+    ASSERT_TRUE(rb.has_value());
+
+    assert_state_identical(ea->execution(), eb->execution(),
+                           "Standard N=2 isomorphism");
 }
 
-TEST(SecurityProperties, BbMacRejectsMacTamper) {
-    // Doc 15 §2.3: BB MAC covers all instructions as a unit.
-    // Flipping any bit in the stored MAC must cause verification failure.
-    // (Instruction reordering also changes plaintext → MAC mismatch,
-    //  but we can't test that via execution because garbage decode may
-    //  crash before the MAC check runs at BB boundary.)
+/// B3. Degeneracy: DebugPolicy (N=1).  dispatch_unit == step().
+TEST(Doc19Isomorphism, Debug_N1_Degeneracy) {
     uint8_t seed[32]; fill_seed(seed);
 
     TestBB bb{};
@@ -114,107 +172,131 @@ TEST(SecurityProperties, BbMacRejectsMacTamper) {
 
     bb.instructions = {
         {VmOpcode::LOAD_CONST, f_pool_none(), 0, 0, 0},
-        {VmOpcode::LOAD_CONST, f_pool_none(), 1, 0, 1},
         {VmOpcode::HALT, f_none(), 0, 0, 0},
     };
 
-    auto blob = build_test_blob(seed, {bb}, {10, 20});
+    auto blob = build_test_blob(seed, {bb}, {99});
 
-    // Flip a bit in the stored BB MAC
-    BlobHeader hdr;
-    std::memcpy(&hdr, blob.data(), sizeof(hdr));
-    uint32_t mac_off = blob_section_mac(hdr);
-    blob[mac_off] ^= 0x01;
-
-    auto engine = VmEngine<DebugPolicy, DirectOram>::create(
+    auto parent = VmEngine<DebugPolicy, DirectOram>::create(
         blob.data(), blob.size(), seed);
-    ASSERT_TRUE(engine.has_value())
-        << "create() succeeds (MAC is checked at BB exit)";
+    ASSERT_TRUE(parent.has_value());
+    auto imm = parent->shared_immutable();
 
-    auto result = engine->execute();
-    ASSERT_FALSE(result.has_value())
-        << "Flipped MAC bit must cause BBMacVerificationFailed";
-    EXPECT_EQ(result.error(), DiagnosticCode::BBMacVerificationFailed);
+    auto ea = VmEngine<DebugPolicy, DirectOram>::create_reentrant(imm);
+    auto eb = VmEngine<DebugPolicy, DirectOram>::create_reentrant(imm);
+    ASSERT_TRUE(ea.has_value());
+    ASSERT_TRUE(eb.has_value());
+
+    auto ra = ea->step();
+    ASSERT_TRUE(ra.has_value());
+    auto rb = eb->dispatch_unit();
+    ASSERT_TRUE(rb.has_value());
+
+    assert_state_identical(ea->execution(), eb->execution(),
+                           "Debug N=1 degeneracy");
 }
 
-// ============================================================================
-// #2: CFG hijack rejection (Doc 17 §3.2)
-//
-// An attacker who forces the program counter to jump to a BB without
-// traversing the legitimate path cannot execute that BB's instructions
-// correctly — the enc_state will be wrong, causing cascade decryption
-// failure.
-// ============================================================================
-
-TEST(SecurityProperties, CfgHijackRejection) {
-    // Doc 17 §3.2: An attacker who corrupts enc_state without traversing the
-    // legitimate decryption chain cannot decrypt instructions correctly.
-    //
-    // WHY pipeline-level test (not full execution):
-    //   Corrupted enc_state → wrong SipHash keystream → garbage plaintext.
-    //   Garbage plaintext may contain MEM operand types pointing to invalid
-    //   addresses, causing segfaults BEFORE the MAC check runs.  Doc 17 §3.1
-    //   explicitly lists segfault as a valid denial outcome.  But we can't
-    //   test crashes in unit tests, so we verify the cryptographic property
-    //   at the pipeline level: corrupted enc_state produces different
-    //   decrypted instructions than the legitimate enc_state.
+/// B4. Multi-DU cumulative determinism.
+///
+/// 2 x step()  ==  2 x dispatch_unit()  (HighSecPolicy, N=4).
+/// step() delegates to dispatch_unit(), so this verifies deterministic
+/// state evolution over multiple dispatch units.
+TEST(Doc19Isomorphism, MultiDU_HighSec) {
     uint8_t seed[32]; fill_seed(seed);
 
     TestBB bb{};
     bb.bb_id = 1; bb.epoch = 0;
     bb.live_regs_bitmap = 0xFFFF; bb.flags = 0;
-    fill_epoch(bb.epoch_seed, 0x50);
+    fill_epoch(bb.epoch_seed);
 
+    // 9 insns: 8 for two DUs + HALT
     bb.instructions = {
-        {VmOpcode::LOAD_CONST, f_pool_none(), 0, 0, 0},
+        {VmOpcode::LOAD_CONST, f_pool_none(), 0, 0, 0},  // DU 1
         {VmOpcode::ADD, f_rr(), 0, 1, 0},
+        {VmOpcode::SUB, f_rr(), 0, 1, 0},
+        {VmOpcode::NOP, f_rr(), 2, 3, 0xAAAAAAAA},
+        {VmOpcode::LOAD_CONST, f_pool_none(), 1, 0, 1},  // DU 2
+        {VmOpcode::MUL, f_rr(), 0, 1, 0},
+        {VmOpcode::AND, f_rr(), 0, 1, 0},
+        {VmOpcode::NOP, f_rr(), 3, 2, 0xBBBBBBBB},
         {VmOpcode::HALT, f_none(), 0, 0, 0},
     };
 
-    auto blob = build_test_blob(seed, {bb}, {42});
+    auto blob = build_test_blob(seed, {bb}, {100, 3});
 
-    // Create two engines with identical state
-    auto e_good = VmEngine<DebugPolicy, DirectOram>::create(
+    auto parent = VmEngine<HighSecPolicy, DirectOram>::create(
         blob.data(), blob.size(), seed);
-    auto e_bad = VmEngine<DebugPolicy, DirectOram>::create(
-        blob.data(), blob.size(), seed);
-    ASSERT_TRUE(e_good.has_value());
-    ASSERT_TRUE(e_bad.has_value());
+    ASSERT_TRUE(parent.has_value());
+    auto imm = parent->shared_immutable();
 
-    // Corrupt enc_state in the "hijacked" engine
-    e_bad->execution().enc_state ^= 0xDEADBEEFCAFEBABEull;
+    auto ea = VmEngine<HighSecPolicy, DirectOram>::create_reentrant(imm);
+    auto eb = VmEngine<HighSecPolicy, DirectOram>::create_reentrant(imm);
+    ASSERT_TRUE(ea.has_value());
+    ASSERT_TRUE(eb.has_value());
 
-    // fetch_decrypt_decode with correct enc_state → valid instruction
-    auto good_insn = pipeline::fetch_decrypt_decode(
-        *e_good->shared_immutable(), e_good->execution(), e_good->epoch());
-    ASSERT_TRUE(good_insn.has_value())
-        << "Legitimate decrypt must succeed";
-    EXPECT_EQ(good_insn->opcode, VmOpcode::LOAD_CONST)
-        << "Legitimate decrypt must produce LOAD_CONST";
-
-    // fetch_decrypt_decode with corrupted enc_state → garbage
-    auto bad_insn = pipeline::fetch_decrypt_decode(
-        *e_bad->shared_immutable(), e_bad->execution(), e_bad->epoch());
-
-    if (bad_insn.has_value()) {
-        // Decryption produced a "valid" alias, but the plaintext is wrong.
-        // The full 8-byte plaintext must differ (SipHash keystream changed).
-        EXPECT_NE(good_insn->full_plaintext_insn, bad_insn->full_plaintext_insn)
-            << "Corrupted enc_state MUST produce different plaintext instruction "
-               "(Doc 17 §3.2: SipHash keystream depends on enc_state)";
-    } else {
-        // InvalidOpcodeAlias — also a valid cascade failure outcome
-        SUCCEED() << "Corrupted enc_state produced invalid opcode alias (cascade failure)";
+    // Engine A: 2 x step() (each = 1 dispatch_unit of N=4 instructions)
+    for (int i = 0; i < 2; ++i) {
+        auto r = ea->step();
+        ASSERT_TRUE(r.has_value()) << "step() #" << i << " failed";
+    }
+    for (int du = 0; du < 2; ++du) {
+        auto r = eb->dispatch_unit();
+        ASSERT_TRUE(r.has_value()) << "dispatch_unit() #" << du << " failed";
     }
 
-    // Verify that the legitimate path succeeds end-to-end
-    auto result = e_good->execute();
-    ASSERT_TRUE(result.has_value()) << "Legitimate execution must succeed";
-    EXPECT_EQ(result->return_value, 42u);
+    assert_state_identical(ea->execution(), eb->execution(),
+                           "Multi-DU cumulative isomorphism");
 }
 
 // ============================================================================
-// #3: Per-instruction ORAM scan invariant (Doc 19 Appendix C, Def C.1)
+// Group D: Enhanced NOP Ghost Dataflow
+// ============================================================================
+
+/// D3. Enhanced NOP ghost dataflow under constant_time policy.
+///
+/// Under HighSecPolicy (constant_time=true), the NOP handler must execute
+/// ghost ALU (plain_a + plain_b) and write to trash_regs.  This verifies
+/// that the NOP handler's ghost computation actually runs.
+TEST(Doc19EdgeCases, EnhancedNopGhostDataflow) {
+    uint8_t seed[32]; fill_seed(seed);
+
+    TestBB bb{};
+    bb.bb_id = 1; bb.epoch = 0;
+    bb.live_regs_bitmap = 0xFFFF; bb.flags = 0;
+    fill_epoch(bb.epoch_seed);
+
+    // NOP with REG,REG operands (r0, r1) so plain_a and plain_b are
+    // FPE-decoded register values (non-zero after LOAD_CONST).
+    bb.instructions = {
+        {VmOpcode::LOAD_CONST, f_pool_none(), 0, 0, 0},  // r0 = 0xAA
+        {VmOpcode::LOAD_CONST, f_pool_none(), 1, 0, 1},  // r1 = 0xBB
+        {VmOpcode::NOP, f_rr(), 0, 1, 0x99999999},
+        {VmOpcode::HALT, f_none(), 0, 0, 0},
+    };
+
+    auto blob = build_test_blob(seed, {bb}, {0xAA, 0xBB});
+
+    // HighSecPolicy has constant_time = true -> enhanced NOP path.
+    auto engine = VmEngine<HighSecPolicy, DirectOram>::create(
+        blob.data(), blob.size(), seed);
+    ASSERT_TRUE(engine.has_value());
+
+    // Zero trash_regs before execution to detect writes.
+    std::memset(engine->execution().trash_regs, 0,
+                sizeof(engine->execution().trash_regs));
+
+    auto result = engine->execute();
+    ASSERT_TRUE(result.has_value());
+
+    // After NOP with reg_a=0: trash_regs[0] should be non-zero
+    // (ghost ALU wrote plain_a + plain_b there).
+    EXPECT_NE(engine->execution().trash_regs[0], 0u)
+        << "Enhanced NOP (constant_time=true) must write ghost ALU result "
+           "to trash_regs[reg_a]";
+}
+
+// ============================================================================
+// ORAM Scan Invariant (Doc 19 Appendix C, Def C.1)
 //
 // Every dispatch unit executes exactly 1 ORAM scan per sub-instruction,
 // unconditionally.  The nonce must increment once per sub-instruction
@@ -287,7 +369,7 @@ TEST(SecurityProperties, OramScanPerInstruction_MixedOpcodes) {
 }
 
 // ============================================================================
-// #4: Fixed-iteration verify_bb_mac (Doc 19 §4.2 Fix #2)
+// Fixed-iteration verify_bb_mac (Doc 19 §4.2 Fix #2)
 //
 // verify_bb_mac must iterate max_bb_insn_count times, not the actual BB
 // length.  With two BBs of different sizes, verify that max_bb_insn_count
@@ -337,7 +419,7 @@ TEST(SecurityProperties, FixedIterationMac_MaxBbInsnCount) {
 }
 
 // ============================================================================
-// #5: Branchless Phase L — all three cases (Doc 19 §4.2 Fix #1)
+// Branchless Phase L — all three cases (Doc 19 §4.2 Fix #1)
 //
 // Phase L always executes verify_bb_mac + enter_basic_block + MUX.
 // Three cases:
@@ -449,79 +531,7 @@ TEST(SecurityProperties, PhaseLBranchless_MidBbNoTransition) {
 }
 
 // ============================================================================
-// #6: ExecSnapshot branchless_restore correctness
-//
-// Verify that capture() + branchless_restore(keep_new=false) is a
-// perfect identity: exec state returns to the captured values.
-// ============================================================================
-
-TEST(SecurityProperties, ExecSnapshotRoundtrip) {
-    VmExecution exec{};
-    exec.enc_state = 0xDEADBEEFCAFEBABEull;
-    exec.insn_index_in_bb = 7;
-    exec.vm_ip = 42;
-    for (int r = 0; r < 16; ++r)
-        exec.regs[r] = RegVal(static_cast<uint64_t>(r * 1111));
-    exec.current_bb_id = 5;
-    exec.current_bb_index = 3;
-    exec.current_epoch = 2;
-    std::memset(exec.bb_chain_state, 0xAA, 32);
-    std::memset(exec.insn_fpe_key, 0xBB, 16);
-
-    // Capture
-    auto snap = ExecSnapshot::capture(exec);
-
-    // Modify exec
-    exec.enc_state = 0x1111111111111111ull;
-    exec.insn_index_in_bb = 99;
-    exec.vm_ip = 999;
-    for (int r = 0; r < 16; ++r)
-        exec.regs[r] = RegVal(0xFFFFFFFFFFFFFFFFull);
-    exec.current_bb_id = 100;
-    exec.current_bb_index = 200;
-    exec.current_epoch = 300;
-    std::memset(exec.bb_chain_state, 0xCC, 32);
-    std::memset(exec.insn_fpe_key, 0xDD, 16);
-
-    // Restore with keep_new=false → must restore snapshot
-    snap.branchless_restore(exec, false);
-
-    EXPECT_EQ(exec.enc_state, 0xDEADBEEFCAFEBABEull);
-    EXPECT_EQ(exec.insn_index_in_bb, 7u);
-    EXPECT_EQ(exec.vm_ip, 42u);
-    for (int r = 0; r < 16; ++r)
-        EXPECT_EQ(exec.regs[r].bits, static_cast<uint64_t>(r * 1111))
-            << "reg[" << r << "] not restored";
-    EXPECT_EQ(exec.current_bb_id, 5u);
-    EXPECT_EQ(exec.current_bb_index, 3u);
-    EXPECT_EQ(exec.current_epoch, 2u);
-
-    uint8_t expected_chain[32], expected_key[16];
-    std::memset(expected_chain, 0xAA, 32);
-    std::memset(expected_key, 0xBB, 16);
-    EXPECT_EQ(std::memcmp(exec.bb_chain_state, expected_chain, 32), 0);
-    EXPECT_EQ(std::memcmp(exec.insn_fpe_key, expected_key, 16), 0);
-}
-
-TEST(SecurityProperties, ExecSnapshotKeepNew) {
-    VmExecution exec{};
-    exec.enc_state = 0x1111111111111111ull;
-    exec.vm_ip = 100;
-
-    auto snap = ExecSnapshot::capture(exec);
-
-    exec.enc_state = 0x2222222222222222ull;
-    exec.vm_ip = 200;
-
-    // Restore with keep_new=true → must keep current (modified) values
-    snap.branchless_restore(exec, true);
-
-    EXPECT_EQ(exec.enc_state, 0x2222222222222222ull);
-    EXPECT_EQ(exec.vm_ip, 200u);
-}
-
-// ============================================================================
-// #7: Branchless Phase E — non-writing opcodes (Doc 19 §4.2 Fix #3)
+// Branchless Phase E — non-writing opcodes (Doc 19 §4.2 Fix #3)
 //
 // For non-writing opcodes (NOP, CMP, JMP), FPE_Encode is always computed
 // but the result is discarded via bitmask MUX.  The register value must
@@ -556,15 +566,12 @@ TEST(SecurityProperties, BranchlessPhaseE_NonWritingOpcodePreservesReg) {
            "MUX must preserve the register value (Doc 19 §4.2 Fix #3)";
 }
 
-// ============================================================================
-// #8: Per-execution independence via RDRAND nonce (Doc 16 §12 S4)
-//
-// Two VmEngine::create() calls with identical blob+seed must produce
-// different bb_chain_state (seeded by RDRAND).  This ensures each
-// execution derives independent FPE keys.
-// ============================================================================
+// ############################################################################
+// Doc19EdgeCases: HALT mid-DU and branch at last slot
+// (from test_doc17_doc19_crypto.cpp)
+// ############################################################################
 
-TEST(SecurityProperties, PerExecutionIndependence) {
+TEST(Doc19EdgeCases, HaltMidDispatchUnit) {
     uint8_t seed[32]; fill_seed(seed);
 
     TestBB bb{};
@@ -572,92 +579,57 @@ TEST(SecurityProperties, PerExecutionIndependence) {
     bb.live_regs_bitmap = 0xFFFF; bb.flags = 0;
     fill_epoch(bb.epoch_seed);
 
+    // HALT at slot 1 of a 4-wide DU (2 real insns, 2 padding)
     bb.instructions = {
+        {VmOpcode::LOAD_CONST, f_pool_none(), 0, 0, 0},  // r0 = 42
+        {VmOpcode::HALT, f_none(), 0, 0, 0},
+        {VmOpcode::NOP, f_none(), 0, 0, 0},  // should not execute
+        {VmOpcode::NOP, f_none(), 0, 0, 0},  // should not execute
+    };
+
+    auto blob = build_test_blob(seed, {bb}, {42});
+    auto engine = VmEngine<HighSecPolicy, DirectOram>::create(
+        blob.data(), blob.size(), seed);
+    ASSERT_TRUE(engine.has_value());
+    auto result = engine->execute();
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->status, VmResult::Halted);
+    EXPECT_EQ(result->return_value, 42u)
+        << "HALT mid-DU must correctly return r0 value";
+}
+
+TEST(Doc19EdgeCases, BranchAtLastSlot) {
+    uint8_t seed[32]; fill_seed(seed);
+
+    TestBB bb0{};
+    bb0.bb_id = 1; bb0.epoch = 0;
+    bb0.live_regs_bitmap = 0xFFFF; bb0.flags = 0;
+    fill_epoch(bb0.epoch_seed, 0x50);
+
+    // N=4 DU: [LOAD_CONST, NOP, NOP, JMP bb1]
+    bb0.instructions = {
+        {VmOpcode::LOAD_CONST, f_pool_none(), 0, 0, 0},
+        {VmOpcode::NOP, f_rr(), 2, 3, 0x11111111},
+        {VmOpcode::NOP, f_rr(), 4, 5, 0x22222222},
+        {VmOpcode::JMP, f_none(), 0, 0, 2},  // aux = bb_id of BB1
+    };
+
+    TestBB bb1{};
+    bb1.bb_id = 2; bb1.epoch = 0;
+    bb1.live_regs_bitmap = 0xFFFF; bb1.flags = 0;
+    fill_epoch(bb1.epoch_seed, 0x70);
+
+    bb1.instructions = {
         {VmOpcode::HALT, f_none(), 0, 0, 0},
     };
 
-    auto blob = build_test_blob(seed, {bb}, {});
-
-    auto e1 = VmEngine<DebugPolicy, DirectOram>::create(
+    auto blob = build_test_blob(seed, {bb0, bb1}, {7});
+    auto engine = VmEngine<HighSecPolicy, DirectOram>::create(
         blob.data(), blob.size(), seed);
-    auto e2 = VmEngine<DebugPolicy, DirectOram>::create(
-        blob.data(), blob.size(), seed);
-    ASSERT_TRUE(e1.has_value());
-    ASSERT_TRUE(e2.has_value());
-
-    // bb_chain_state is seeded by RDRAND nonce — must differ between runs
-    // (probability of collision: 2^-64)
-    EXPECT_NE(
-        std::memcmp(e1->execution().bb_chain_state,
-                    e2->execution().bb_chain_state, 32), 0)
-        << "Two create() calls must produce different bb_chain_state "
-           "(RDRAND nonce diversification, Doc 16 §12 S4). "
-           "Collision probability 2^-64.";
-
-    // Consequently, insn_fpe_key must also differ (derived from chain_state)
-    EXPECT_NE(
-        std::memcmp(e1->execution().insn_fpe_key,
-                    e2->execution().insn_fpe_key, 16), 0)
-        << "Different bb_chain_state must produce different insn_fpe_key "
-           "(path-dependent key derivation)";
-}
-
-// ============================================================================
-// VmEpoch::branchless_select correctness
-// ============================================================================
-
-TEST(SecurityProperties, VmEpochBranchlessSelect_Restore) {
-    VmEpoch a{};
-    for (int i = 0; i < 256; ++i) {
-        a.opcode_perm[i] = static_cast<uint8_t>(i);
-        a.opcode_perm_inv[i] = static_cast<uint8_t>(255 - i);
-    }
-    a.bb_id = 10;
-    a.epoch = 20;
-    a.live_regs_bitmap = 0x1234;
-
-    VmEpoch snapshot = a;
-
-    // Modify a
-    for (int i = 0; i < 256; ++i) {
-        a.opcode_perm[i] = static_cast<uint8_t>((i + 77) & 0xFF);
-        a.opcode_perm_inv[i] = static_cast<uint8_t>((i + 33) & 0xFF);
-    }
-    a.bb_id = 99;
-    a.epoch = 88;
-    a.live_regs_bitmap = 0xFFFF;
-
-    // branchless_select(snapshot, keep_new=false) → restore snapshot
-    a.branchless_select(snapshot, false);
-
-    for (int i = 0; i < 256; ++i) {
-        EXPECT_EQ(a.opcode_perm[i], static_cast<uint8_t>(i))
-            << "opcode_perm[" << i << "] not restored";
-        EXPECT_EQ(a.opcode_perm_inv[i], static_cast<uint8_t>(255 - i))
-            << "opcode_perm_inv[" << i << "] not restored";
-    }
-    EXPECT_EQ(a.bb_id, 10u);
-    EXPECT_EQ(a.epoch, 20u);
-    EXPECT_EQ(a.live_regs_bitmap, 0x1234);
-}
-
-TEST(SecurityProperties, VmEpochBranchlessSelect_KeepNew) {
-    VmEpoch a{};
-    for (int i = 0; i < 256; ++i) {
-        a.opcode_perm[i] = static_cast<uint8_t>((i + 77) & 0xFF);
-        a.opcode_perm_inv[i] = static_cast<uint8_t>((i + 33) & 0xFF);
-    }
-    a.bb_id = 99;
-    a.epoch = 88;
-    a.live_regs_bitmap = 0xFFFF;
-
-    VmEpoch snapshot{};
-    std::memset(&snapshot, 0, sizeof(snapshot));
-
-    // branchless_select(snapshot, keep_new=true) → keep a's values
-    a.branchless_select(snapshot, true);
-
-    EXPECT_EQ(a.opcode_perm[0], static_cast<uint8_t>(77));
-    EXPECT_EQ(a.bb_id, 99u);
-    EXPECT_EQ(a.live_regs_bitmap, 0xFFFF);
+    ASSERT_TRUE(engine.has_value());
+    auto result = engine->execute();
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->status, VmResult::Halted);
+    EXPECT_EQ(result->return_value, 7u)
+        << "JMP at last DU slot must transition to BB1 and return r0=7";
 }
