@@ -46,8 +46,8 @@ def render_markdown(current: dict, baseline: dict | None, platform: str) -> str:
 
     lines.append(f"### {platform}")
     lines.append(f"")
-    lines.append(f"| Opcode | Cat | ns/insn | handler ns | delta |")
-    lines.append(f"|--------|-----|--------:|-----------:|------:|")
+    lines.append(f"| Opcode | Cat | ns/DU | delta ns | vs base |")
+    lines.append(f"|--------|-----|------:|--------:|--------:|")
 
     # Group by category
     from collections import defaultdict
@@ -57,17 +57,18 @@ def render_markdown(current: dict, baseline: dict | None, platform: str) -> str:
 
     for cat_id in sorted(cats.keys()):
         for name, r in cats[cat_id]:
-            ns = r["ns_per_insn"]
-            hns = r["handler_ns"]
+            ns = r.get("ns_per_du", r.get("ns_per_insn", 0))
+            hns = r.get("delta_ns", r.get("handler_ns", 0))
             d = ""
             if name in base:
-                d = delta_str(ns, base[name]["ns_per_insn"])
+                base_ns = base[name].get("ns_per_du", base[name].get("ns_per_insn", 0))
+                d = delta_str(ns, base_ns)
             cat = CAT_NAMES.get(cat_id, "?")
             lines.append(f"| `{name}` | {cat} | {ns:.1f} | {hns:+.1f} | {d} |")
 
-    bl = current.get("baseline_ns_per_insn", 0)
+    bl = current.get("baseline_ns_per_du", current.get("baseline_ns_per_insn", 0))
     lines.append(f"")
-    lines.append(f"_Pipeline baseline (NOP): {bl:.1f} ns/insn "
+    lines.append(f"_Pipeline baseline (NOP): {bl:.1f} ns/DU "
                  f"| Policy: {meta.get('policy','?')} "
                  f"| Build: {meta.get('build_type','?')}_")
     return "\n".join(lines)

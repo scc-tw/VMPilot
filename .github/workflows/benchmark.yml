@@ -102,7 +102,7 @@ jobs:
       # ── Run benchmark ──
       - name: Run benchmark
         shell: bash
-        run: ${{ matrix.bin }} --iterations=11 --insns=500 --policy=debug > bench_raw.json
+        run: ${{ matrix.bin }} --iterations=11 --dus=125 --policy=debug > bench_raw.json
 
       # ── Upload raw result ──
       - name: Upload raw JSON
