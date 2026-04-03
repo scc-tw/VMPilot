@@ -125,6 +125,10 @@ if(ENABLE_TESTS)
 
     vmpilot_add_runtime_test(test_doc16_crypto SOURCES test/test_doc16_crypto.cpp)
 
+    # ── Doc 17/19 ratchet + dispatch unit crypto property tests ──
+
+    vmpilot_add_runtime_test(test_doc17_doc19_crypto SOURCES test/test_doc17_doc19_crypto.cpp)
+
     # ── Opcode coverage tests (doc 16 compliance) ──
 
     foreach(_t IN ITEMS
