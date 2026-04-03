@@ -125,6 +125,10 @@ if(ENABLE_TESTS)
 
     vmpilot_add_runtime_test(test_doc16_crypto SOURCES test/test_doc16_crypto.cpp)
 
+    # ── Security property coverage tests (Doc 15/16/17/19 audit gaps) ──
+
+    vmpilot_add_runtime_test(test_security_properties SOURCES test/test_security_properties.cpp)
+
     # ── Doc 17/19 ratchet + dispatch unit crypto property tests ──
 
     vmpilot_add_runtime_test(test_doc17_doc19_crypto SOURCES test/test_doc17_doc19_crypto.cpp)
