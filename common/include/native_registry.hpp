@@ -1,6 +1,6 @@
 #pragma once
-#ifndef __RUNTIME_NATIVE_REGISTRY_HPP__
-#define __RUNTIME_NATIVE_REGISTRY_HPP__
+#ifndef __COMMON_NATIVE_REGISTRY_HPP__
+#define __COMMON_NATIVE_REGISTRY_HPP__
 
 /// @file native_registry.hpp
 /// @brief NativeRegistry — name-to-index mapping for native function calls.
@@ -86,4 +86,4 @@ private:
 
 }  // namespace VMPilot::Runtime
 
-#endif  // __RUNTIME_NATIVE_REGISTRY_HPP__
+#endif  // __COMMON_NATIVE_REGISTRY_HPP__

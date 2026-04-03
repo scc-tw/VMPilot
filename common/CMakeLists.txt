@@ -22,8 +22,10 @@ add_library(${LIB_NAME} STATIC
     src/macho_parser.cpp
     src/thread_pool.cpp
     src/diagnostic_collector.cpp
+    src/native_registry.cpp
     src/vm/vm_crypto.cpp
     src/vm/vm_encoding.cpp
+    src/vm/chaff_expansion.cpp
     ${HARDWARE_RNG_SRC}
 )
 

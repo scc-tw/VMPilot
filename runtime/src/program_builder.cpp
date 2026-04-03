@@ -7,7 +7,7 @@
 /// inline in the header.
 
 #include "program_builder.hpp"
-#include "native_registry.hpp"
+#include <native_registry.hpp>
 
 #include <stdexcept>
 

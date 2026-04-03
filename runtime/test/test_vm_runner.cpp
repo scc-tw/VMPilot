@@ -11,7 +11,7 @@
 ///   7. Multi-BB program with branching
 
 #include "vm_runner.hpp"
-#include "native_registry.hpp"
+#include <native_registry.hpp>
 #include "program_builder.hpp"
 
 #include <vm/vm_opcode.hpp>

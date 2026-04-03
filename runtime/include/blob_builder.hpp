@@ -15,7 +15,7 @@
 /// Implementation lives in blob_builder.cpp — none of these functions are
 /// templates, so there is no reason to keep them inline in the header.
 
-#include "native_registry.hpp"
+#include <native_registry.hpp>
 #include "program_builder.hpp"
 
 #include <vm/vm_blob.hpp>

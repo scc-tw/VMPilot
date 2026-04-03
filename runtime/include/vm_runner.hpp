@@ -35,7 +35,7 @@
 #include "vm_engine.hpp"
 #include "vm_policy.hpp"
 #include "oram_strategy.hpp"
-#include "native_registry.hpp"
+#include <native_registry.hpp>
 #include "program_builder.hpp"
 #include "blob_builder.hpp"
 

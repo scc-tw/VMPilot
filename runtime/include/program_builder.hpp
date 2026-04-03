@@ -20,6 +20,7 @@
 
 #include <vm/vm_opcode.hpp>
 #include <vm/vm_insn.hpp>
+#include <vm/builder_types.hpp>
 
 #include <cstdint>
 #include <cstring>
@@ -29,27 +30,13 @@
 
 namespace VMPilot::Runtime {
 
+// Import shared builder types from common (used by both compiler and runtime)
+using Common::VM::BuilderInstruction;
+using Common::VM::BuilderBB;
+using Common::VM::BuilderPoolEntry;
+
 // Forward declaration
 class NativeRegistry;
-
-/// Instruction descriptor (mirrors TestInstruction from test_blob_builder.hpp).
-struct BuilderInstruction {
-    Common::VM::VmOpcode opcode;
-    uint8_t  flags;
-    uint8_t  reg_a;
-    uint8_t  reg_b;
-    uint32_t aux;
-};
-
-/// Basic block descriptor (mirrors TestBB from test_blob_builder.hpp).
-struct BuilderBB {
-    uint32_t bb_id;
-    uint32_t epoch;
-    uint16_t live_regs_bitmap;
-    uint16_t flags;
-    uint8_t  epoch_seed[32];
-    std::vector<BuilderInstruction> instructions;
-};
 
 /// Fluent builder for a single basic block.
 ///
@@ -195,13 +182,6 @@ private:
             (Common::VM::VM_OPERAND_REG << 6) |
             (Common::VM::VM_OPERAND_REG << 4));
     }
-};
-
-/// Pool entry descriptor for per-register encoding.
-struct BuilderPoolEntry {
-    uint64_t plaintext;
-    uint32_t target_bb_index;  ///< which BB's encoding tables to use
-    uint8_t  target_reg;       ///< which register's encoding to use
 };
 
 /// Fluent program builder — assembles basic blocks and pool entries.

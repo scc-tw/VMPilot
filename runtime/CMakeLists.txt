@@ -56,7 +56,6 @@ add_library(VMPilot_Runtime STATIC
     src/classify_args.cpp
     src/tls_helpers.cpp
     src/blob_builder.cpp
-    src/native_registry.cpp
     src/program_builder.cpp
     src/handler_detail.cpp
     ${PLATFORM_ASM_SOURCES}
