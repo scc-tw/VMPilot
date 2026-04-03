@@ -28,14 +28,12 @@ using namespace Common::VM::Encoding;
 // ─────────────────────────────────────────────────────────────────────────────
 
 uint64_t blob_detail::update_enc_state(uint64_t enc_state,
-                                       uint16_t opcode_val,
-                                       uint32_t aux) noexcept {
+                                       uint64_t full_plaintext_insn) noexcept {
     uint8_t key[16] = {};
     std::memcpy(key, &enc_state, 8);
-    uint8_t msg[6];
-    std::memcpy(msg, &opcode_val, 2);
-    std::memcpy(msg + 2, &aux, 4);
-    return siphash_2_4(key, msg, 6);
+    uint8_t msg[8];
+    std::memcpy(msg, &full_plaintext_insn, 8);
+    return siphash_2_4(key, msg, 8);
 }
 
 void blob_detail::derive_bb_enc_seed(const uint8_t stored_seed[32],
@@ -165,8 +163,7 @@ std::vector<uint8_t> build_blob(
                 }
             }
 
-            enc_state = blob_detail::update_enc_state(
-                enc_state, plain.opcode, plain.aux);
+            enc_state = blob_detail::update_enc_state(enc_state, plain_u64);
 
             ++global_ip;
         }

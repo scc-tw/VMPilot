@@ -46,7 +46,7 @@ namespace VMPilot::Common::VM {
 constexpr uint32_t VM_BLOB_MAGIC   = 0x31504D56;
 
 /// Blob format version.  Breaking changes increment this.
-constexpr uint16_t VM_BLOB_VERSION = 1;  // TransitionEntry uses v2 bit layout but no release yet
+constexpr uint16_t VM_BLOB_VERSION = 2;  // v2: Doc 17 full-instruction ratchet (8-byte enc_state input)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Header (32 bytes)

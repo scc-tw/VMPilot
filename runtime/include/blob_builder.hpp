@@ -48,8 +48,7 @@ struct BlobNativeCall {
 namespace blob_detail {
 
 uint64_t update_enc_state(uint64_t enc_state,
-                          uint16_t opcode_val,
-                          uint32_t aux) noexcept;
+                          uint64_t full_plaintext_insn) noexcept;
 
 void derive_bb_enc_seed(const uint8_t stored_seed[32],
                         uint32_t bb_id,

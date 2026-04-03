@@ -426,7 +426,7 @@ VmEngine<Policy, Oram>::step() noexcept
     // are zeroed.  No FPE temporaries survive past this scope.
 
     // ── Phase K: advance enc_state (SipHash chain for instruction decryption) ─
-    pipeline::advance_enc_state(exec_, insn.plaintext_opcode, insn.aux);
+    pipeline::advance_enc_state(exec_, insn.full_plaintext_insn);
 
     // ── Phase L: Advance IP / BB transition ─────────────────────────────
     if (exec_.branch_taken) {

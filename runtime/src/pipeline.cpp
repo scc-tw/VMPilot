@@ -44,16 +44,23 @@ using namespace Common::VM::Crypto;
 // derive_bb_enc_seed removed: bb_enc_seeds are now pre-derived in VmImmutable
 // during VmEngine::create() and stored in BBMetadata.  No stored_seed at runtime.
 
-/// Update enc_state: SipHash(enc_state_as_key_zeropadded_16, opcode(2)||aux(4))
+/// Update enc_state: SipHash(enc_state_as_key_zeropadded_16, full_plaintext_insn(8))
+///
+/// WHY 8 bytes (Doc 17):
+///   The previous 6-byte input (opcode + aux) excluded the flags and reg_pack
+///   fields from the ratchet.  An attacker who modified those 2 bytes in a
+///   decrypted instruction would NOT corrupt the enc_state chain — the ratchet
+///   would produce the same next state regardless.  This violated the
+///   entanglement property: every bit of the plaintext instruction must drive
+///   the state forward so that any decryption error cascades into all subsequent
+///   instructions (Doc 17 §3.1, Avalanche-Driven Implicit Denial).
 static uint64_t update_enc_state_impl(uint64_t enc_state,
-                                      uint16_t opcode_val,
-                                      uint32_t aux) noexcept {
+                                      uint64_t full_plaintext_insn) noexcept {
     uint8_t key[16] = {};
     std::memcpy(key, &enc_state, 8);
-    uint8_t msg[6];
-    std::memcpy(msg, &opcode_val, 2);
-    std::memcpy(msg + 2, &aux, 4);
-    return siphash_2_4(key, msg, 6);
+    uint8_t msg[8];
+    std::memcpy(msg, &full_plaintext_insn, 8);
+    return siphash_2_4(key, msg, 8);
 }
 
 /// Find BB index by bb_id (linear search -- v1 simplicity).
@@ -237,10 +244,8 @@ void resolve_operands(const VmImmutable& imm,
 // ---------------------------------------------------------------------------
 
 void advance_enc_state(VmExecution& exec,
-                       uint16_t plaintext_opcode,
-                       uint32_t plaintext_aux) noexcept {
-    exec.enc_state = update_enc_state_impl(
-        exec.enc_state, plaintext_opcode, plaintext_aux);
+                       uint64_t full_plaintext_insn) noexcept {
+    exec.enc_state = update_enc_state_impl(exec.enc_state, full_plaintext_insn);
     ++exec.insn_index_in_bb;
 }
 
@@ -468,7 +473,7 @@ verify_bb_mac(const VmImmutable& imm,
                 enc_state = siphash_2_4(rk_mat, es, 8);
             }
         }
-        enc_state = update_enc_state_impl(enc_state, vinst.opcode, vinst.aux);
+        enc_state = update_enc_state_impl(enc_state, plain);
     }
 
     // Compute expected MAC
@@ -543,7 +548,7 @@ void replay_enc_state(VmExecution& exec, const VmEpoch& epoch,
             es = siphash_2_4(rk_mat, esb, 8);
         }
 
-        es = update_enc_state_impl(es, vi.opcode, vi.aux);
+        es = update_enc_state_impl(es, plain_u64);
     }
 
     exec.enc_state = es;

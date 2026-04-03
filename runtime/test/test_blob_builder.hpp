@@ -73,16 +73,15 @@ struct TestPoolEntry {
 
 namespace detail {
 
-/// Update enc_state: SipHash(enc_state_as_key_zeropadded_16, opcode(2)||aux(4))
+/// Update enc_state: SipHash(enc_state_as_key_zeropadded_16, full_plaintext_insn(8))
+/// Doc 17: all 8 bytes of the plaintext instruction drive the ratchet.
 inline uint64_t update_enc_state(uint64_t enc_state,
-                                 uint16_t opcode_val,
-                                 uint32_t aux) noexcept {
+                                 uint64_t full_plaintext_insn) noexcept {
     uint8_t key[16] = {};
     std::memcpy(key, &enc_state, 8);
-    uint8_t msg[6];
-    std::memcpy(msg, &opcode_val, 2);
-    std::memcpy(msg + 2, &aux, 4);
-    return siphash_2_4(key, msg, 6);
+    uint8_t msg[8];
+    std::memcpy(msg, &full_plaintext_insn, 8);
+    return siphash_2_4(key, msg, 8);
 }
 
 /// Derive bb_enc_seed = BLAKE3_keyed(stored_seed, "enc"||bb_id_le32)[0:8]
@@ -260,12 +259,9 @@ inline std::vector<uint8_t> build_test_blob(
                 }
             }
 
-            // Advance enc_state with the plaintext opcode (as stored in VmInsn)
-            // and aux. Note: enc_state chain uses the PRP-encoded opcode value,
-            // NOT the semantic opcode — this matches what the decoder sees after
-            // decryption but before PRP inversion.
-            enc_state = detail::update_enc_state(
-                enc_state, plain.opcode, plain.aux);
+            // Doc 17: advance enc_state with the full 8-byte plaintext instruction.
+            // All bits participate in the ratchet for entanglement.
+            enc_state = detail::update_enc_state(enc_state, plain_u64);
 
             ++global_ip;
         }
@@ -507,8 +503,7 @@ inline std::vector<uint8_t> build_test_blob_ex(
             std::memcpy(blob.data() + insn_offset + global_ip * 8,
                         &encrypted, 8);
 
-            enc_state = detail::update_enc_state(
-                enc_state, plain.opcode, plain.aux);
+            enc_state = detail::update_enc_state(enc_state, plain_u64);
 
             ++global_ip;
         }

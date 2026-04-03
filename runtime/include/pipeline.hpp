@@ -71,13 +71,18 @@ void resolve_operands(const VmImmutable& imm,
                       const VmEpoch& epoch,
                       DecodedInsn& insn) noexcept;
 
-/// Step 9: Advance enc_state chain.
+/// Step 9: Advance enc_state chain (Doc 17 full-instruction ratchet).
 ///
-/// enc_state = SipHash(enc_state_as_16byte_key, opcode(2) || aux(4))
+/// enc_state = SipHash(enc_state_as_16byte_key, full_plaintext_insn(8))
+///
+/// WHY 8 bytes: all 8 bytes of the decrypted instruction (opcode, flags,
+/// reg_pack, aux) feed into the ratchet.  This creates entanglement —
+/// any decryption error in any field cascades into all subsequent
+/// instruction decryptions (Doc 17 §3.1).
+///
 /// Also increments insn_index_in_bb.
 void advance_enc_state(VmExecution& exec,
-                       uint16_t plaintext_opcode,
-                       uint32_t plaintext_aux) noexcept;
+                       uint64_t full_plaintext_insn) noexcept;
 
 /// BB transition: enter a new basic block.
 ///
