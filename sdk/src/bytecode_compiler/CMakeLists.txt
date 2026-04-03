@@ -29,7 +29,6 @@ include_directories(${INCLUDE_DIRS})
 
 add_library(${TARGET_NAME} STATIC ${SRC_FILES})
 
-# Generated protobuf code included via Serializer headers emits warnings under /W4.
 if (MSVC)
     target_compile_options(${TARGET_NAME} PRIVATE /WX-)
 endif()

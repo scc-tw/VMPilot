@@ -79,7 +79,7 @@ RegionRefiner::refine/group()   -- deduplicate, handle inlining, detect canonica
   v
 Serializer::build_units()       -- convert to CompilationUnits (single conversion point)
   |
-  +-> Serializer::dump/load()   -- round-trip to protobuf + TOML manifest
+  +-> Serializer::dump/load()   -- round-trip to TOML manifest
   |
   v
 CompilationOrchestrator         -- parallel compilation via work-stealing thread pool
@@ -160,12 +160,10 @@ The runtime VM implements the **doc 16 forward-secrecy extension**:
 |---------|------|---------|
 | [Botan](https://github.com/randombit/botan) | submodule | Crypto backend (AES, SHA-256) |
 | [BLAKE3](https://github.com/BLAKE3-team/BLAKE3) | submodule | Keyed hashing, key derivation |
-| [abseil-cpp](https://github.com/abseil/abseil-cpp) | submodule | Core utilities (used by protobuf) |
-| [protobuf](https://github.com/protocolbuffers/protobuf) | submodule | Serialization wire format |
 | [capstone](https://github.com/capstone-engine/capstone) | submodule | Multi-arch disassembly |
 | [tl::expected](https://github.com/TartanLlama/expected) | submodule | Error handling (C++17 backport) |
-| [ELFIO](https://github.com/serge1/ELFIO) | CPM | ELF binary parsing |
-| [COFFI](https://github.com/scc-tw/COFFI) | CPM | PE/COFF binary parsing |
+| [elfio-modern](https://github.com/scc-tw/elfio-modern) | submodule | ELF binary parsing |
+| [coffi-modern](https://github.com/scc-tw/coffi-modern) | submodule | PE/COFF binary parsing |
 | [spdlog](https://github.com/gabime/spdlog) | CPM | Logging |
 | [toml++](https://github.com/marzer/tomlplusplus) | CPM | Manifest format |
 | [GoogleTest](https://github.com/google/googletest) | FetchContent | Testing (dev only) |
@@ -330,7 +328,7 @@ sdk/
     include/
         segmentator/                 Binary parsing, region extraction
         region_refiner/              Dedup, inline grouping, canonical detection
-        serializer/                  Protobuf + TOML manifest
+        serializer/                  TOML manifest
         bytecode_compiler/           CompilationOrchestrator, pluggable backends
         reference_analyzer/          Data/TLS/GOT/atomic reference detection
         arch_handler/                X86 + ARM64 disassembly traits
@@ -341,17 +339,18 @@ sdk/
         segmentator/                 HandlerRegistry, segmentator
         bytecode_compiler/           CompilationOrchestrator, compile pipeline
         reference_analyzer/          SymExpr, MemoryModel, layers, traits
-        serializer/                  SerializationTraits, protobuf codegen
+        serializer/                  SerializationTraits, codegen
         capstone_wrapper/            capstone C++ bindings
         region_refiner/              RegionRefiner
         arch_handler/                X86Handler, ARM64Handler
         file_handler/                ELFHandler, PEHandler, MachOHandler
 
 third_party/                         Git submodules
-    abseil-cpp/                      LTS 2026-01-07
-    protobuf/                        v5.34.0
     capstone/                        Disassembly engine
     expected/                        tl::expected (C++17 backport)
+    BLAKE3/                          Keyed hashing, key derivation
+    coffi-modern/                    PE/COFF parsing
+    elfio-modern/                    ELF parsing
 ```
 
 ## Tools
@@ -377,7 +376,7 @@ third_party/                         Git submodules
 
 - [x] **SDK Segmentator** -- ELF, PE, Mach-O parsing; x86, x86-64, ARM64 disassembly; VMPilot_Begin/End marker detection
 - [x] **Region Refiner** -- overlap/containment removal, inline grouping, canonical copy detection
-- [x] **Serializer** -- protobuf + TOML manifest, `SerializationTraits<T>`, round-trip dump/load
+- [x] **Serializer** -- TOML manifest, `SerializationTraits<T>`, round-trip dump/load
 - [x] **Compilation Backend** -- work-stealing thread pool, pluggable `CompilerBackend` interface, SimpleBackend stub
 - [x] **Reference Analyzer** -- globals, rodata, TLS, GOT/IAT, atomics, jump tables, scaled-index addressing
 - [x] **Unified Diagnostics** -- `DiagnosticCollector` with thread-safe collection, `DiagnosticCode` enum, summary report
@@ -412,7 +411,7 @@ flowchart TB
         direction TB
         SEG["Segmentator<br/><i>parse binary, find markers,<br/>extract protected regions</i>"]
         REF["RegionRefiner<br/><i>deduplicate, handle inlining,<br/>detect canonical copies</i>"]
-        SER["Serializer<br/><i>build_units(), dump/load,<br/>protobuf + TOML manifest</i>"]
+        SER["Serializer<br/><i>build_units(), dump/load,<br/>TOML manifest</i>"]
         REFA["ReferenceAnalyzer<br/><i>globals, rodata, TLS, GOT/IAT,<br/>atomics, jump tables</i>"]
 
         subgraph Compiler["Compilation Backend"]

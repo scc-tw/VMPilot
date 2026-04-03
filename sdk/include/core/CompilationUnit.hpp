@@ -13,7 +13,6 @@
 namespace VMPilot::SDK::Core {
 
 /// In-memory compilation unit built from segmentation results.
-/// NOT a protobuf type — this is the C++ struct used by the compiler backend.
 struct CompilationUnit {
     std::string name;                // __FUNCTION__ name
     uint64_t addr = 0;              // original VA

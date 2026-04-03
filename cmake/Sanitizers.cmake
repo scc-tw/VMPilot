@@ -1,9 +1,4 @@
 # cmake/Sanitizers.cmake — vmpilot_sanitizer INTERFACE target
-#
-# ASan + UBsan, applied only to first-party targets.
-# Third-party code (abseil, protobuf) must NOT be sanitised:
-# GCC 15 + UBsan rejects constexpr fn-ptr null comparisons in
-# abseil's hash_policy_traits.h.
 
 add_library(vmpilot_sanitizer INTERFACE)
 

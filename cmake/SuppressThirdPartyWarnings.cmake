@@ -1,7 +1,7 @@
 # cmake/SuppressThirdPartyWarnings.cmake
 #
 # Provides suppress_thirdparty_warnings(target) — adds per-compiler flags
-# to suppress warnings from transitively-included abseil/protobuf headers.
+# to suppress warnings from transitively-included third-party headers.
 
 function(suppress_thirdparty_warnings target)
     if (MSVC)

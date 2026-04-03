@@ -3,7 +3,6 @@
 #include <segmentator.hpp>
 
 #include <VMPilot_crypto.hpp>
-#include <vmpilot.pb.h>
 
 #include <toml++/toml.hpp>
 
@@ -297,19 +296,16 @@ TEST_F(SerializerTest, RoundTrip) {
     auto ret = dumpFromResult(result, test_dir.string());
     ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
-    auto ctx_bytes = readFileBytes(test_dir / "context.pb");
-    ASSERT_FALSE(ctx_bytes.empty());
+    auto ctx_raw = readFileString(test_dir / "context.pb");
+    ASSERT_FALSE(ctx_raw.empty());
 
-    vmpilot::CompilationContext ctx_pb;
-    ASSERT_TRUE(ctx_pb.ParseFromArray(ctx_bytes.data(),
-                                      static_cast<int>(ctx_bytes.size())));
-    EXPECT_EQ(ctx_pb.arch(),
-              static_cast<uint32_t>(Segmentator::Arch::X86));
-    EXPECT_EQ(ctx_pb.mode(),
-              static_cast<uint32_t>(Segmentator::Mode::MODE_64));
-    EXPECT_EQ(ctx_pb.symbols_size(), 1);
-    EXPECT_EQ(ctx_pb.symbols(0).name(), "main");
-    EXPECT_EQ(ctx_pb.all_sections_size(), 1);
+    auto ctx = Serializer::deserialize<Segmentator::CompilationContext>(ctx_raw);
+    ASSERT_TRUE(ctx.has_value()) << ctx.error();
+    EXPECT_EQ(ctx->arch, Segmentator::Arch::X86);
+    EXPECT_EQ(ctx->mode, Segmentator::Mode::MODE_64);
+    EXPECT_EQ(ctx->symbols.size(), 1u);
+    EXPECT_EQ(ctx->symbols[0].name, "main");
+    EXPECT_EQ(ctx->sections.size(), 1u);
 }
 
 TEST_F(SerializerTest, DirectoryStructure) {
@@ -348,46 +344,41 @@ TEST_F(SerializerTest, ContextHashConsistency) {
     auto expected_hash =
         VMPilot::Crypto::SHA256(ctx_bytes, /*salt=*/{});
 
-    for (const auto& entry : fs::directory_iterator(test_dir / "foo.group")) {
-        if (entry.path().extension() != ".pb") continue;
+    // Load units via the public API and verify context hashes match
+    auto loaded = Serializer::load(test_dir.string());
+    ASSERT_TRUE(loaded.has_value()) << static_cast<int>(loaded.error());
 
-        auto unit_bytes = readFileBytes(entry.path());
-        vmpilot::CompilationUnit unit_pb;
-        ASSERT_TRUE(unit_pb.ParseFromArray(
-            unit_bytes.data(), static_cast<int>(unit_bytes.size())));
-
-        auto hash_str = unit_pb.context_hash();
-        std::vector<uint8_t> actual_hash(hash_str.begin(), hash_str.end());
+    for (const auto& unit : *loaded) {
+        // Re-serialize the context and hash it
+        ASSERT_NE(unit.context, nullptr);
+        auto ctx_ser = Serializer::serialize(*unit.context);
+        ASSERT_TRUE(ctx_ser.has_value()) << ctx_ser.error();
+        auto actual_hash = VMPilot::Crypto::SHA256(
+            std::vector<uint8_t>(ctx_ser->begin(), ctx_ser->end()),
+            /*salt=*/{});
         EXPECT_EQ(actual_hash, expected_hash);
     }
 }
 
-TEST_F(SerializerTest, UnitProtobufRoundTrip) {
+TEST_F(SerializerTest, UnitBinaryRoundTrip) {
     auto result = makeSyntheticResult();
     auto ret = dumpFromResult(result, test_dir.string());
     ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
+    auto loaded = Serializer::load(test_dir.string());
+    ASSERT_TRUE(loaded.has_value()) << static_cast<int>(loaded.error());
+
     bool found_canonical = false;
-    for (const auto& entry : fs::directory_iterator(test_dir / "foo.group")) {
-        if (entry.path().extension() != ".pb") continue;
-
-        auto unit_bytes = readFileBytes(entry.path());
-        vmpilot::CompilationUnit unit_pb;
-        ASSERT_TRUE(unit_pb.ParseFromArray(
-            unit_bytes.data(), static_cast<int>(unit_bytes.size())));
-
-        if (unit_pb.is_canonical()) {
+    for (const auto& unit : *loaded) {
+        if (unit.is_canonical) {
             found_canonical = true;
-            EXPECT_EQ(unit_pb.addr(), 0x1000u);
-            EXPECT_EQ(unit_pb.size(), 6u);
-            EXPECT_EQ(unit_pb.enclosing_symbol(), "main");
-            EXPECT_EQ(unit_pb.context_file(), "context.pb");
+            EXPECT_EQ(unit.addr, 0x1000u);
+            EXPECT_EQ(unit.size, 6u);
+            EXPECT_EQ(unit.enclosing_symbol, "main");
 
-            auto code = unit_pb.code();
-            std::vector<uint8_t> code_vec(code.begin(), code.end());
             std::vector<uint8_t> expected = {0x55, 0x48, 0x89, 0xe5,
                                              0x5d, 0xc3};
-            EXPECT_EQ(code_vec, expected);
+            EXPECT_EQ(unit.code, expected);
         }
     }
     EXPECT_TRUE(found_canonical);
@@ -477,24 +468,17 @@ TEST_F(SerializerTest, InlineUnitFields) {
     auto ret = dumpFromResult(result, test_dir.string());
     ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
+    auto loaded = Serializer::load(test_dir.string());
+    ASSERT_TRUE(loaded.has_value()) << static_cast<int>(loaded.error());
+
     bool found_inline = false;
-    for (const auto& entry : fs::directory_iterator(test_dir / "foo.group")) {
-        if (entry.path().extension() != ".pb") continue;
-
-        auto bytes = readFileBytes(entry.path());
-        vmpilot::CompilationUnit unit;
-        ASSERT_TRUE(unit.ParseFromArray(bytes.data(),
-                                        static_cast<int>(bytes.size())));
-
-        if (!unit.is_canonical()) {
+    for (const auto& unit : *loaded) {
+        if (!unit.is_canonical) {
             found_inline = true;
-            EXPECT_EQ(unit.addr(), 0x2000u);
-            EXPECT_EQ(unit.size(), 3u);
-            EXPECT_EQ(unit.enclosing_symbol(), "_Z3fooi");
-
-            auto code = unit.code();
-            std::vector<uint8_t> code_vec(code.begin(), code.end());
-            EXPECT_EQ(code_vec, (std::vector<uint8_t>{0x90, 0x90, 0xc3}));
+            EXPECT_EQ(unit.addr, 0x2000u);
+            EXPECT_EQ(unit.size, 3u);
+            EXPECT_EQ(unit.enclosing_symbol, "_Z3fooi");
+            EXPECT_EQ(unit.code, (std::vector<uint8_t>{0x90, 0x90, 0xc3}));
         }
     }
     EXPECT_TRUE(found_inline) << "Expected to find an inline unit";
@@ -638,16 +622,13 @@ TEST_F(SerializerTest, MissingEnclosingSymbol) {
     auto ret = dumpFromResult(result, test_dir.string());
     ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
-    for (const auto& e : fs::directory_iterator(test_dir / "func.group")) {
-        if (e.path().extension() != ".pb") continue;
-        auto bytes = readFileBytes(e.path());
-        vmpilot::CompilationUnit unit;
-        ASSERT_TRUE(unit.ParseFromArray(bytes.data(),
-                                        static_cast<int>(bytes.size())));
-        // Empty enclosing_symbol maps to "unknown" in dump
-        EXPECT_TRUE(unit.enclosing_symbol() == "unknown" ||
-                    unit.enclosing_symbol().empty());
-    }
+    auto loaded = Serializer::load(test_dir.string());
+    ASSERT_TRUE(loaded.has_value()) << static_cast<int>(loaded.error());
+    ASSERT_EQ(loaded->size(), 1u);
+
+    // Empty enclosing_symbol maps to "unknown" in dump
+    EXPECT_TRUE((*loaded)[0].enclosing_symbol == "unknown" ||
+                (*loaded)[0].enclosing_symbol.empty());
 }
 
 TEST_F(SerializerTest, SymbolEntryTypeRoundTrip) {
@@ -674,23 +655,21 @@ TEST_F(SerializerTest, SymbolEntryTypeRoundTrip) {
     auto ret = dumpFromResult(result, test_dir.string());
     ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
-    auto ctx_bytes = readFileBytes(test_dir / "context.pb");
-    vmpilot::CompilationContext ctx_pb;
-    ASSERT_TRUE(ctx_pb.ParseFromArray(ctx_bytes.data(),
-                                      static_cast<int>(ctx_bytes.size())));
+    auto ctx_raw = readFileString(test_dir / "context.pb");
+    auto ctx = Serializer::deserialize<Segmentator::CompilationContext>(ctx_raw);
+    ASSERT_TRUE(ctx.has_value()) << ctx.error();
 
-    ASSERT_EQ(ctx_pb.symbols_size(), 3);
+    ASSERT_EQ(ctx->symbols.size(), 3u);
 
     bool found_stub = false, found_pt = false;
-    for (int i = 0; i < ctx_pb.symbols_size(); ++i) {
-        const auto& s = ctx_pb.symbols(i);
-        if (s.name() == "printf") {
+    for (const auto& s : ctx->symbols) {
+        if (s.name == "printf") {
             found_stub = true;
-            EXPECT_EQ(s.entry_type(), "stub");
+            EXPECT_EQ(s.getAttribute<std::string>("entry_type", ""), "stub");
         }
-        if (s.name() == "puts") {
+        if (s.name == "puts") {
             found_pt = true;
-            EXPECT_EQ(s.entry_type(), "pointer_table");
+            EXPECT_EQ(s.getAttribute<std::string>("entry_type", ""), "pointer_table");
         }
     }
     EXPECT_TRUE(found_stub);
@@ -711,16 +690,13 @@ TEST_F(SerializerTest, RodataRoundTrip) {
     auto ret = dumpFromResult(result, test_dir.string());
     ASSERT_TRUE(ret.has_value()) << static_cast<int>(ret.error());
 
-    auto ctx_bytes = readFileBytes(test_dir / "context.pb");
-    vmpilot::CompilationContext ctx_pb;
-    ASSERT_TRUE(ctx_pb.ParseFromArray(ctx_bytes.data(),
-                                      static_cast<int>(ctx_bytes.size())));
+    auto ctx_raw = readFileString(test_dir / "context.pb");
+    auto ctx = Serializer::deserialize<Segmentator::CompilationContext>(ctx_raw);
+    ASSERT_TRUE(ctx.has_value()) << ctx.error();
 
-    ASSERT_EQ(ctx_pb.all_sections_size(), 1);
-    EXPECT_EQ(ctx_pb.all_sections(0).base_addr(), 0xDEADu);
-    auto data = ctx_pb.all_sections(0).data();
-    std::vector<uint8_t> actual(data.begin(), data.end());
-    EXPECT_EQ(actual,
+    ASSERT_EQ(ctx->sections.size(), 1u);
+    EXPECT_EQ(ctx->sections[0].base_addr, 0xDEADu);
+    EXPECT_EQ(ctx->sections[0].data,
               (std::vector<uint8_t>{0x00, 0xFF, 0x41, 0x42, 0x00, 0x43}));
 }
 
@@ -941,39 +917,24 @@ TEST_P(SerializerCrossPlatformTest, SegmentAndDump) {
     EXPECT_TRUE(fs::exists(test_dir / "context.pb"));
     EXPECT_TRUE(fs::exists(test_dir / "manifest.toml"));
 
-    auto ctx_bytes = readFileBytes(test_dir / "context.pb");
-    vmpilot::CompilationContext ctx_pb;
-    EXPECT_TRUE(ctx_pb.ParseFromArray(ctx_bytes.data(),
-                                      static_cast<int>(ctx_bytes.size())));
-    EXPECT_GT(ctx_pb.symbols_size(), 0);
+    auto ctx_raw = readFileString(test_dir / "context.pb");
+    auto ctx = Serializer::deserialize<Segmentator::CompilationContext>(ctx_raw);
+    EXPECT_TRUE(ctx.has_value()) << ctx.error();
+    EXPECT_GT(ctx->symbols.size(), 0u);
 
-    int total_units = 0;
-    for (const auto& dir_entry : fs::directory_iterator(test_dir)) {
-        if (!dir_entry.is_directory()) continue;
-        for (const auto& f : fs::directory_iterator(dir_entry.path())) {
-            if (f.path().string().find(".unit.pb") == std::string::npos)
-                continue;
-            ++total_units;
-            auto bytes = readFileBytes(f.path());
-            vmpilot::CompilationUnit unit;
-            EXPECT_TRUE(unit.ParseFromArray(
-                bytes.data(), static_cast<int>(bytes.size())))
-                << "Invalid protobuf: " << f.path();
-            EXPECT_GT(unit.size(), 0u);
-            EXPECT_FALSE(unit.code().empty());
-            EXPECT_EQ(unit.context_file(), "context.pb");
-            EXPECT_EQ(unit.context_hash().size(), 32u);
-        }
+    // Load all units via the public API and verify
+    auto loaded = Serializer::load(test_dir.string());
+    EXPECT_TRUE(loaded.has_value()) << static_cast<int>(loaded.error());
+    EXPECT_GT(loaded->size(), 0u) << "No units produced for " << GetParam();
+
+    for (const auto& unit : *loaded) {
+        EXPECT_GT(unit.size, 0u);
+        EXPECT_FALSE(unit.code.empty());
+        EXPECT_NE(unit.context, nullptr);
     }
-    EXPECT_GT(total_units, 0) << "No units produced for " << GetParam();
 
     auto manifest_str = readFileString(test_dir / "manifest.toml");
     EXPECT_NO_THROW(static_cast<void>(toml::parse(manifest_str)));
-
-    // Round-trip: load back and verify
-    auto loaded = Serializer::load(test_dir.string());
-    ASSERT_TRUE(loaded.has_value()) << static_cast<int>(loaded.error());
-    EXPECT_EQ(loaded->size(), static_cast<size_t>(total_units));
 }
 
 INSTANTIATE_TEST_SUITE_P(

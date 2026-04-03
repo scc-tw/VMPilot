@@ -1,7 +1,7 @@
 # cmake/Dependencies.cmake — ALL external dependencies in one place
 #
 # Git submodules (third_party/):
-#   abseil-cpp, protobuf, capstone, botan, blake3, expected,
+#   capstone, blake3, expected,
 #   coffi-modern, elfio-modern
 #
 # CPM (fetched at configure time):

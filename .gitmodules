@@ -10,12 +10,6 @@ url = ../VMPilot-crypto.git
 [submodule "third_party/expected"]
 	path = third_party/expected
 	url = https://github.com/TartanLlama/expected.git
-[submodule "third_party/protobuf"]
-	path = third_party/protobuf
-	url = https://github.com/protocolbuffers/protobuf.git
-[submodule "third_party/abseil-cpp"]
-	path = third_party/abseil-cpp
-	url = https://github.com/abseil/abseil-cpp.git
 [submodule "third_party/coffi-modern"]
 	path = third_party/coffi-modern
 	url = https://github.com/scc-tw/coffi-modern.git
