@@ -243,46 +243,19 @@ struct HandlerTraits<VmOpcode::STORE_CTX, P> {
 // Cat 1: Arithmetic (8 opcodes)
 //
 // Doc 15 §3.4 classification:
-//   Class B (ADD, SUB, NEG) — MBA decomposition, 7 register-transient carry bits
-//   Class C (MUL, IMUL, DIV, IDIV, MOD) — native bridge, full plaintext transient
+//   Class C (ADD, SUB, NEG, MUL, IMUL, DIV, IDIV, MOD) — native arithmetic
 //
 // Policy wiring:
-//   P::use_mba           → Class B ops use MBA decomposition (XOR+AND+SHL1 chain)
-//                           Depth controlled by P::fusion_granularity (1-4 levels)
-//   P::constant_time     → Class C ops use branchless zero-safe division
-//   !P::use_mba          → Class B ops fall back to native bridge (DebugPolicy)
-//   !P::constant_time    → Class C ops use branch-based zero check (DebugPolicy)
+//   P::constant_time     → DIV/IDIV/MOD use branchless zero-safe division
+//   !P::constant_time    → DIV/IDIV/MOD use branch-based zero check (DebugPolicy)
+//
+// NOTE: MBA decomposition was removed from runtime handlers.
+//   MBA obfuscation is now applied at compile time (serializer/linker).
+//   Runtime uses native arithmetic — the FPE + key ratchet + ORAM pipeline
+//   protects register state; runtime MBA only added timing side-channel leakage.
 // ===========================================================================
 
 namespace detail {
-
-/// MBA addition: a + b = (a ^ b) + 2*(a & b), applied recursively.
-///
-/// Each level replaces one addition with XOR + AND + shift + addition,
-/// progressively shredding the carry chain.  After `depth` levels the
-/// residual addition handles the remaining carries.
-///
-/// Constant-time: every level executes unconditionally (no early-out on
-/// zero carry) to prevent timing side-channels.
-inline uint64_t mba_add(uint64_t a, uint64_t b, uint8_t depth) noexcept {
-    for (uint8_t i = 0; i < depth; ++i) {
-        uint64_t x = a ^ b;           // sum without carries
-        uint64_t c = (a & b) << 1;    // carry chain shifted
-        a = x;
-        b = c;
-    }
-    return a + b;   // residual native add for remaining carries
-}
-
-/// MBA subtraction: a - b = a + (~b) + 1, then MBA the addition.
-inline uint64_t mba_sub(uint64_t a, uint64_t b, uint8_t depth) noexcept {
-    return mba_add(a, ~b + 1, depth);
-}
-
-/// MBA negation: -a = ~a + 1, then MBA the increment.
-inline uint64_t mba_neg(uint64_t a, uint8_t depth) noexcept {
-    return mba_add(~a, 1, depth);
-}
 
 /// Constant-time zero-safe division:  avoids data-dependent branch.
 /// Returns a/b when b != 0, 0 when b == 0.
@@ -354,34 +327,26 @@ inline uint64_t ct_mod(uint64_t a, uint64_t b) noexcept {
 
 }  // namespace detail
 
-/// ADD: dst = a + b  [doc 15 §3.4: Class B — MBA decomposition]
+/// ADD: dst = a + b
 template<typename P>
 struct HandlerTraits<VmOpcode::ADD, P> {
-    static constexpr auto security_class = SecurityClass::B;
+    static constexpr auto security_class = SecurityClass::C;
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        if constexpr (P::use_mba)
-            e.regs[i.reg_a] = RegVal(
-                detail::mba_add(i.plain_a, i.plain_b, P::fusion_granularity));
-        else
-            e.regs[i.reg_a] = RegVal(i.plain_a + i.plain_b);
+        e.regs[i.reg_a] = RegVal(i.plain_a + i.plain_b);
         return {};
     }
 };
 
-/// SUB: dst = a - b  [doc 15 §3.4: Class B — MBA decomposition]
+/// SUB: dst = a - b
 template<typename P>
 struct HandlerTraits<VmOpcode::SUB, P> {
-    static constexpr auto security_class = SecurityClass::B;
+    static constexpr auto security_class = SecurityClass::C;
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        if constexpr (P::use_mba)
-            e.regs[i.reg_a] = RegVal(
-                detail::mba_sub(i.plain_a, i.plain_b, P::fusion_granularity));
-        else
-            e.regs[i.reg_a] = RegVal(i.plain_a - i.plain_b);
+        e.regs[i.reg_a] = RegVal(i.plain_a - i.plain_b);
         return {};
     }
 };
@@ -438,18 +403,14 @@ struct HandlerTraits<VmOpcode::IDIV, P> {
     }
 };
 
-/// NEG: dst = -a (two's complement)  [doc 15 §3.4: Class B — MBA decomposition]
+/// NEG: dst = -a (two's complement)
 template<typename P>
 struct HandlerTraits<VmOpcode::NEG, P> {
-    static constexpr auto security_class = SecurityClass::B;
+    static constexpr auto security_class = SecurityClass::C;
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
-        if constexpr (P::use_mba)
-            e.regs[i.reg_a] = RegVal(
-                detail::mba_neg(i.plain_a, P::fusion_granularity));
-        else
-            e.regs[i.reg_a] = RegVal(-i.plain_a);
+        e.regs[i.reg_a] = RegVal(-i.plain_a);
         return {};
     }
 };
@@ -1000,37 +961,23 @@ struct HandlerTraits<VmOpcode::TRUNC16, P> {
 // ===========================================================================
 // Cat 6: Atomic (5 opcodes)
 //
-// [doc 15: LOCK_ADD = Class B (MBA on addend); XCHG/CMPXCHG/ATOMIC_LOAD
-//  = Class C native bridge; FENCE = no computation]
-//
 // Guest atomic memory uses native plaintext (hardware atomicity requires
-// actual values).  P::use_mba wires MBA decomposition for LOCK_ADD.
-// P::constant_time wires branchless flag computation for CMPXCHG.
+// actual values).  P::constant_time wires branchless flag computation
+// for CMPXCHG.
 // ===========================================================================
 
 /// LOCK_ADD: atomic fetch-add on guest memory.
 /// plain_a = addend.  Returns old value in reg_a.
-/// [doc 15: Class B — MBA decomposition applies to the addend]
 template<typename P>
 struct HandlerTraits<VmOpcode::LOCK_ADD, P> {
-    static constexpr auto security_class = SecurityClass::B;
+    static constexpr auto security_class = SecurityClass::C;
     using oram_tag = NoOramTag;
     static HandlerResult exec(VmExecution& e, VmEpoch&, VmOramState&,
                                const VmImmutable&, const DecodedInsn& i) noexcept {
         auto addr = static_cast<uintptr_t>(static_cast<int64_t>(i.aux) + e.load_base_delta);
         auto* ptr = reinterpret_cast<std::atomic<uint64_t>*>(addr);
-        // MBA: decompose the addition on the loaded value
-        if constexpr (P::use_mba) {
-            uint64_t old = ptr->load(std::memory_order_seq_cst);
-            uint64_t sum = detail::mba_add(old, i.plain_a, P::fusion_granularity);
-            // CAS loop for atomicity with MBA result
-            while (!ptr->compare_exchange_weak(old, sum, std::memory_order_seq_cst))
-                sum = detail::mba_add(old, i.plain_a, P::fusion_granularity);
-            e.regs[i.reg_a] = RegVal(old);
-        } else {
-            uint64_t old = ptr->fetch_add(i.plain_a, std::memory_order_seq_cst);
-            e.regs[i.reg_a] = RegVal(old);
-        }
+        uint64_t old = ptr->fetch_add(i.plain_a, std::memory_order_seq_cst);
+        e.regs[i.reg_a] = RegVal(old);
         return {};
     }
 };

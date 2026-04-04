@@ -107,9 +107,15 @@ def analyze(raw_data):
     for r in raw_data.get("results", []):
         if r["opcode"] == "NOP_BASELINE":
             continue
-        # Exclude category 7 (VM Internal) opcodes like CHECK_INTEGRITY, 
+        # Exclude category 7 (VM Internal) opcodes like CHECK_INTEGRITY,
         # as they do not follow standard DU padding and are inherently distinguishable.
         if r.get("category", 0) == 7:
+            continue
+        # Exclude NATIVE_CALL: it invokes arbitrary host functions whose
+        # timing is determined by the callee, not the VM pipeline.
+        # Including it would penalise the ANOVA for a leak that is
+        # architecturally impossible to eliminate.
+        if r["opcode"] == "NATIVE_CALL":
             continue
             
         # Use filtered samples for ANOVA
@@ -208,13 +214,15 @@ def main():
         # Policy check
         meta = clean_data.get("metadata", {})
         sec = clean_data.get("security_metrics", {})
+        leakage_threshold = 0.05 # TODO: narrow down the leakage threshold
+        p_value_threshold = 0.01
         
         if args.fail_on_leak and meta.get("policy") == "HighSecPolicy":
-            if sec.get("anova_p_value") is not None and sec["anova_p_value"] < 0.01:
-                print(f"\n[!] SECURITY FAILURE: HighSecPolicy ANOVA p-value {sec['anova_p_value']} < 0.01. Opcodes are distinguishable.", file=sys.stderr)
+            if sec.get("anova_p_value") is not None and sec["anova_p_value"] < p_value_threshold:
+                print(f"\n[!] SECURITY FAILURE: HighSecPolicy ANOVA p-value {sec['anova_p_value']} < {p_value_threshold}. Opcodes are distinguishable.", file=sys.stderr)
                 sys.exit(1)
-            if sec.get("leakage_bits") is not None and sec["leakage_bits"] > 0.5:
-                print(f"\n[!] SECURITY FAILURE: HighSecPolicy Leakage {sec['leakage_bits']} bits > 0.5 threshold.", file=sys.stderr)
+            if sec.get("leakage_bits") is not None and sec["leakage_bits"] > leakage_threshold:
+                print(f"\n[!] SECURITY FAILURE: HighSecPolicy Leakage {sec['leakage_bits']} bits > {leakage_threshold} threshold.", file=sys.stderr)
                 sys.exit(1)
 
 if __name__ == "__main__":

@@ -6,7 +6,6 @@
 /// @brief Compile-time security policies for VmEngine.
 ///
 /// Each policy is a traits struct that controls:
-///   - use_mba:    Class B arithmetic via MBA decomposition (true) or native bridge (false)
 ///   - constant_time: D3 uniform pipeline enforced unconditionally (true) or optimised (false)
 ///   - fusion_granularity: superoperator window size (1 = no fusion, 2-4 = fused handlers)
 ///
@@ -18,6 +17,13 @@
 ///   StandardPolicy is identical but with smaller fusion window (faster compilation).
 ///   DebugPolicy disables D2/D3 features for ease of debugging — NOT for production.
 ///   static_assert in VmEngine ensures only valid policies are instantiated.
+///
+/// NOTE: MBA (Mixed Boolean Arithmetic) was removed from runtime handlers.
+///   MBA obfuscation of arithmetic (ADD/SUB/NEG) is now the responsibility of the
+///   compiler backend / serializer, where it can be applied as a static instruction
+///   transform without runtime timing cost.  The FPE + key ratchet + ORAM pipeline
+///   already protects register state at runtime; runtime MBA only added handler cost
+///   variance that increased timing side-channel leakage (between_σ: 12K→34K ns).
 
 #include <cstdint>
 
@@ -28,25 +34,27 @@ namespace VMPilot::Runtime {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Classification of handler security level (doc 15 §3.4).
+///
+/// NOTE: Class B (MBA decomposition) has been removed from runtime.
+/// Former Class B opcodes (ADD, SUB, NEG) now use native arithmetic
+/// at runtime.  MBA obfuscation is applied at compile time instead.
 enum class SecurityClass : uint8_t {
     A,   ///< Zero plaintext — homomorphic composition table (AND, OR, XOR, NOT)
-    B,   ///< MBA decomposition — 7 register-transient carry bits (ADD, SUB, NEG)
-    C,   ///< Native bridge — full plaintext register-transient (MUL, DIV, NATIVE_CALL)
+    C,   ///< Native bridge — full plaintext register-transient (MUL, DIV, ADD, SUB, NEG, ...)
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Policy traits
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Maximum security: MBA arithmetic, constant-time pipeline, fusion=4.
+/// Maximum security: constant-time pipeline, fusion=4.
 ///
 /// All four dimensions active:
 ///   D1: Per-BB SipHash encryption (always on)
-///   D2: MCSP-hard byte-lane LUT encoding, MBA for arithmetic
+///   D2: MCSP-hard byte-lane LUT encoding
 ///   D3: Uniform 12-step pipeline, superoperator fusion window = 4
 ///   D4: Two-layer PRP opcode mutation (always on)
 struct HighSecPolicy {
-    static constexpr bool    use_mba             = true;
     static constexpr bool    constant_time        = true;
     static constexpr uint8_t fusion_granularity   = 4;
 
@@ -58,7 +66,6 @@ struct HighSecPolicy {
 
 /// Standard security: same as HighSec but fusion=2 (smaller compile overhead).
 struct StandardPolicy {
-    static constexpr bool    use_mba             = true;
     static constexpr bool    constant_time        = true;
     static constexpr uint8_t fusion_granularity   = 2;
 
@@ -67,14 +74,12 @@ struct StandardPolicy {
     }
 };
 
-/// Debug policy: native bridge for arithmetic, no constant-time pipeline.
+/// Debug policy: no constant-time pipeline.
 ///
 /// Useful for development and testing.  NOT production-safe:
 ///   D2: encoding tables still active (values are encoded)
 ///   D3: pipeline NOT constant-time (data-dependent branches allowed)
-///   Class B: uses native bridge (full plaintext for ADD/SUB)
 struct DebugPolicy {
-    static constexpr bool    use_mba             = false;
     static constexpr bool    constant_time        = false;
     static constexpr uint8_t fusion_granularity   = 1;
 

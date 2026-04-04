@@ -215,7 +215,6 @@ TEST(EngineTable, AllOpcodesCovered) {
 // ============================================================================
 
 TEST(Phase2Policy, HighSecTraits) {
-    static_assert(HighSecPolicy::use_mba == true);
     static_assert(HighSecPolicy::constant_time == true);
     static_assert(HighSecPolicy::fusion_granularity == 4);
     static_assert(HighSecPolicy::validate());
@@ -223,7 +222,6 @@ TEST(Phase2Policy, HighSecTraits) {
 }
 
 TEST(Phase2Policy, StandardTraits) {
-    static_assert(StandardPolicy::use_mba == true);
     static_assert(StandardPolicy::constant_time == true);
     static_assert(StandardPolicy::fusion_granularity == 2);
     static_assert(StandardPolicy::validate());
@@ -231,7 +229,6 @@ TEST(Phase2Policy, StandardTraits) {
 }
 
 TEST(Phase2Policy, DebugTraits) {
-    static_assert(DebugPolicy::use_mba == false);
     static_assert(DebugPolicy::constant_time == false);
     static_assert(DebugPolicy::fusion_granularity == 1);
     static_assert(DebugPolicy::validate());
