@@ -29,7 +29,7 @@ include_directories(${INCLUDE_DIRS})
 
 add_library(${TARGER_NAME} STATIC ${SRC_FILES})
 
-target_link_libraries(${TARGER_NAME} PUBLIC VMPilot_Common capstone_wrapper coffi-modern elfio-modern)
+target_link_libraries(${TARGER_NAME} PUBLIC VMPilot_Common VMPilot_SDK_RegionRefiner capstone_wrapper coffi-modern elfio-modern)
 
 # Suppress warnings-as-errors from third-party headers (coffi C4754 on MSVC)
 include(${CMAKE_SOURCE_DIR}/cmake/SuppressThirdPartyWarnings.cmake)
