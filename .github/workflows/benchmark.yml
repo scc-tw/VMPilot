@@ -117,23 +117,50 @@ jobs:
       - name: Build
         run: cmake --build build ${{ matrix.build_args }} --target vmpilot_bench -j
 
+      # ── Install Python Dependencies ──
+      - name: Install Python Dependencies
+        shell: bash
+        run: python3 -m pip install --upgrade pip numpy scipy
+
       # ── Run benchmark ──
       - name: Run benchmark
         shell: bash
-        run: ${{ matrix.bin }} --iterations=11 --dus=125 --policy=debug > bench_raw.json
+        run: ${{ matrix.bin }} --iterations=110 --dus=125 --policy=all > bench_raw.json
 
-      # ── Upload raw result ──
-      - name: Upload raw JSON
+      - name: Analyze and Filter
+        shell: bash
+        run: |
+          python3 scripts/bench_analyzer.py bench_raw.json --fail-on-leak > bench_clean.json
+          echo "=== Security Metrics Report ==="
+          python3 -c "
+          import json, sys
+          try:
+              data = json.load(open('bench_clean.json'))
+              results = data if isinstance(data, list) else [data]
+              for r in results:
+                  p = r.get('metadata', {}).get('policy', 'Unknown')
+                  sec = r.get('security_metrics', {})
+                  if not sec: continue
+                  print(f'Policy: {p}')
+                  print(f'  ANOVA p-value: {sec.get(\"anova_p_value\")}')
+                  print(f'  ANOVA F-stat:  {sec.get(\"anova_f_stat\")}')
+                  print(f'  Leakage bits:  {sec.get(\"leakage_bits\")}\n')
+          except Exception as e:
+              print(f'Error reading metrics: {e}')
+          "
+
+      # ── Upload clean result ──
+      - name: Upload clean JSON
         uses: actions/upload-artifact@v4
         with:
           name: bench-${{ matrix.platform }}
-          path: bench_raw.json
+          path: bench_clean.json
 
       # ── Store in gh-pages (push to main/dev only — becomes baseline) ──
       - name: Convert for chart
         if: github.event_name == 'push'
         shell: bash
-        run: python3 scripts/bench_to_chart.py bench_raw.json > bench_chart.json
+        run: python3 scripts/bench_to_chart.py bench_clean.json > bench_chart.json
 
       # Deinit submodules so github-action-benchmark can switch to gh-pages
       # without hitting "fatal: not a git repository: .git/modules/..."
@@ -187,7 +214,9 @@ jobs:
           if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
             for p in linux macos windows; do
               gh run download "$RUN_ID" --name "bench-${p}" --dir "baselines/${p}_dl" 2>/dev/null || true
-              if [ -f "baselines/${p}_dl/bench_raw.json" ]; then
+              if [ -f "baselines/${p}_dl/bench_clean.json" ]; then
+                cp "baselines/${p}_dl/bench_clean.json" "baselines/${p}.json"
+              elif [ -f "baselines/${p}_dl/bench_raw.json" ]; then
                 cp "baselines/${p}_dl/bench_raw.json" "baselines/${p}.json"
               fi
             done
@@ -202,20 +231,21 @@ jobs:
           echo "## Pipeline Benchmark" > comment.md
           echo "" >> comment.md
           for p in linux macos windows; do
-            if [ -f "bench-${p}/bench_raw.json" ]; then
+            # The current branch will output bench_clean.json
+            if [ -f "bench-${p}/bench_clean.json" ]; then
               BASE_ARG=""
               if [ -s "baselines/${p}.json" ] && [ "$(cat baselines/${p}.json)" != "{}" ]; then
                 BASE_ARG="--baseline baselines/${p}.json"
               fi
               python3 scripts/bench_compare.py \
-                --current "bench-${p}/bench_raw.json" \
+                --current "bench-${p}/bench_clean.json" \
                 $BASE_ARG \
                 --platform "${p}" >> comment.md
               echo "" >> comment.md
             fi
           done
           echo "" >> comment.md
-          echo "_Commit: \`$(echo ${{ github.event.pull_request.head.sha }} | cut -c1-8)\` | Iterations: 11 | Insns: 500_" >> comment.md
+          echo "_Commit: \`$(echo ${{ github.event.pull_request.head.sha }} | cut -c1-8)\` | Evaluated multiple policies_" >> comment.md
 
       # Post / update PR comment
       - name: Post PR comment

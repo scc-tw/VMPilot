@@ -26,7 +26,7 @@ using namespace VMPilot::Runtime;
 // ─── CLI parsing ────────────────────────────────────────────────────────
 
 struct Args {
-    uint32_t iterations = 11;
+    uint32_t iterations = 110;
     uint32_t dus        = 125;
     uint32_t warmup     = 2;
     std::string policy  = "debug";
@@ -50,7 +50,7 @@ static Args parse_args(int argc, char* argv[]) {
         else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
             std::printf(
                 "Usage: vmpilot_bench [options]\n"
-                "  --iterations=N   samples per benchmark (default 11)\n"
+                "  --iterations=N   samples per benchmark (default 110)\n"
                 "  --dus=K          dispatch units per benchmark (default 125)\n"
                 "  --warmup=N       discarded warm-up runs (default 2)\n"
                 "  --policy=P       debug|standard|highsec|all (default debug)\n"

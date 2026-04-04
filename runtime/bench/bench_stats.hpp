@@ -26,6 +26,7 @@ struct BenchResult {
     double      ns_per_insn = 0.0;   // median / insn_count
     double      handler_ns  = 0.0;   // ns_per_insn - baseline
     double      ips         = 0.0;   // insn_count * 1e9 / median_ns
+    std::vector<uint64_t> samples;   // raw sorted samples
 };
 
 inline BenchResult compute_stats(const char* name, VmOpcode opcode,
@@ -41,6 +42,7 @@ inline BenchResult compute_stats(const char* name, VmOpcode opcode,
     if (samples.empty()) return r;
 
     std::sort(samples.begin(), samples.end());
+    r.samples = samples;
 
     r.min_ns    = samples.front();
     r.median_ns = samples[samples.size() / 2];

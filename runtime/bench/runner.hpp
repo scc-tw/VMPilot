@@ -17,9 +17,11 @@
 
 #include "vm_engine.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <random>
 #include <vector>
 
 namespace VMPilot::Bench {
@@ -67,46 +69,68 @@ std::vector<BenchResult> run_all(const RunConfig& cfg) {
         return r ? Clock::elapsed_ns(t0, t1) : 0;
     };
 
-    // ── NOP baseline ────────────────────────────────────────────────
-    auto nop_prog = build_du_baseline(K, N);
-    std::vector<uint64_t> nop_samples;
-    nop_samples.reserve(cfg.iterations);
-    for (uint32_t s = 0; s < total_samples; ++s) {
-        uint64_t ns = time_program(nop_prog);
-        if (s >= cfg.warmup && ns > 0) nop_samples.push_back(ns);
-    }
-    auto nop_result = compute_stats("NOP_BASELINE", VmOpcode::NOP,
-                                     K, nop_samples);
-    double baseline = nop_result.ns_per_insn;  // ns_per_du
-
-    // ── Per-opcode benchmarks ───────────────────────────────────────
-    std::vector<BenchResult> results;
-    results.push_back(nop_result);
+    // Pre-build all programs
+    std::vector<DUBenchProgram> progs;
+    std::vector<const char*> names;
+    std::vector<VmOpcode> opcodes;
+    
+    // Add NOP baseline as the first entry
+    progs.push_back(build_du_baseline(K, N));
+    names.push_back("NOP_BASELINE");
+    opcodes.push_back(VmOpcode::NOP);
 
     for (size_t si = 0; si < SPEC_COUNT; ++si) {
         const auto& spec = SPECS[si];
-
         auto prog = build_du_program(spec, K, N);
         if (prog.blob.empty()) continue;
+        progs.push_back(std::move(prog));
+        names.push_back(spec.name ? spec.name : Common::VM::to_string(spec.opcode));
+        opcodes.push_back(spec.opcode);
+    }
 
-        const char* name = spec.name ? spec.name
-                                     : Common::VM::to_string(spec.opcode);
-        std::fprintf(stderr, "  bench %-20s  ", name);
+    const size_t num_progs = progs.size();
+    std::vector<std::vector<uint64_t>> all_samples(num_progs);
+    for (auto& s : all_samples) s.reserve(cfg.iterations);
 
-        std::vector<uint64_t> samples;
-        samples.reserve(cfg.iterations);
-        for (uint32_t s = 0; s < total_samples; ++s) {
+    std::mt19937 rng(1337); // Fixed seed for reproducibility across CI runs
+
+    for (uint32_t s = 0; s < total_samples; ++s) {
+        std::vector<size_t> indices(num_progs);
+        std::iota(indices.begin(), indices.end(), 0);
+        std::shuffle(indices.begin(), indices.end(), rng);
+
+        for (size_t idx : indices) {
             std::memset(g_guest_mem, 0, sizeof(g_guest_mem));
-            uint64_t ns = time_program(prog);
-            if (s >= cfg.warmup && ns > 0) samples.push_back(ns);
+            uint64_t ns = time_program(progs[idx]);
+            if (s >= cfg.warmup && ns > 0) {
+                all_samples[idx].push_back(ns);
+            }
         }
+        
+        // Print progress (every 10 iterations to reduce spam)
+        if ((s + 1) % 10 == 0 || s + 1 == total_samples) {
+            std::fprintf(stderr, "\r  Progress: %u / %u iterations ...", 
+                         s + 1, total_samples);
+        }
+    }
+    std::fprintf(stderr, "\n");
 
-        auto result = compute_stats(name, spec.opcode, K, samples);
+    // ── Compute stats ──
+    std::vector<BenchResult> results;
+    results.reserve(num_progs);
+    
+    // Compute NOP baseline first (it's at index 0)
+    auto nop_result = compute_stats(names[0], opcodes[0], K, all_samples[0]);
+    double baseline = nop_result.ns_per_insn;
+    results.push_back(nop_result);
+
+    for (size_t idx = 1; idx < num_progs; ++idx) {
+        auto result = compute_stats(names[idx], opcodes[idx], K, all_samples[idx]);
         result.handler_ns = result.ns_per_insn - baseline;
         results.push_back(result);
-
-        std::fprintf(stderr, "%8.1f ns/DU  (Δ: %+.1f ns)\n",
-                     result.ns_per_insn, result.handler_ns);
+        
+        std::fprintf(stderr, "  bench %-20s  %8.1f ns/DU  (Δ: %+.1f ns)\n",
+                     names[idx], result.ns_per_insn, result.handler_ns);
     }
 
     return results;

@@ -38,13 +38,14 @@ def delta_str(cur: float, base: float) -> str:
     return f"{arrow}{abs(pct):.1f}%"
 
 
-def render_markdown(current: dict, baseline: dict | None, platform: str) -> str:
+def render_markdown_for_policy(current: dict, baseline: dict | None, platform: str) -> str:
     lines = []
     cur = by_opcode(current)
     base = by_opcode(baseline) if baseline else {}
     meta = current.get("metadata", {})
+    policy = meta.get("policy", "Unknown")
 
-    lines.append(f"### {platform}")
+    lines.append(f"### {platform} - {policy}")
     lines.append(f"")
     lines.append(f"| Opcode | Cat | ns/DU | delta ns | vs base |")
     lines.append(f"|--------|-----|------:|--------:|--------:|")
@@ -68,10 +69,49 @@ def render_markdown(current: dict, baseline: dict | None, platform: str) -> str:
 
     bl = current.get("baseline_ns_per_du", current.get("baseline_ns_per_insn", 0))
     lines.append(f"")
+    
+    sec = current.get("security_metrics", {})
+    sec_str = ""
+    if sec:
+        p_val = sec.get("anova_p_value")
+        f_stat = sec.get("anova_f_stat")
+        bits = sec.get("leakage_bits")
+        if p_val is not None and bits is not None:
+            if p_val == 0.0 and f_stat is not None:
+                p_str = f"~0 (F={f_stat:.1f})"
+            elif p_val < 0.0001:
+                p_str = f"{p_val:.2e}"
+            else:
+                p_str = f"{p_val:.4f}"
+            sec_str = f" | ANOVA $p$: {p_str} | Leakage: {bits:.4f} bits"
+            
     lines.append(f"_Pipeline baseline (NOP): {bl:.1f} ns/DU "
                  f"| Policy: {meta.get('policy','?')} "
-                 f"| Build: {meta.get('build_type','?')}_")
+                 f"| Build: {meta.get('build_type','?')}{sec_str}_")
     return "\n".join(lines)
+
+
+def parse_multiple_jsons(text):
+    decoder = json.JSONDecoder()
+    pos = 0
+    results = []
+    text = text.lstrip()
+    while pos < len(text):
+        obj, pos = decoder.raw_decode(text, pos)
+        results.append(obj)
+        while pos < len(text) and text[pos].isspace():
+            pos += 1
+    return results
+
+
+def load_multiple(path: str) -> list:
+    with open(path, encoding="utf-8") as f:
+        content = f.read()
+    if not content.strip():
+        return []
+    if content.lstrip().startswith('['):
+        return json.loads(content)
+    return parse_multiple_jsons(content)
 
 
 def main():
@@ -81,9 +121,19 @@ def main():
     ap.add_argument("--platform", default="", help="Platform label")
     args = ap.parse_args()
 
-    current = load(args.current)
-    baseline = load(args.baseline) if args.baseline else None
-    print(render_markdown(current, baseline, args.platform))
+    current_list = load_multiple(args.current)
+    baseline_list = load_multiple(args.baseline) if args.baseline else []
+    
+    baseline_by_policy = {
+        b.get("metadata", {}).get("policy", "Unknown"): b 
+        for b in baseline_list
+    }
+
+    for current in current_list:
+        policy = current.get("metadata", {}).get("policy", "Unknown")
+        baseline = baseline_by_policy.get(policy)
+        print(render_markdown_for_policy(current, baseline, args.platform))
+        print("\n---\n")
 
 
 if __name__ == "__main__":

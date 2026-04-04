@@ -48,7 +48,13 @@ inline void emit_json(const char* commit,
         std::printf("      \"stddev_ns\": %.2f,\n", r.stddev_ns);
         std::printf("      \"ns_per_du\": %.2f,\n", r.ns_per_insn);
         std::printf("      \"delta_ns\": %.2f,\n", r.handler_ns);
-        std::printf("      \"du_per_sec\": %.0f\n", r.ips);
+        std::printf("      \"du_per_sec\": %.0f,\n", r.ips);
+        std::printf("      \"samples\": [");
+        for (size_t j = 0; j < r.samples.size(); ++j) {
+            std::printf("%llu%s", static_cast<unsigned long long>(r.samples[j]),
+                        (j + 1 < r.samples.size()) ? "," : "");
+        }
+        std::printf("]\n");
         std::printf("    }%s\n", (i + 1 < results.size()) ? "," : "");
     }
 

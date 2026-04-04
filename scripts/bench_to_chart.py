@@ -17,6 +17,7 @@ def convert(raw: dict) -> list:
     entries = []
     baseline = raw.get("baseline_ns_per_du",
                        raw.get("baseline_ns_per_insn", 0))
+    policy = raw.get("metadata", {}).get("policy", "Unknown")
 
     for r in raw.get("results", []):
         name = r["opcode"]
@@ -25,7 +26,7 @@ def convert(raw: dict) -> list:
         ns_per = r.get("ns_per_du", r.get("ns_per_insn", 0))
         du_count = r.get("du_count", r.get("insn_count", 0))
         entries.append({
-            "name": f"{name} (total)",
+            "name": f"[{policy}] {name} (total)",
             "unit": "ns/DU",
             "value": round(ns_per, 2),
             "extra": f"median={r['median_ns']}ns  p95={r['p95_ns']}ns  "
@@ -36,7 +37,7 @@ def convert(raw: dict) -> list:
         # delta_ns — handler overhead above baseline (smaller is better)
         delta = r.get("delta_ns", r.get("handler_ns", ns_per - baseline))
         entries.append({
-            "name": f"{name} (handler)",
+            "name": f"[{policy}] {name} (handler)",
             "unit": "ns",
             "value": round(delta, 2),
         })
@@ -45,12 +46,25 @@ def convert(raw: dict) -> list:
         throughput = r.get("du_per_sec", r.get("ips", 0))
         if throughput > 0:
             entries.append({
-                "name": f"{name} (DU/s)",
+                "name": f"[{policy}] {name} (DU/s)",
                 "unit": "DU/s",
                 "value": round(throughput),
             })
 
     return entries
+
+
+def parse_multiple_jsons(text):
+    decoder = json.JSONDecoder()
+    pos = 0
+    results = []
+    text = text.lstrip()
+    while pos < len(text):
+        obj, pos = decoder.raw_decode(text, pos)
+        results.append(obj)
+        while pos < len(text) and text[pos].isspace():
+            pos += 1
+    return results
 
 
 def main():
@@ -59,10 +73,15 @@ def main():
         sys.exit(1)
 
     with open(sys.argv[1], encoding="utf-8") as f:
-        raw = json.load(f)
+        content = f.read()
 
-    entries = convert(raw)
-    json.dump(entries, sys.stdout, indent=2)
+    raw_datas = parse_multiple_jsons(content)
+    
+    all_entries = []
+    for raw in raw_datas:
+        all_entries.extend(convert(raw))
+        
+    json.dump(all_entries, sys.stdout, indent=2)
     print()
 
 
