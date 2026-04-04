@@ -126,70 +126,84 @@ fetch_decrypt_decode(const VmImmutable& imm,
 // resolve_operands (Step 4) -- doc 16 version with FPE decode
 // ---------------------------------------------------------------------------
 
-/// Resolve a single operand to its raw value.
+/// Constant-time operand resolution — branchless 4-way MUX.
+///
+/// WHY constant-time (Shannon branch, timing side-channel fix):
+///   The original switch(type) had data-dependent branches: REG did a
+///   register read, POOL did a bounds-checked memcpy, MEM did a guest
+///   memory load + LUT decode, NONE returned 0.  These paths have
+///   measurably different timing (~50-100 cycle spread), leaking the
+///   operand type of each instruction via ANOVA.
+///
+///   The constant-time version always executes ALL four resolution paths
+///   (using a dummy buffer for safety when a path's address is invalid),
+///   then selects the correct result via branchless bitmask MUX.
+///   Total cost is higher (4 reads instead of 1), but CONSTANT across
+///   all operand types — the timing no longer leaks operand identity.
 ///
 /// Doc 16 encoding model:
 ///   REG  -> exec.regs[reg_x]  (FPE-encoded, caller will FPE_Decode)
 ///   POOL -> constant_pool[aux] (plaintext after blob decryption)
 ///   MEM  -> guest memory -> GlobalMemTables::decode -> plaintext
 ///   NONE -> 0
-///
-/// WHY MEM uses GlobalMemTables directly (not DomainTables):
-///   Doc 16 removes per-BB DomainTables (store/load).  Memory encoding is
-///   a FIXED global LUT (derived once from stored_seed at blob load time).
-///   This simplifies BB transitions: no store/load table derivation needed.
-///   The security cost is acceptable because memory is already protected by
-///   ORAM (oblivious access patterns) -- the LUT only provides value encoding.
-static RegVal resolve_one(const VmImmutable& imm,
-                          const VmExecution& exec,
-                          uint8_t type, uint8_t reg_idx,
-                          uint32_t aux) noexcept {
-    switch (type) {
-        case VM_OPERAND_REG:
-            // Return FPE-encoded value as-is.  The caller FPE_Decodes it.
-            return exec.regs[reg_idx & 0x0F];
 
-        case VM_OPERAND_POOL: {
-            // Constant pool: decrypted at blob load time, values are PLAINTEXT.
-            // Doc 16 change: pool is no longer "pre-encoded in target BB's domain"
-            // because there are no per-BB LUT domains.  Pool values are plain.
-            if (imm.decrypted_pool.empty() || aux * 8 >= imm.decrypted_pool.size())
-                return RegVal(0);
-            uint64_t val = 0;
-            std::memcpy(&val, imm.decrypted_pool.data() + aux * 8, 8);
-            return RegVal(val);
-        }
+/// Dummy buffer: always-valid 8-byte read target for branchless resolution
+/// when POOL/MEM paths are inactive.  Aligned to prevent split-line loads.
+alignas(8) static const uint8_t k_ct_dummy[8] = {};
 
-        case VM_OPERAND_MEM: {
-            // Guest external memory (Space 2, direct access).
-            // Read raw value -> decode through GlobalMemTables -> plaintext.
-            //
-            // SECURITY NOTE: There are intentionally no bounds checks here.
-            // VMPilot's threat model assumes it is obfuscating trusted C++ code
-            // (Man-At-The-End attack model), not sandboxing untrusted code.
-            // The protected code must legitimately access the host process's
-            // global data, stack, and heap. Restricting memory access would
-            // break standard C++ execution capabilities.
-            //
-            // WHY decode to plaintext here (not FPE-encode into register domain):
-            //   Doc 16 handlers expect plain_a/plain_b as plaintext.  For MEM
-            //   operands, the GlobalMemTables LUT decode IS the final decode step.
-            //   There's no FPE involvement for memory -- memory uses LUT encoding,
-            //   registers use FPE encoding.  These are separate domains.
-            uintptr_t guest_addr = static_cast<uintptr_t>(
-                static_cast<int64_t>(aux) + exec.load_base_delta);
-            uint64_t mem_val = 0;
-            std::memcpy(&mem_val, reinterpret_cast<const uint8_t*>(guest_addr), 8);
+static RegVal resolve_one_ct(const VmImmutable& imm,
+                              const VmExecution& exec,
+                              uint8_t type, uint8_t reg_idx,
+                              uint32_t aux) noexcept {
+    const uintptr_t dummy = reinterpret_cast<uintptr_t>(k_ct_dummy);
 
-            // Decode through GlobalMemTables: MemVal -> PlainVal -> store as RegVal bits
-            PlainVal plain = decode_memory(imm.mem.decode_lut(), MemVal(mem_val));
-            return RegVal(plain.bits);
-        }
+    // ── REG candidate: always read from register file ──
+    uint64_t val_reg = exec.regs[reg_idx & 0x0F].bits;
 
-        case VM_OPERAND_NONE:
-        default:
-            return RegVal(0);
+    // ── POOL candidate: branchless bounds-safe read ──
+    uint64_t val_pool = 0;
+    {
+        uintptr_t pool_base = reinterpret_cast<uintptr_t>(
+            imm.decrypted_pool.data());
+        size_t offset = static_cast<size_t>(aux) * 8;
+        size_t sz     = imm.decrypted_pool.size();
+        // in_bounds = pool non-empty AND offset+8 fits
+        uint64_t ok = -static_cast<uint64_t>(
+            (pool_base != 0) & (offset + 8 <= sz));
+        uintptr_t src = ((pool_base + (offset & static_cast<size_t>(ok)))
+                            & ok)
+                      | (dummy & ~ok);
+        std::memcpy(&val_pool, reinterpret_cast<const uint8_t*>(src), 8);
     }
+
+    // ── MEM candidate: branchless address-safe read + decode ──
+    uint64_t val_mem = 0;
+    {
+        uintptr_t guest = static_cast<uintptr_t>(
+            static_cast<int64_t>(aux) + exec.load_base_delta);
+        uint64_t is_mem = -static_cast<uint64_t>(type == VM_OPERAND_MEM);
+        uintptr_t src = (guest & is_mem) | (dummy & ~is_mem);
+        uint64_t raw = 0;
+        std::memcpy(&raw, reinterpret_cast<const uint8_t*>(src), 8);
+        // Always apply decode_lut — constant-time LUT, result discarded
+        // via MUX for non-MEM types.
+        val_mem = decode_memory(imm.mem.decode_lut(), MemVal(raw)).bits;
+    }
+
+    // ── NONE candidate ──
+    // val_none = 0 (implicit in MUX: selected when no mask matches)
+
+    // ── Branchless 4-way MUX ──
+    uint64_t sel_reg  = -static_cast<uint64_t>(type == VM_OPERAND_REG);
+    uint64_t sel_pool = -static_cast<uint64_t>(type == VM_OPERAND_POOL);
+    uint64_t sel_mem  = -static_cast<uint64_t>(type == VM_OPERAND_MEM);
+    // NONE: when none of the above match (type == VM_OPERAND_NONE), all
+    // masks are 0 and the OR produces 0 — correct for NONE.
+
+    return RegVal(
+        (val_reg  & sel_reg)  |
+        (val_pool & sel_pool) |
+        (val_mem  & sel_mem));
 }
 
 void resolve_operands(const VmImmutable& imm,
@@ -197,44 +211,56 @@ void resolve_operands(const VmImmutable& imm,
                       const VmEpoch& /*epoch*/,
                       DecodedInsn& insn) noexcept {
 
-    // Phase 1: resolve raw values (always both -- D3 uniform pipeline)
-    insn.resolved_a = resolve_one(imm, exec,
-                                   insn.operand_a_type, insn.reg_a, insn.aux);
-    insn.resolved_b = resolve_one(imm, exec,
-                                   insn.operand_b_type, insn.reg_b, insn.aux);
+    // Phase 1: resolve raw values (constant-time, always both -- D3 uniform)
+    insn.resolved_a = resolve_one_ct(imm, exec,
+                                      insn.operand_a_type, insn.reg_a, insn.aux);
+    insn.resolved_b = resolve_one_ct(imm, exec,
+                                      insn.operand_b_type, insn.reg_b, insn.aux);
 
-    // Phase 2: FPE decode to plaintext.
+    // Phase 2: FPE decode to plaintext (constant-time).
     //
     // Pre-compute Speck key schedule + XEX tweaks ONCE for both operands.
     // This avoids redundant key expansion (27-round Speck key schedule is
     // ~100 cycles; doing it twice wastes ~3% of per-instruction budget).
     //
-    // WHY we use exec.insn_fpe_key:
-    //   The per-instruction FPE key is derived from the BB chain state and
-    //   ratcheted after each instruction.  This key determines the Speck
-    //   permutation used to encode register values.  Only REG operands are
-    //   in this domain -- POOL, MEM, and NONE are already plaintext.
+    // WHY always FPE_Decode (Shannon branch, timing side-channel fix):
+    //   The original code branched on operand_a_type == VM_OPERAND_REG:
+    //   REG operands called FPE_Decode (~500 cycles), while POOL/MEM/NONE
+    //   did a ~1 cycle assignment.  This leaked the number of REG operands
+    //   (0, 1, or 2) per instruction, partitioning all opcodes into three
+    //   distinguishable timing clusters visible to ANOVA.
+    //
+    //   The constant-time version always calls FPE_Decode for both operands,
+    //   then uses branchless bitmask MUX to select:
+    //     REG  -> decoded value (FPE_Decode output)
+    //     else -> resolved_x.bits (plaintext passthrough)
+    //
+    //   For non-REG operands, FPE_Decode runs on plaintext bits — the output
+    //   is meaningless but safely discarded via MUX.  The critical property
+    //   is that FPE_Decode always executes, eliminating the timing signal.
+    //
     // SecureLocal ensures round keys and tweaks are zeroed on scope exit.
-    // Without this, an attacker could recover insn_fpe_key[j] by inverting
-    // Speck's key schedule from stale round keys on the stack (Theorem 7.1).
     SecureLocal<Speck64_RoundKeys> rk;
     Speck64_KeySchedule(exec.insn_fpe_key, rk.val);
     SecureLocal<XEX_Tweaks> tw;
     XEX_ComputeTweaks(rk.val, tw.val);
 
-    // Operand A: FPE decode if REG, passthrough otherwise
-    if (insn.operand_a_type == VM_OPERAND_REG) {
-        insn.plain_a = FPE_Decode(rk.val, tw.val, insn.reg_a, insn.resolved_a.bits);
-    } else {
-        // POOL, MEM, NONE: resolved value IS the plaintext
-        insn.plain_a = insn.resolved_a.bits;
+    // Operand A: always decode, branchless select
+    {
+        uint64_t decoded = FPE_Decode(rk.val, tw.val,
+                                       insn.reg_a, insn.resolved_a.bits);
+        uint64_t is_reg = -static_cast<uint64_t>(
+            insn.operand_a_type == VM_OPERAND_REG);
+        insn.plain_a = (decoded & is_reg) | (insn.resolved_a.bits & ~is_reg);
     }
 
-    // Operand B: same logic
-    if (insn.operand_b_type == VM_OPERAND_REG) {
-        insn.plain_b = FPE_Decode(rk.val, tw.val, insn.reg_b, insn.resolved_b.bits);
-    } else {
-        insn.plain_b = insn.resolved_b.bits;
+    // Operand B: always decode, branchless select
+    {
+        uint64_t decoded = FPE_Decode(rk.val, tw.val,
+                                       insn.reg_b, insn.resolved_b.bits);
+        uint64_t is_reg = -static_cast<uint64_t>(
+            insn.operand_b_type == VM_OPERAND_REG);
+        insn.plain_b = (decoded & is_reg) | (insn.resolved_b.bits & ~is_reg);
     }
     // rk, tw auto-zeroed by SecureLocal destructor
 }
