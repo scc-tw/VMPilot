@@ -52,6 +52,15 @@ jobs:
         if: steps.cache-submodules.outputs.cache-hit != 'true'
         run: git submodule update --init --recursive --depth 1
 
+      - name: Verify submodules
+        shell: bash
+        run: |
+          # Guard against a poisoned cache that restores empty directories
+          if [ ! -f third_party/capstone/CMakeLists.txt ]; then
+            echo "::warning::Submodule cache was empty, re-initializing"
+            git submodule update --init --recursive --depth 1
+          fi
+
       # ── Cache CPM downloads ──
       - name: Cache CPM
         uses: actions/cache@v4

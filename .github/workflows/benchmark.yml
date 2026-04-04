@@ -57,9 +57,9 @@ jobs:
         run: |
           echo "hash=$(git ls-tree HEAD third_party common/crypto | git hash-object --stdin)" >> "$GITHUB_OUTPUT"
 
-      - name: Cache submodules
+      - name: Restore submodule cache
         id: cache-submodules
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             third_party
@@ -69,6 +69,24 @@ jobs:
       - name: Init submodules
         if: steps.cache-submodules.outputs.cache-hit != 'true'
         run: git submodule update --init --recursive --depth 1
+
+      - name: Verify submodules
+        shell: bash
+        run: |
+          if [ ! -f third_party/capstone/CMakeLists.txt ]; then
+            echo "::warning::Submodule cache was empty, re-initializing"
+            git submodule update --init --recursive --depth 1
+          fi
+
+      # Save submodule cache NOW, before the deinit step later wipes them
+      - name: Save submodule cache
+        if: steps.cache-submodules.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            third_party
+            common/crypto
+          key: submodules-${{ runner.os }}-${{ steps.submod-hash.outputs.hash }}
 
       # ── CPM cache ──
       - name: Cache CPM
