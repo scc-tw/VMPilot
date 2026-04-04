@@ -1,6 +1,6 @@
-# VMPilot: A Modern C++ Virtual Machine SDK
+# VMPilot: A Modern C++ Virtual Machine Protection Framework
 
-VMPilot is an advanced virtual machine software development kit (SDK) implemented in C++. **Secure by design**, VMPilot is specifically engineered to safeguard your software from reverse engineering. Offering seamless integration and ease of use for your projects, VMPilot sets a new standard for software protection.
+VMPilot is an advanced virtual machine protection framework implemented in C++. **Secure by design**, VMPilot is specifically engineered to safeguard your software from reverse engineering. Offering seamless integration and ease of use for your projects, VMPilot sets a new standard for software protection.
 
 Unlike traditional black box solutions, VMPilot is built with transparency in mind. Its inner workings are easily understandable, yet formidable to crack. By incorporating modern cryptography and obfuscation techniques, your software is shielded against potential attacks. Even with the computing power of a supercomputer, breaking VMPilot in parallel becomes a daunting challenge.
 
@@ -63,9 +63,9 @@ would create nested marker pairs.
 
 ## Architecture
 
-VMPilot has three major components: **SDK** (build-time compilation), **Loader** (binary patching), and **Runtime** (VM execution engine).
+VMPilot has five major components: **Frontend** (binary analysis), **Backend** (compilation), **Serializer** (persistence), **Linker** (binary patching), and **Runtime** (VM execution engine).
 
-### SDK Pipeline
+### Frontend (binary analysis)
 
 ```
 binary (ELF / PE / Mach-O)
@@ -77,9 +77,16 @@ Segmentator::segment()          -- find VMPilot_Begin/End markers, extract regio
 RegionRefiner::refine/group()   -- deduplicate, handle inlining, detect canonical copies
   |
   v
-Serializer::build_units()       -- convert to CompilationUnits (single conversion point)
+ReferenceAnalyzer               -- detect data refs (globals, TLS, GOT, atomics, jump tables)
   |
-  +-> Serializer::dump/load()   -- round-trip to TOML manifest
+  v
+CompilationUnit[]               -- ready for compilation
+```
+
+### Backend (compilation)
+
+```
+CompilationUnit[]
   |
   v
 CompilationOrchestrator         -- parallel compilation via work-stealing thread pool
@@ -88,7 +95,18 @@ CompilationOrchestrator         -- parallel compilation via work-stealing thread
 CompilationResult               -- bytecodes + diagnostics
 ```
 
-### Runtime VM (doc 16 forward-secrecy)
+### Serializer
+
+```
+CompilationUnit[] / CompilationContext
+  |
+  v
+Serializer::build_units()       -- convert segmentation results to CompilationUnits
+  |
+  +-> Serializer::dump/load()   -- round-trip to TOML manifest + binary format
+```
+
+### Runtime VM (doc 16/17/19 forward-secrecy)
 
 ```
 VM Bytecode Blob
@@ -97,19 +115,19 @@ VM Bytecode Blob
 VmEngine::create()              -- blob validation, key derivation, state init
   |
   v
-step() pipeline (12 phases)     -- uniform per-instruction execution
-  |   Phase A-C: fetch, decrypt (SipHash), decode (PRP)
-  |   Phase D:   FPE decode operands (Speck64/128 XEX mode)
-  |   Phase E:   handler dispatch (55 opcodes via compile-time table)
-  |   Phase F-G: FPE encode result, key ratchet (BLAKE3 entangled)
-  |   Phase H-I: dead register sanitization, stack hygiene
-  |   Phase J-K: enc_state advance, IP/BB transition
-  |   Phase L:   BB MAC verification, forward-secrecy chain evolution
+dispatch_unit() pipeline        -- fixed-width N sub-instructions per dispatch unit
+  |   Phase A-C:  fetch, decrypt (SipHash), decode (two-layer PRP)
+  |   Phase D:    ORAM scan (branchless) + handler dispatch (55 opcodes)
+  |   Phase E:    branchless FPE encode (Speck64/128 XEX mode)
+  |   Phase F-G:  BLAKE3 fingerprint + key ratchet (entangled)
+  |   Phase H-I:  16-register re-encode, stack hygiene
+  |   Phase K:    enc_state advance (8-byte full-instruction ratchet)
+  |   Phase L:    branchless BB MAC verification + transition MUX
   v
 VmExecResult                    -- decoded return value
 ```
 
-### Loader
+### Linker (binary patching)
 
 ```
 Original Binary + VM Bytecode Blob
@@ -129,24 +147,26 @@ Protected Binary
 
 ### Supported Platforms
 
-| Format | Architecture | SDK | Loader | Runtime |
-|--------|-------------|-----|--------|---------|
-| ELF    | x86-64      | Yes | Yes    | Yes     |
-| ELF    | x86-32      | Yes | Yes    | Yes     |
-| ELF    | ARM64       | Yes | Yes    | Yes     |
-| PE     | x86-64      | Yes | Yes    | Yes     |
-| PE     | x86-32      | Yes | Yes    | Yes     |
-| Mach-O | ARM64       | Yes | Yes    | Yes     |
+| Format | Architecture | Frontend | Linker | Runtime |
+|--------|-------------|----------|--------|---------|
+| ELF    | x86-64      | Yes      | Yes    | Yes     |
+| ELF    | x86-32      | Yes      | Yes    | Yes     |
+| ELF    | ARM64       | Yes      | Yes    | Yes     |
+| PE     | x86-64      | Yes      | Yes    | Yes     |
+| PE     | x86-32      | Yes      | Yes    | Yes     |
+| Mach-O | ARM64       | Yes      | Yes    | Yes     |
 
 ## Security Model
 
-The runtime VM implements the **doc 16 forward-secrecy extension**:
+The runtime VM implements the **doc 16 forward-secrecy extension** with **doc 17 rolling-state ratchet** and **doc 19 timing normalization**:
 
 - **Per-instruction FPE encoding** -- registers are encrypted with Speck64/128 in XEX mode; the key ratchets every instruction via `BLAKE3_KEYED(key, opcode || register_fingerprint)`
+- **8-byte full-instruction ratchet** (doc 17) -- all 8 bytes of the decrypted instruction drive the enc_state SipHash chain; any decryption error cascades into all subsequent instructions
 - **BB chain evolution** -- one-way BLAKE3 chain state updated on every basic block transition; compromising the current state reveals nothing about past states (preimage resistance >= 2^256)
 - **Eager re-encoding** -- all 16 registers re-encoded on every BB transition; dead registers sanitized to `Enc(K_new, 0)` to prevent path-merge fingerprint desync
+- **Branchless execution** (doc 19) -- Phase E (FPE encode), Phase L (BB transition), and ORAM scans use bitwise MUX to prevent timing side channels
 - **Stack hygiene** -- all intermediate key material (Speck round keys, XEX tweaks, plaintext temporaries) zeroed via `secure_zero()` after use
-- **ORAM strategies** -- `RollingKeyOram` (full security) and `DirectOram` (fast testing) via compile-time policy selection
+- **ORAM strategies** -- `RollingKeyOram` (full IND-CPA security) and `DirectOram` (fast testing) via compile-time policy selection
 
 ## Dependencies
 
@@ -239,15 +259,22 @@ cmake/
 
 common/
     include/
+        core/
+            CompilationContext.hpp   Shared compilation context (arch, mode, sections)
+            CompilationUnit.hpp      In-memory compilation unit
+            DataReference.hpp        Data/TLS/GOT/atomic reference descriptor
+            Section.hpp              Unified binary section abstraction
+            NativeSymbolTable.hpp    Symbol table entry + lookup
+            ArchEnum.hpp             Architecture enumeration
+            ModeEnum.hpp             Sub-architecture mode enumeration
         diagnostic.hpp               Diagnostic codes and severity levels
         diagnostic_collector.hpp     Thread-safe diagnostic collection
         thread_pool.hpp              Work-stealing thread pool
-        opcode_table.hpp             VM opcode definitions
         vm/
             vm_context.hpp           BBMetadata, EpochCheckpoint, constants
             vm_blob.hpp              Bytecode blob format and validation
             vm_insn.hpp              Instruction encoding (8-byte packed)
-            vm_opcode.hpp            55 VM opcodes across 7 categories
+            vm_opcode.hpp            55 VM opcodes across 8 categories
             vm_crypto.hpp            BLAKE3 keyed hashing, SipHash
             vm_encoding.hpp          Per-BB LUT derivation, RE_TABLE
             encoded_value.hpp        Phantom types: Encoded<Domain>
@@ -262,9 +289,44 @@ common/
         vm/hardware_rng_{linux,darwin,windows}.cpp
     crypto/                          Botan/OpenSSL backend + BLAKE3
 
+frontend/
+    include/
+        segmentator/                 Binary parsing, region extraction
+        region_refiner/              Dedup, inline grouping, canonical detection
+        reference_analyzer/          Data/TLS/GOT/atomic reference detection
+        arch_handler/                X86 + ARM64 disassembly traits
+        capstone_wrapper/            C++ wrapper around capstone
+        file_handler/                ELF/PE/Mach-O file handlers
+    src/
+        segmentator/                 HandlerRegistry, segmentator
+        reference_analyzer/          SymExpr, MemoryModel, layers, traits
+        capstone_wrapper/            capstone C++ bindings
+        region_refiner/              RegionRefiner
+        arch_handler/                X86Handler, ARM64Handler
+        file_handler/                ELFHandler, PEHandler, MachOHandler
+    tests/                           25 test binaries
+
+backend/
+    include/
+        bytecode_compiler/           CompilationOrchestrator, pluggable backends
+    src/
+        bytecode_compiler/           CompilationOrchestrator, compile pipeline
+    tools/
+        dump_regions                 Show segmentation groups and sites
+        dump_compile                 Full pipeline dump
+        verify_roundtrip             Serializer round-trip verification
+    tests/                           6 test binaries
+
+serializer/
+    include/
+        serializer/                  SerializationTraits, Serializer
+    src/
+        serializer/                  Binary serialization, TOML manifest
+    tests/                           1 test binary
+
 runtime/
     include/
-        vm_engine.hpp                VmEngine<Policy, Oram> — 12-phase pipeline
+        vm_engine.hpp                VmEngine<Policy, Oram> — dispatch_unit pipeline
         vm_state.hpp                 4-way state split: Immutable/Execution/Epoch/Oram
         vm_policy.hpp                DebugPolicy, StandardPolicy, HighSecPolicy
         handler_impls.hpp            55 opcode handlers via HandlerTraits<Op, Policy>
@@ -274,35 +336,31 @@ runtime/
         platform_call.hpp            PlatformCallDesc, ABI classification
         decoded_insn.hpp             Decoded instruction with plaintext operands
         vm_runner.hpp                VmRunner<Policy> factory + StepController
-        native_registry.hpp          Name-based native function registry
-        program_builder.hpp          Fluent ProgramBuilder DSL
         blob_builder.hpp             Unified blob construction (FPE-encoded)
     src/
+        vm_engine.cpp                execute_one_instruction + dispatch_unit + execute
         pipeline.cpp                 enter_basic_block (FPE re-encode + chain evolution)
-        vm_state.cpp                 State initialisation and key derivation
-        oram_strategies.cpp          ORAM read/write implementations
+        oram_strategies.cpp          ORAM access (branchless read+write)
         classify_args.cpp            ABI argument classification
         tls_helpers.cpp              Thread-local storage access
-        platform_call_x86_64.S       SysV x86-64 trampoline (>6 args, FP, stack)
-        platform_call_arm64.S        AAPCS64 trampoline
-        platform_call_win64.S        Win64 ABI trampoline (GAS)
-        platform_call_x86_32.S       cdecl + stdcall trampoline
-        platform_call_win64.asm      Win64 ABI trampoline (MASM)
-        platform_call_x86_32.asm     x86-32 trampoline (MASM)
-        bridge/
-            native_call_bridge_x86_64.S
-            native_call_bridge_arm64.S
-        entry_exit/
-            vm_entry_x86_64.S, vm_exit_x86_64.S
-            vm_entry_arm64.S, vm_exit_arm64.S
-    test/                            243 tests across 20 binaries
+        platform_call_*.S/.asm       Platform ASM trampolines
+    test/
+        unit/                        Crypto primitives, blob view, ORAM, state types, pipeline
+        opcode/                      Per-opcode correctness (data movement, arithmetic, logic,
+                                     comparison/branch, width extension, control flow)
+        integration/                 CFG patterns, native call, policy matrix, VmRunner
+        security/                    Encryption chain, forward secrecy, timing invariants,
+                                     MAC integrity, execution independence
+        robustness/                  Error paths, boundary values, stack limits
+        concurrency/                 Parallel engines, reentrancy
+        platform/                    TLS helpers
     example/
         hello_world.cpp              NATIVE_CALL to puts()
         arithmetic.cpp               ADD/SUB/MUL/DIV
         verify_signature.cpp         BLAKE3-KEYED MAC verification
         snake.cpp                    2D terminal game (step() cooperative loop)
 
-loader/
+linker/
     include/
         BinaryEditor.hpp             Abstract base (CRTP)
         editor_base.hpp              CRTP dispatch helpers
@@ -323,27 +381,6 @@ loader/
         strategies/
             elf_dep_strategies.cpp, pe_dep_strategies.cpp, macho_dep_strategies.cpp
     tests/                           Handover, patch E2E, editor permissions
-
-sdk/
-    include/
-        segmentator/                 Binary parsing, region extraction
-        region_refiner/              Dedup, inline grouping, canonical detection
-        serializer/                  TOML manifest
-        bytecode_compiler/           CompilationOrchestrator, pluggable backends
-        reference_analyzer/          Data/TLS/GOT/atomic reference detection
-        arch_handler/                X86 + ARM64 disassembly traits
-        capstone_wrapper/            C++ wrapper around capstone
-        core/                        CompilationUnit, DataReference, Section
-        file_handler/                ELF/PE/Mach-O file handlers
-    src/
-        segmentator/                 HandlerRegistry, segmentator
-        bytecode_compiler/           CompilationOrchestrator, compile pipeline
-        reference_analyzer/          SymExpr, MemoryModel, layers, traits
-        serializer/                  SerializationTraits, codegen
-        capstone_wrapper/            capstone C++ bindings
-        region_refiner/              RegionRefiner
-        arch_handler/                X86Handler, ARM64Handler
-        file_handler/                ELFHandler, PEHandler, MachOHandler
 
 third_party/                         Git submodules
     capstone/                        Disassembly engine
@@ -374,25 +411,21 @@ third_party/                         Git submodules
 
 ### Completed
 
-- [x] **SDK Segmentator** -- ELF, PE, Mach-O parsing; x86, x86-64, ARM64 disassembly; VMPilot_Begin/End marker detection
-- [x] **Region Refiner** -- overlap/containment removal, inline grouping, canonical copy detection
-- [x] **Serializer** -- TOML manifest, `SerializationTraits<T>`, round-trip dump/load
-- [x] **Compilation Backend** -- work-stealing thread pool, pluggable `CompilerBackend` interface, SimpleBackend stub
-- [x] **Reference Analyzer** -- globals, rodata, TLS, GOT/IAT, atomics, jump tables, scaled-index addressing
+- [x] **Frontend** -- ELF, PE, Mach-O parsing; x86, x86-64, ARM64 disassembly; VMPilot_Begin/End marker detection; region refinement; reference analysis (globals, rodata, TLS, GOT/IAT, atomics, jump tables)
+- [x] **Serializer** -- TOML manifest, `SerializationTraits<T>`, round-trip dump/load, custom binary format
+- [x] **Backend** -- work-stealing thread pool, pluggable `CompilerBackend` interface, SimpleBackend stub
 - [x] **Unified Diagnostics** -- `DiagnosticCollector` with thread-safe collection, `DiagnosticCode` enum, summary report
-- [x] **Loader** -- ELF/PE/Mach-O editors with CRTP dispatch, stub emitters (x86-64, ARM64, x86-32), PayloadBuilder, FallbackChain dependency strategies
-- [x] **Runtime VM** -- doc 16 forward-secrecy engine: Speck-FPE register encoding, BLAKE3 key ratchet, 55 opcodes, ORAM strategies, platform ASM trampolines (SysV x64, Win64, AAPCS64, cdecl/stdcall)
+- [x] **Linker** -- ELF/PE/Mach-O editors with CRTP dispatch, stub emitters (x86-64, ARM64, x86-32), PayloadBuilder, FallbackChain dependency strategies
+- [x] **Runtime VM** -- doc 16/17/19 forward-secrecy engine: Speck-FPE register encoding, BLAKE3 key ratchet, 55 opcodes, branchless dispatch unit, ORAM strategies, platform ASM trampolines (SysV x64, Win64, AAPCS64, cdecl/stdcall)
 - [x] **CI/CD** -- MSVC, GCC, Clang, Apple Clang on GitHub Actions
 - [x] **Modern CMake** -- presets, modular cmake/ includes, per-target sanitizers, CPM 0.42.1
 
 ### In Progress
 
 - [ ] **LLVM Backend** -- replace SimpleBackend stub with native-to-VM-bytecode translator (lifting, normalization, transform, emit)
-- [ ] **Test coverage expansion** -- 829 tests currently; targeting full opcode + edge-case coverage
 
 ### Planned
 
-- [ ] **Doc 17 rolling-state decryption** -- cloud-forged state-dependent bytecode encryption
 - [ ] **SAVE_EPOCH/RESYNC v2** -- AEAD with ChaCha20-Poly1305 for snapshot integrity (requires hardware-bound key or accepts MATE limitation)
 
 ## Documentation
@@ -407,53 +440,58 @@ flowchart TB
         BIN["Binary<br/>(ELF / PE / Mach-O)"]
     end
 
-    subgraph SDK["SDK (build time)"]
+    subgraph Frontend["Frontend (binary analysis)"]
         direction TB
         SEG["Segmentator<br/><i>parse binary, find markers,<br/>extract protected regions</i>"]
         REF["RegionRefiner<br/><i>deduplicate, handle inlining,<br/>detect canonical copies</i>"]
-        SER["Serializer<br/><i>build_units(), dump/load,<br/>TOML manifest</i>"]
         REFA["ReferenceAnalyzer<br/><i>globals, rodata, TLS, GOT/IAT,<br/>atomics, jump tables</i>"]
-
-        subgraph Compiler["Compilation Backend"]
-            direction TB
-            ORCH["CompilationOrchestrator<br/><i>thread pool parallel dispatch</i>"]
-            subgraph Future["LLVM Backend (planned)"]
-                LIFT["Lifting<br/><i>native -> LLVM IR</i>"]
-                NORM["Normalization<br/><i>flag simplify, const fold</i>"]
-                XFORM["Transform<br/><i>virtualize to VM opcodes</i>"]
-                XEMIT["Emit<br/><i>bytecode + junk + variants</i>"]
-                LIFT --> NORM --> XFORM --> XEMIT
-            end
-            ORCH --> Future
-        end
-
-        SEG --> REF --> SER --> REFA --> ORCH
+        SEG --> REF --> REFA
     end
 
-    subgraph Loader["Loader"]
+    subgraph Serializer["Serializer"]
+        SER["Serializer<br/><i>build_units(), dump/load,<br/>TOML manifest</i>"]
+    end
+
+    subgraph Backend["Backend (compilation)"]
+        direction TB
+        ORCH["CompilationOrchestrator<br/><i>thread pool parallel dispatch</i>"]
+        subgraph Future["LLVM Backend (planned)"]
+            LIFT["Lifting<br/><i>native -> LLVM IR</i>"]
+            NORM["Normalization<br/><i>flag simplify, const fold</i>"]
+            XFORM["Transform<br/><i>virtualize to VM opcodes</i>"]
+            XEMIT["Emit<br/><i>bytecode + junk + variants</i>"]
+            LIFT --> NORM --> XFORM --> XEMIT
+        end
+        ORCH --> Future
+    end
+
+    subgraph Linker["Linker (binary patching)"]
         EDIT["BinaryEditor<br/><i>ELF / PE / Mach-O<br/>CRTP + variant dispatch</i>"]
         STUB["StubEmitter<br/><i>x86-64, ARM64, x86-32<br/>entry/exit stubs</i>"]
         PAY["PayloadBuilder<br/><i>assemble final binary</i>"]
         EDIT --> STUB --> PAY
     end
 
-    subgraph Runtime["Runtime VM (doc 16)"]
-        ENG["VmEngine&lt;Policy, Oram&gt;<br/><i>12-phase uniform pipeline</i>"]
+    subgraph Runtime["Runtime VM (doc 16/17/19)"]
+        ENG["VmEngine&lt;Policy, Oram&gt;<br/><i>dispatch_unit pipeline</i>"]
         FPE["Speck-FPE Encoding<br/><i>per-instruction key ratchet<br/>XEX tweakable mode</i>"]
         HAND["55 Opcode Handlers<br/><i>data, arith, logic, compare,<br/>control, width, atomic</i>"]
         BRIDGE["Native Bridge<br/><i>platform ASM trampolines<br/>SysV/Win64/AAPCS64</i>"]
-        CHAIN["Forward Secrecy<br/><i>BLAKE3 chain evolution<br/>dead reg sanitization</i>"]
+        CHAIN["Forward Secrecy<br/><i>BLAKE3 chain evolution<br/>branchless Phase L</i>"]
         ENG --> FPE --> HAND --> BRIDGE
         ENG --> CHAIN
     end
 
     BIN --> SEG
+    REFA --> SER
+    SER --> ORCH
     XEMIT --> BLOB["VM Bytecode Blob"]
     BLOB --> EDIT
     PAY --> FINAL["Protected Binary"]
     BLOB --> ENG
 
     subgraph Common["common/"]
+        CORE["Core Types<br/><i>CompilationUnit, Section,<br/>DataReference</i>"]
         DIAG["DiagnosticCollector"]
         POOL["ThreadPool"]
         CRYPTO["Crypto<br/><i>BLAKE3, Speck64/128,<br/>SipHash, secure_zero</i>"]
@@ -462,4 +500,5 @@ flowchart TB
     ORCH -.-> POOL
     SEG -.-> DIAG
     FPE -.-> CRYPTO
+    REFA -.-> CORE
 ```
