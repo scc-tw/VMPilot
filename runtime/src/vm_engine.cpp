@@ -447,6 +447,20 @@ execute_one_instruction(VmExecution& exec, VmEpoch& epoch,
         }
 
         // ── Phase H: Re-encode all 16 registers (old key → new key) ────
+        //
+        // NOTE (Shannon branch): branchless Phase H was attempted but
+        // reverted — always-decode-all-16 added ~14 extra FPE_Decode per
+        // instruction, creating micro-architectural timing variance that
+        // worsened HighSecPolicy ANOVA from p=0.015 to p=2e-25.
+        //
+        // The live_regs_bitmap branch remains.  It leaks the number of
+        // live registers per BB (~150 ns per extra FPE_Decode), visible
+        // as a ~300 ns bimodal in StandardPolicy.  For HighSecPolicy (N=4),
+        // the crypto pipeline noise masks this signal adequately.
+        //
+        // Future fix: normalize live_regs_bitmap at blob creation time
+        // (serializer/linker) so all BBs declare the same set of live
+        // registers, eliminating the timing signal without runtime cost.
         {
             SecureLocal<Speck64_RoundKeys> new_rk;
             Speck64_KeySchedule(next_key.val, new_rk.val);
