@@ -7,7 +7,7 @@ set(SRC_FILES
 )
 
 set(INCLUDE_DIRS
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/capstone_wrapper
+    ${CMAKE_SOURCE_DIR}/frontend/include/capstone_wrapper
     ${CMAKE_SOURCE_DIR}/third_party/capstone/include
     ${CMAKE_SOURCE_DIR}/common/include
 )

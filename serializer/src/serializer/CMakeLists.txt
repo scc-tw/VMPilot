@@ -7,10 +7,10 @@ set(SRC_FILES
 )
 
 set(INCLUDE_DIRS
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/serializer
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/segmentator
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/region_refiner
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/core
+    ${CMAKE_SOURCE_DIR}/serializer/include/serializer
+    ${CMAKE_SOURCE_DIR}/frontend/include/segmentator
+    ${CMAKE_SOURCE_DIR}/frontend/include/region_refiner
+    ${CMAKE_SOURCE_DIR}/common/include/core
     ${CMAKE_SOURCE_DIR}/common/include
     ${CMAKE_SOURCE_DIR}/common/crypto
     ${CMAKE_SOURCE_DIR}/third_party/expected/include

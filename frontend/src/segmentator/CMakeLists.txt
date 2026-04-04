@@ -1,13 +1,14 @@
 set (INCLUDE_DIRS
     ${INCLUDE_DIRS}
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/core/
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/file_handler/
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/arch_handler/
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/segmentator/
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/region_refiner/
+    ${CMAKE_SOURCE_DIR}/frontend/include/
+    ${CMAKE_SOURCE_DIR}/frontend/include/file_handler/
+    ${CMAKE_SOURCE_DIR}/frontend/include/arch_handler/
+    ${CMAKE_SOURCE_DIR}/frontend/include/segmentator/
+    ${CMAKE_SOURCE_DIR}/frontend/include/region_refiner/
     ${CMAKE_SOURCE_DIR}/common/include/
+    ${CMAKE_SOURCE_DIR}/common/include/core/
     ${CMAKE_SOURCE_DIR}/third_party/expected/include/
+    ${spdlog_SOURCE_DIR}/include
 )
 
 set (TARGER_NAME VMPilot_SDK_Segmentator)

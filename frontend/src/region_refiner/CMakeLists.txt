@@ -5,8 +5,8 @@ set(SRC_FILES
 )
 
 set(INCLUDE_DIRS
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/region_refiner
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/core
+    ${CMAKE_SOURCE_DIR}/frontend/include/region_refiner
+    ${CMAKE_SOURCE_DIR}/common/include/core
     ${CMAKE_SOURCE_DIR}/common/include
 )
 

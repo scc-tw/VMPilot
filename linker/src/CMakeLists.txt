@@ -1,4 +1,4 @@
-set(TARGET_NAME VMPilot_Loader)
+set(TARGET_NAME VMPilot_Linker)
 
 add_library(${TARGET_NAME} STATIC
     Loader.cpp

@@ -26,6 +26,8 @@ include(cmake/Dependencies.cmake)       # googletest (conditional)
 # ─────────────────────────────────────────────────────────────────────────────
 
 add_subdirectory(common)
-add_subdirectory(sdk)
-add_subdirectory(loader)
+add_subdirectory(frontend)
+add_subdirectory(backend)
+add_subdirectory(serializer)
+add_subdirectory(linker)
 add_subdirectory(runtime)

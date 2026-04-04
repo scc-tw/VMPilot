@@ -1,13 +1,13 @@
 set (INCLUDE_DIRS
     ${INCLUDE_DIRS}
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/bytecode_compiler/
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/core/
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/segmentator/
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/region_refiner/
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/reference_analyzer/
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/capstone_wrapper/
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include/serializer/
+    ${CMAKE_SOURCE_DIR}/backend/include/
+    ${CMAKE_SOURCE_DIR}/backend/include/bytecode_compiler/
+    ${CMAKE_SOURCE_DIR}/common/include/core/
+    ${CMAKE_SOURCE_DIR}/frontend/include/segmentator/
+    ${CMAKE_SOURCE_DIR}/frontend/include/region_refiner/
+    ${CMAKE_SOURCE_DIR}/frontend/include/reference_analyzer/
+    ${CMAKE_SOURCE_DIR}/frontend/include/capstone_wrapper/
+    ${CMAKE_SOURCE_DIR}/serializer/include/serializer/
     ${CMAKE_SOURCE_DIR}/common/include/
     ${CMAKE_SOURCE_DIR}/third_party/expected/include/
     ${spdlog_SOURCE_DIR}/include
