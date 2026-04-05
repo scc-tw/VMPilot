@@ -16,6 +16,7 @@ struct BenchResult {
     const char* name       = "";
     VmOpcode    opcode     = VmOpcode::NOP;
     uint8_t     category   = 0;
+    bool        is_baseline = false;
     uint32_t    insn_count = 0;
     uint32_t    iterations = 0;
     uint64_t    min_ns     = 0;
@@ -36,6 +37,7 @@ inline BenchResult compute_stats(const char* name, VmOpcode opcode,
     r.name       = name;
     r.opcode     = opcode;
     r.category   = Common::VM::vm_opcode_category(opcode);
+    r.is_baseline = (name != nullptr && std::string(name) == "NOP_BASELINE");
     r.insn_count = insn_count;
     r.iterations = static_cast<uint32_t>(samples.size());
 

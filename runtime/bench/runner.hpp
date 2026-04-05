@@ -62,11 +62,26 @@ std::vector<BenchResult> run_all(const RunConfig& cfg) {
             if (!sr || *sr == VmResult::Halted) return 0;
         }
 
-        // Timed: execute remaining (K measured DUs)
+        // Timed: execute exactly K measured dispatch units.
+        //
+        // This avoids pulling the tail HALT BB into the timing window and
+        // ensures branch benchmarks measure K real branch DUs, not K-1 plus
+        // one HALT-contaminated DU.
         auto t0 = Clock::now();
-        auto r  = engine->execute();
+        bool ok = true;
+        for (uint32_t i = 0; i < K; ++i) {
+            auto r = engine->dispatch_unit();
+            if (!r) {
+                ok = false;
+                break;
+            }
+            if (*r == VmResult::Halted) {
+                ok = false;
+                break;
+            }
+        }
         auto t1 = Clock::now();
-        return r ? Clock::elapsed_ns(t0, t1) : 0;
+        return ok ? Clock::elapsed_ns(t0, t1) : 0;
     };
 
     // Pre-build all programs
@@ -129,7 +144,7 @@ std::vector<BenchResult> run_all(const RunConfig& cfg) {
         result.handler_ns = result.ns_per_insn - baseline;
         results.push_back(result);
         
-        std::fprintf(stderr, "  bench %-20s  %8.1f ns/DU  (Δ: %+.1f ns)\n",
+        std::fprintf(stderr, "  bench %-20s  %.17g ns/DU  (Δ: %+.17g ns)\n",
                      names[idx], result.ns_per_insn, result.handler_ns);
     }
 

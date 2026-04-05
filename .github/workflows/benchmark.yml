@@ -145,16 +145,39 @@ jobs:
                   print(f'  ANOVA p-value: {sec.get(\"anova_p_value\")}')
                   print(f'  ANOVA F-stat:  {sec.get(\"anova_f_stat\")}')
                   print(f'  Leakage bits:  {sec.get(\"leakage_bits\")}\n')
+
+                  diag = r.get('diagnostics', {})
+                  print('  Top opcode deltas:')
+                  for row in diag.get('top_delta_opcodes', [])[:5]:
+                      print(
+                          f'    {row.get(\"name\", row.get(\"opcode\", \"?\"))}: '
+                          f'ns/DU={row.get(\"ns_per_du\")!r} '
+                          f'delta={row.get(\"delta_ns\"):+.17g} '
+                          f'stddev={row.get(\"stddev_ns\")!r} '
+                          f'n={row.get(\"iterations\")}'
+                      )
+                  print('  Category spans:')
+                  for row in diag.get('category_summary', []):
+                      print(
+                          f'    cat{row.get(\"category\")}: '
+                          f'mean={row.get(\"mean_ns_per_du\")!r} '
+                          f'span={row.get(\"span_ns_per_du\")!r} '
+                          f'min={row.get(\"min_ns_per_du\")!r} '
+                          f'max={row.get(\"max_ns_per_du\")!r}'
+                      )
+                  print()
           except Exception as e:
               print(f'Error reading metrics: {e}')
           "
 
-      # ── Upload clean result ──
-      - name: Upload clean JSON
+      # ── Upload raw + clean result ──
+      - name: Upload benchmark JSON
         uses: actions/upload-artifact@v4
         with:
           name: bench-${{ matrix.platform }}
-          path: bench_clean.json
+          path: |
+            bench_raw.json
+            bench_clean.json
 
       # ── Store in gh-pages (push to main/dev only — becomes baseline) ──
       - name: Convert for chart

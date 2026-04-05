@@ -17,6 +17,7 @@ import json
 import sys
 import math
 import argparse
+from collections import defaultdict
 
 def mad_filter(samples, z_thresh=3.5):
     """
@@ -77,9 +78,62 @@ def calculate_stats(samples, insn_count):
         "ips": ips
     }
 
+def is_baseline_result(result):
+    return bool(result.get("is_baseline")) or result.get("name") == "NOP_BASELINE" or result.get("opcode") == "NOP_BASELINE"
+
+def build_diagnostics(clean_results, baseline_ns_per_du):
+    opcode_rows = []
+    category_groups = defaultdict(list)
+
+    for r in clean_results:
+        row = {
+            "name": r.get("name", r.get("opcode", "?")),
+            "opcode": r.get("opcode", "?"),
+            "category": r.get("category"),
+            "iterations": r.get("iterations", 0),
+            "ns_per_du": r.get("ns_per_du"),
+            "delta_ns": r.get("delta_ns"),
+            "stddev_ns": r.get("stddev_ns"),
+            "is_baseline": bool(r.get("is_baseline", False)),
+        }
+        opcode_rows.append(row)
+
+        category = r.get("category")
+        if category is not None and not row["is_baseline"]:
+            category_groups[category].append(row)
+
+    sorted_by_delta = sorted(
+        [r for r in opcode_rows if not r["is_baseline"]],
+        key=lambda r: abs(r.get("delta_ns", 0.0)),
+        reverse=True,
+    )
+
+    category_summary = []
+    for category, rows in sorted(category_groups.items()):
+        ns_values = [r["ns_per_du"] for r in rows if r.get("ns_per_du") is not None]
+        if not ns_values:
+            continue
+        category_summary.append({
+            "category": category,
+            "count": len(rows),
+            "mean_ns_per_du": sum(ns_values) / len(ns_values),
+            "min_ns_per_du": min(ns_values),
+            "max_ns_per_du": max(ns_values),
+            "span_ns_per_du": max(ns_values) - min(ns_values),
+        })
+
+    return {
+        "baseline_source": "result" if baseline_ns_per_du else "metadata_or_missing",
+        "top_delta_opcodes": sorted_by_delta[:8],
+        "category_summary": category_summary,
+        "opcode_summary": sorted(
+            opcode_rows, key=lambda r: (r["category"], r["opcode"], r["name"])
+        ),
+    }
+
 def analyze(raw_data):
     # 1. Filter and re-calculate
-    baseline_ns_per_du = 0
+    baseline_ns_per_du = raw_data.get("baseline_ns_per_du", 0)
     clean_results = []
     
     # First pass: find NOP_BASELINE to set baseline_ns_per_du
@@ -90,7 +144,7 @@ def analyze(raw_data):
         # update r with new stats
         r.update(stats)
         
-        if r["opcode"] == "NOP_BASELINE":
+        if is_baseline_result(r):
             baseline_ns_per_du = r["ns_per_insn"]
             
         clean_results.append(r)
@@ -105,7 +159,7 @@ def analyze(raw_data):
     
     groups = []
     for r in raw_data.get("results", []):
-        if r["opcode"] == "NOP_BASELINE":
+        if is_baseline_result(r):
             continue
         # Exclude category 7 (VM Internal) opcodes like CHECK_INTEGRITY,
         # as they do not follow standard DU padding and are inherently distinguishable.
@@ -177,6 +231,7 @@ def analyze(raw_data):
             "indistinguishable": bool(p_value > 0.05) if p_value != -1.0 else None,
             "leakage_bits": float(mi_bits) if mi_bits != -1.0 else None
         },
+        "diagnostics": build_diagnostics(clean_results, baseline_ns_per_du),
         "results": clean_results
     }
     

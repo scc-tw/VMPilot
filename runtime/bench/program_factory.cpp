@@ -78,6 +78,15 @@ static TestBB make_nop_bb(uint32_t bb_id, uint8_t epoch_base, uint32_t N) {
     return bb;
 }
 
+/// Build one tail BB that halts immediately.
+static TestBB make_halt_bb(uint32_t bb_id, uint8_t epoch_base, uint32_t N) {
+    auto bb = make_bb(bb_id, epoch_base);
+    bb.instructions.push_back({VmOpcode::HALT, f_none(), 0, 0, 0});
+    for (uint32_t i = 1; i < N; ++i)
+        bb.instructions.push_back({VmOpcode::NOP, f_none(), 0, 0, 0});
+    return bb;
+}
+
 /// Build setup BBs of exactly N insns each.
 ///
 /// For N≥2: one BB with setup_insns + NOP padding + JMP (fits in N insns).
@@ -267,6 +276,8 @@ DUBenchProgram build_du_program(const OpcodeBenchSpec& spec,
         }
     }
 
+    const uint32_t halt_bb_id = next_bb_id + K;
+
     // ── Build K measured BBs ────────────────────────────────────────
     for (uint32_t i = 0; i < K; ++i) {
         uint32_t bb_id = next_bb_id++;
@@ -275,7 +286,7 @@ DUBenchProgram build_du_program(const OpcodeBenchSpec& spec,
         if (is_branch) {
             // Branch at end of DU, target = next BB
             TestInstruction br = real_insn;
-            br.aux = (i + 1 < K) ? (bb_id + 1) : bb_id;  // last BB: self (will HALT)
+            br.aux = (i + 1 < K) ? (bb_id + 1) : halt_bb_id;
             bbs.push_back(make_measured_bb(bb_id, epoch_base, br, N, true));
         } else if (spec.setup == Setup::Pool) {
             TestInstruction lc = real_insn;
@@ -290,11 +301,8 @@ DUBenchProgram build_du_program(const OpcodeBenchSpec& spec,
         }
     }
 
-    // Replace last measured BB's last instruction with HALT
-    if (!bbs.empty()) {
-        auto& last_bb = bbs.back();
-        last_bb.instructions.back() = {VmOpcode::HALT, f_none(), 0, 0, 0};
-    }
+    // Tail halt BB is never part of the measured K dispatch units.
+    bbs.push_back(make_halt_bb(halt_bb_id, 0xC0, N));
 
     // ── Build native call transition entries ─────────────────────────
     if (spec.setup == Setup::NativeCall) {
@@ -324,9 +332,8 @@ DUBenchProgram build_du_baseline(uint32_t K, uint32_t N) {
         bbs.push_back(make_nop_bb(bb_id, epoch_base, N));
     }
 
-    // Last BB: replace last NOP with HALT
-    if (!bbs.empty())
-        bbs.back().instructions.back() = {VmOpcode::HALT, f_none(), 0, 0, 0};
+    // Tail halt BB is never part of the measured K dispatch units.
+    bbs.push_back(make_halt_bb(K + 1, 0xC0, N));
 
     prog.blob = Test::build_test_blob(prog.seed, bbs, {}, false, {});
     return prog;
