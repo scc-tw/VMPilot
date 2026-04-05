@@ -202,28 +202,50 @@ def main():
     
     with open(args.input, "r", encoding="utf-8") as f:
         content = f.read()
-        
-    raw_datas = parse_multiple_jsons(content)
-    
+
+    stripped = content.lstrip()
+    if stripped.startswith("["):
+        raw_datas = json.loads(content)
+    else:
+        raw_datas = parse_multiple_jsons(content)
+
+    clean_outputs = []
+    failure_message = None
+
     for raw_data in raw_datas:
         clean_data = analyze(raw_data)
-        
-        # Print the clean JSON to stdout
-        print(json.dumps(clean_data, indent=2))
-        
+        clean_outputs.append(clean_data)
+
         # Policy check
         meta = clean_data.get("metadata", {})
         sec = clean_data.get("security_metrics", {})
         leakage_threshold = 0.05 # TODO: narrow down the leakage threshold
         p_value_threshold = 0.01
-        
-        if args.fail_on_leak and meta.get("policy") == "HighSecPolicy":
+
+        if args.fail_on_leak and meta.get("policy") == "HighSecPolicy" and failure_message is None:
             if sec.get("anova_p_value") is not None and sec["anova_p_value"] < p_value_threshold:
-                print(f"\n[!] SECURITY FAILURE: HighSecPolicy ANOVA p-value {sec['anova_p_value']} < {p_value_threshold}. Opcodes are distinguishable.", file=sys.stderr)
-                sys.exit(1)
-            if sec.get("leakage_bits") is not None and sec["leakage_bits"] > leakage_threshold:
-                print(f"\n[!] SECURITY FAILURE: HighSecPolicy Leakage {sec['leakage_bits']} bits > {leakage_threshold} threshold.", file=sys.stderr)
-                sys.exit(1)
+                failure_message = (
+                    f"\n[!] SECURITY FAILURE: HighSecPolicy ANOVA p-value "
+                    f"{sec['anova_p_value']} < {p_value_threshold}. "
+                    f"Opcodes are distinguishable."
+                )
+            elif sec.get("leakage_bits") is not None and sec["leakage_bits"] > leakage_threshold:
+                failure_message = (
+                    f"\n[!] SECURITY FAILURE: HighSecPolicy Leakage "
+                    f"{sec['leakage_bits']} bits > {leakage_threshold} threshold."
+                )
+
+    # Always emit valid JSON, even when the input stream contained multiple
+    # top-level documents from --policy=all.
+    if len(clean_outputs) == 1:
+        json.dump(clean_outputs[0], sys.stdout, indent=2)
+    else:
+        json.dump(clean_outputs, sys.stdout, indent=2)
+    print()
+
+    if failure_message is not None:
+        print(failure_message, file=sys.stderr)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

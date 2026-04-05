@@ -75,12 +75,17 @@ def main():
     with open(sys.argv[1], encoding="utf-8") as f:
         content = f.read()
 
-    raw_datas = parse_multiple_jsons(content)
-    
+    stripped = content.lstrip()
+    if stripped.startswith("["):
+        loaded = json.loads(content)
+        raw_datas = loaded if isinstance(loaded, list) else [loaded]
+    else:
+        raw_datas = parse_multiple_jsons(content)
+
     all_entries = []
     for raw in raw_datas:
         all_entries.extend(convert(raw))
-        
+
     json.dump(all_entries, sys.stdout, indent=2)
     print()
 

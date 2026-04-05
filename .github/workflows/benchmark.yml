@@ -120,7 +120,7 @@ jobs:
       # ── Install Python Dependencies ──
       - name: Install Python Dependencies
         shell: bash
-        run: python3 -m pip install --upgrade pip numpy scipy --break-system-packages
+        run: python3 -m pip install numpy scipy --break-system-packages
 
       # ── Run benchmark ──
       - name: Run benchmark
