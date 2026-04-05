@@ -154,6 +154,7 @@ if(ENABLE_TESTS)
         test_timing_invariants
         test_mac_integrity
         test_execution_independence
+        test_verify_bb_mac
     )
         vmpilot_add_runtime_test(${_t} SOURCES test/security/${_t}.cpp)
     endforeach()
