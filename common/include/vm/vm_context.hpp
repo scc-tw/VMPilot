@@ -25,6 +25,11 @@ constexpr uint8_t VM_BYTE_LANES = 8;
 /// Maximum nesting depth for shadow stack.
 constexpr uint8_t VM_MAX_NESTING = 8;
 
+/// Compile-time upper bound on instructions per basic block.
+/// Used for stack-allocated MAC scratch buffers (avoids heap allocation on hot path).
+/// Blobs exceeding this limit are rejected at load time.
+constexpr uint32_t VM_MAX_BB_INSN_CAP = 1024;
+
 /// Forward declaration for platform-specific native context.
 struct NativeContext;
 
@@ -46,6 +51,14 @@ struct BBMetadata {
     uint16_t live_regs_bitmap;
     uint8_t  bb_enc_seed[8];
     uint8_t  epoch_seed[32];
+
+    // ── Derived fields (computed once at blob load, avoid repeated work) ──
+
+    /// entry_ip + insn_count_in_bb — avoids repeated addition on hot path.
+    uint32_t bb_end_ip = 0;
+
+    /// bb_enc_seed decoded as native uint64_t — avoids repeated memcpy.
+    uint64_t bb_enc_seed_u64 = 0;
 };
 
 /// Epoch checkpoint for shadow stack (CALL_VM / RET_VM).

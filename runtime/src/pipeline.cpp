@@ -30,7 +30,6 @@
 #include <vm/secure_zero.hpp>
 
 #include <cstring>
-#include <vector>
 
 namespace VMPilot::Runtime::pipeline {
 
@@ -63,13 +62,13 @@ static uint64_t update_enc_state_impl(uint64_t enc_state,
     return siphash_2_4(key, msg, 8);
 }
 
-/// Find BB index by bb_id (linear search -- v1 simplicity).
+/// Find BB index by bb_id — O(1) dense vector lookup (P2).
+/// Returns -1 for unknown bb_id (same semantics as the original linear scan).
 static int find_bb_index(const VmImmutable& imm, uint32_t bb_id) noexcept {
-    for (size_t i = 0; i < imm.bb_metadata.size(); ++i) {
-        if (imm.bb_metadata[i].bb_id == bb_id)
-            return static_cast<int>(i);
-    }
-    return -1;
+    if (bb_id >= imm.bb_id_to_index.size())
+        return -1;
+    uint32_t idx = imm.bb_id_to_index[bb_id];
+    return (idx == UINT32_MAX) ? -1 : static_cast<int>(idx);
 }
 
 // ---------------------------------------------------------------------------
@@ -318,9 +317,8 @@ enter_basic_block(VmExecution& exec,
     const BBMetadata& target = imm.bb_metadata[static_cast<size_t>(bb_idx)];
 
     // 2. Use pre-derived bb_enc_seed from BBMetadata (no stored_seed needed)
-    uint64_t enc_seed_u64 = 0;
-    std::memcpy(&enc_seed_u64, target.bb_enc_seed, 8);
-    exec.enc_state = enc_seed_u64;
+    // P6: pre-decoded at load time, avoids repeated memcpy
+    exec.enc_state = target.bb_enc_seed_u64;
 
     // 3. Reset instruction tracking
     exec.insn_index_in_bb = 0;
@@ -460,12 +458,8 @@ verify_bb_mac(const VmImmutable& imm,
     const uint32_t real_count = bb.insn_count_in_bb;
     const uint32_t padded_count = imm.max_bb_insn_count;
 
-    // Derive bb_enc_seed for this BB
-    uint8_t enc_seed_bytes[8];
-    std::memcpy(enc_seed_bytes, bb.bb_enc_seed, 8);
-
-    uint64_t enc_state = 0;
-    std::memcpy(&enc_state, enc_seed_bytes, 8);
+    // P6: use pre-decoded enc_state (no memcpy needed)
+    uint64_t enc_state = bb.bb_enc_seed_u64;
 
     // Re-decrypt all instructions in this BB + dummy iterations for padding.
     //
@@ -479,8 +473,10 @@ verify_bb_mac(const VmImmutable& imm,
     auto insns = imm.blob.instructions();
     const uint32_t total_insn_count = imm.blob.header().insn_count;
 
-    // Stack buffer for MAC computation (only real instructions contribute)
-    std::vector<uint8_t> plaintext_bytes(real_count * 8);
+    // P1: stack-allocated scratch buffer (no heap allocation on hot path).
+    // Sized to compile-time cap; blobs exceeding VM_MAX_BB_INSN_CAP are
+    // rejected at load time.
+    uint8_t plaintext_bytes[VM_MAX_BB_INSN_CAP * 8];
 
     for (uint32_t j = 0; j < padded_count; ++j) {
         const bool is_real = (j < real_count);
@@ -496,7 +492,7 @@ verify_bb_mac(const VmImmutable& imm,
 
         // Only write real plaintext to MAC buffer
         if (is_real)
-            std::memcpy(plaintext_bytes.data() + j * 8, &plain, 8);
+            std::memcpy(plaintext_bytes + j * 8, &plain, 8);
 
         // Always check REKEY (dummy iterations: sem_op won't match REKEY)
         VmInsn vinst{};
@@ -526,8 +522,8 @@ verify_bb_mac(const VmImmutable& imm,
     // MAC is computed over REAL instructions only (matches blob builder)
     uint8_t computed_mac[8];
     blake3_keyed_hash(imm.integrity_key,
-                      plaintext_bytes.data(),
-                      plaintext_bytes.size(),
+                      plaintext_bytes,
+                      static_cast<size_t>(real_count) * 8,
                       computed_mac, 8);
 
     // Compare with stored MAC (constant-time)
@@ -556,13 +552,8 @@ void replay_enc_state(VmExecution& exec, const VmEpoch& epoch,
 
     const auto& bb = imm.bb_metadata[exec.current_bb_index];
 
-    // Derive bb_enc_seed from scratch (enter_basic_block already set enc_state,
-    // but we need the seed for the keystream replay).
-    uint8_t enc_seed_bytes[8];
-    std::memcpy(enc_seed_bytes, bb.bb_enc_seed, 8);
-
-    uint64_t es = 0;
-    std::memcpy(&es, enc_seed_bytes, 8);
+    // P6: use pre-decoded enc_seed (no memcpy needed)
+    uint64_t es = bb.bb_enc_seed_u64;
 
     // Replay SipHash chain: decrypt each instruction [0..target_insn_idx) and
     // advance enc_state, handling REKEY mutations along the way.

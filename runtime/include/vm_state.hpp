@@ -41,6 +41,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
+#include <type_traits>
 #include <vector>
 
 namespace VMPilot::Runtime {
@@ -130,6 +131,13 @@ struct VmImmutable {
     /// verify_bb_mac always iterates max_bb_insn_count times, with dummy
     /// SipHash iterations for indices beyond the actual BB.
     uint32_t max_bb_insn_count = 0;
+
+    /// O(1) bb_id -> bb_metadata index lookup table.
+    ///
+    /// Dense vector sized to max_bb_id + 1, filled with UINT32_MAX (invalid).
+    /// Replaces the linear scan in find_bb_index() — same semantics, O(1) cost.
+    /// Built once during VmEngine::create().
+    std::vector<uint32_t> bb_id_to_index;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -232,6 +240,16 @@ static_assert(alignof(VmExecution) >= 64,
               "VmExecution must be 64-byte aligned for cache locality");
 static_assert(offsetof(VmExecution, regs) == 0,
               "regs must be at offset 0 (first cache line)");
+
+// Verify RegVal layout is compatible with uint64_t for direct fingerprinting (P3).
+// This allows blake3_keyed_fingerprint to hash exec.regs[] directly without
+// copying into a temporary uint64_t[16] array.
+static_assert(sizeof(RegVal) == sizeof(uint64_t),
+              "RegVal must be 8 bytes for direct fingerprint hashing");
+static_assert(std::is_standard_layout<RegVal>::value,
+              "RegVal must be standard layout for safe reinterpret_cast");
+static_assert(sizeof(VmExecution::regs) == VM_REG_COUNT * sizeof(uint64_t),
+              "regs array must be tightly packed (no padding)");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // VmEpoch — per-BB opcode permutation, trivially copyable

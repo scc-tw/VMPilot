@@ -40,18 +40,22 @@ static uint64_t oram_access_impl(VmOramState& state, uint64_t addr,
 
     uint64_t read_result = 0;
 
+    // P8: hoist temporary buffers out of the loop to reduce stack churn.
+    // Reuse a single keystream buffer for both old and new expansions
+    // (old_ks is consumed before new_ks is computed, so they can share).
+    alignas(64) uint64_t words[8];
+    uint64_t ks[8];
+
     for (uint32_t line = 0; line < VM_ORAM_NUM_LINES; ++line) {
         uint8_t* line_ptr = state.workspace + line * VM_ORAM_LINE_SIZE;
 
         // 1. Load 64 bytes
-        uint64_t words[8];
         std::memcpy(words, line_ptr, 64);
 
         // 2. Decrypt with old nonce
-        uint64_t old_ks[8];
-        siphash_expand(state.key, old_nonce, line, old_ks);
+        siphash_expand(state.key, old_nonce, line, ks);
         for (int i = 0; i < 8; ++i)
-            words[i] ^= old_ks[i];
+            words[i] ^= ks[i];
 
         // 3. Branchless read + conditional write
         const bool is_target_line = (line == target_line);
@@ -70,11 +74,10 @@ static uint64_t oram_access_impl(VmOramState& state, uint64_t addr,
             words[w] = (written & w_sel) | (words[w] & ~w_sel);
         }
 
-        // 4. Re-encrypt with fresh nonce
-        uint64_t new_ks[8];
-        siphash_expand(state.key, state.nonce, line, new_ks);
+        // 4. Re-encrypt with fresh nonce (reuse ks buffer)
+        siphash_expand(state.key, state.nonce, line, ks);
         for (int i = 0; i < 8; ++i)
-            words[i] ^= new_ks[i];
+            words[i] ^= ks[i];
 
         // 5. Store back
         std::memcpy(line_ptr, words, 64);

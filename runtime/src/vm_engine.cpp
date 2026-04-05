@@ -96,6 +96,12 @@ VmEngine<Policy, Oram>::create(
         blake3_keyed_hash(stored_seed,
                           reinterpret_cast<const uint8_t*>(enc_msg), 7,
                           md.bb_enc_seed, 8);
+
+        // P5: precompute bb_end_ip (avoids repeated addition on hot path)
+        md.bb_end_ip = md.entry_ip + md.insn_count_in_bb;
+
+        // P6: decode bb_enc_seed as uint64_t once (avoids repeated memcpy)
+        std::memcpy(&md.bb_enc_seed_u64, md.bb_enc_seed, 8);
     }
 
     // 4. Decrypt constant pool (SipHash XOR -- pool content is plaintext after this)
@@ -133,6 +139,24 @@ VmEngine<Policy, Oram>::create(
             if (md.insn_count_in_bb > max_insns)
                 max_insns = md.insn_count_in_bb;
         m->max_bb_insn_count = max_insns;
+
+        // P1: reject blobs exceeding the compile-time MAC scratch buffer cap.
+        if (max_insns > VM_MAX_BB_INSN_CAP)
+            return tl::make_unexpected(DiagnosticCode::BlobHeaderInvalid);
+    }
+
+    // 7c. Build O(1) bb_id -> bb_index lookup table (P2).
+    //
+    // Replaces the linear scan in find_bb_index().  Dense vector sized to
+    // max_bb_id + 1, filled with UINT32_MAX (invalid sentinel).
+    {
+        uint32_t max_id = 0;
+        for (const auto& md : m->bb_metadata)
+            if (md.bb_id > max_id)
+                max_id = md.bb_id;
+        m->bb_id_to_index.assign(static_cast<size_t>(max_id) + 1, UINT32_MAX);
+        for (size_t i = 0; i < m->bb_metadata.size(); ++i)
+            m->bb_id_to_index[m->bb_metadata[i].bb_id] = static_cast<uint32_t>(i);
     }
 
     // 8. Blob integrity hash (uses integrity_key, NOT stored_seed)
@@ -169,9 +193,7 @@ VmEngine<Policy, Oram>::create(
     exec.vm_ip = first.entry_ip;
     exec.insn_index_in_bb = 0;
 
-    uint64_t enc_seed_u64 = 0;
-    std::memcpy(&enc_seed_u64, first.bb_enc_seed, 8);
-    exec.enc_state = enc_seed_u64;
+    exec.enc_state = first.bb_enc_seed_u64;  // P6: pre-decoded at load time
 
     // Doc 16: opcode permutation only (no RegTables/DomainTables)
     auto epoch = std::make_unique<VmEpoch>();
@@ -262,9 +284,7 @@ VmEngine<Policy, Oram>::create_reentrant(
     exec.vm_ip = first.entry_ip;
     exec.insn_index_in_bb = 0;
 
-    uint64_t enc_seed_u64 = 0;
-    std::memcpy(&enc_seed_u64, first.bb_enc_seed, 8);
-    exec.enc_state = enc_seed_u64;
+    exec.enc_state = first.bb_enc_seed_u64;  // P6: pre-decoded at load time
 
     // Doc 16: opcode permutation only
     auto epoch = std::make_unique<VmEpoch>();
@@ -411,21 +431,27 @@ execute_one_instruction(VmExecution& exec, VmEpoch& epoch,
                 (encoded & mask) | (exec.regs[insn.reg_a].bits & ~mask));
         }
 
+        // P4: Pre-expand the 16-byte FPE key to 32 bytes ONCE for both
+        // Phase F (fingerprint) and Phase G (ratchet).  Avoids the redundant
+        // [K||K] expansion that blake3_keyed_128 does internally.
+        SecureLocal<uint8_t[32]> expanded_fpe_key;
+        blake3_preexpand_128(exec.insn_fpe_key, expanded_fpe_key.val);
+
         // ── Phase F: Fingerprint all 16 encoded registers ───────────────
         //
         // WHY fingerprint ALL regs (Doc 16 "entanglement" property):
         //   Modifying any register — even one not touched by this instruction
         //   — changes the fingerprint, which changes the next key, which
         //   corrupts all subsequent decryptions.
+        //
+        // P3: Hash exec.regs[] directly — static_asserts in vm_state.hpp
+        // verify that RegVal[16] is layout-compatible with uint64_t[16],
+        // eliminating the 128-byte copy into a temporary array.
         SecureLocal<uint8_t[16]> fingerprint;
-        {
-            uint64_t reg_bits[16];
-            for (uint8_t i = 0; i < 16; ++i)
-                reg_bits[i] = exec.regs[i].bits;
-            blake3_keyed_fingerprint(exec.insn_fpe_key, reg_bits,
-                                     fingerprint.val);
-            secure_zero(reg_bits, sizeof(reg_bits));
-        }
+        blake3_keyed_fingerprint_preexpanded(
+            expanded_fpe_key.val,
+            reinterpret_cast<const uint64_t*>(exec.regs),
+            fingerprint.val);
 
         // ── Phase G: Key ratchet ────────────────────────────────────────
         //
@@ -441,8 +467,8 @@ execute_one_instruction(VmExecution& exec, VmEpoch& epoch,
             uint8_t ratchet_msg[24];
             std::memcpy(ratchet_msg, fingerprint.val, 16);
             std::memcpy(ratchet_msg + 16, &insn.full_plaintext_insn, 8);
-            blake3_keyed_128(exec.insn_fpe_key, ratchet_msg, 24,
-                             next_key.val, 16);
+            blake3_keyed_preexpanded(expanded_fpe_key.val, ratchet_msg, 24,
+                                     next_key.val, 16);
             secure_zero(ratchet_msg, sizeof(ratchet_msg));
         }
 
@@ -557,8 +583,8 @@ VmEngine<Policy, Oram>::dispatch_unit() noexcept
         // Once Phase 6 chaff expansion is in place, BB lengths are always
         // multiples of N and this check becomes dead code.
         {
-            uint32_t bb_end_check = imm_->bb_metadata[exec_.current_bb_index].entry_ip
-                                  + pipeline::current_bb_insn_count(*imm_, exec_);
+            // P5: use precomputed bb_end_ip (avoids repeated addition)
+            uint32_t bb_end_check = imm_->bb_metadata[exec_.current_bb_index].bb_end_ip;
             if (exec_.vm_ip >= bb_end_check || exec_.branch_taken)
                 break;
         }
@@ -582,8 +608,8 @@ VmEngine<Policy, Oram>::dispatch_unit() noexcept
         VmEpoch epoch_snap = *epoch_;
 
         // ── L.2: Determine target BB (branchless 3-way select) ──────
-        uint32_t bb_end = imm_->bb_metadata[exec_.current_bb_index].entry_ip
-                        + pipeline::current_bb_insn_count(*imm_, exec_);
+        // P5: use precomputed bb_end_ip
+        uint32_t bb_end = imm_->bb_metadata[exec_.current_bb_index].bb_end_ip;
         bool at_end = (exec_.vm_ip >= bb_end);
         bool need_transition = exec_.branch_taken | at_end;
 

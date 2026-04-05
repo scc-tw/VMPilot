@@ -160,6 +160,10 @@ inline void sip_round(uint64_t& v0, uint64_t& v1,
 ///
 /// Each output word: SipHash(key, nonce || line || sub_index)
 ///
+/// Optimization (P7): the 24-byte message prefix (nonce || line) is built once;
+/// only the final 8-byte sub_index is overwritten per iteration.  This avoids
+/// rebuilding the fixed 16-byte prefix 8 times.  Output is identical.
+///
 /// @param key    16-byte ORAM key
 /// @param nonce  ORAM nonce
 /// @param line   cache line index
@@ -168,12 +172,14 @@ inline void siphash_expand(const uint8_t key[16],
                            uint64_t nonce,
                            uint64_t line,
                            uint64_t out[8]) noexcept {
+    // Build the fixed prefix once: nonce(8) || line(8)
+    uint8_t msg[24];
+    std::memcpy(msg,     &nonce, 8);
+    std::memcpy(msg + 8, &line,  8);
+
     for (uint64_t i = 0; i < 8; ++i) {
-        // Build a 24-byte message: nonce(8) || line(8) || sub_index(8)
-        uint8_t msg[24];
-        std::memcpy(msg,      &nonce, 8);
-        std::memcpy(msg + 8,  &line,  8);
-        std::memcpy(msg + 16, &i,     8);
+        // Only overwrite the sub_index portion
+        std::memcpy(msg + 16, &i, 8);
         out[i] = siphash_2_4(key, msg, 24);
     }
 }
@@ -233,6 +239,41 @@ void blake3_keyed_hash(const uint8_t key[32], const uint8_t* data, size_t data_l
 void blake3_keyed_128(const uint8_t key128[16],
                       const uint8_t* data, size_t data_len,
                       uint8_t* out, size_t out_len) noexcept;
+
+/// Pre-expand a 128-bit key to a 256-bit BLAKE3 key: [K || K].
+///
+/// This avoids repeating the expansion when the same 128-bit key is used
+/// for multiple BLAKE3 calls within a single instruction (Phase F + Phase G).
+///
+/// @param key128    16-byte source key
+/// @param out256    32-byte output (caller must zero after use)
+void blake3_preexpand_128(const uint8_t key128[16],
+                          uint8_t out256[32]) noexcept;
+
+/// BLAKE3 keyed hash using an already-expanded 256-bit key.
+///
+/// Same as blake3_keyed_128 but skips the [K||K] expansion step.
+///
+/// @param expanded_key  32-byte pre-expanded key (from blake3_preexpand_128)
+/// @param data          input data
+/// @param data_len      length of input data
+/// @param out           output buffer for hash
+/// @param out_len       number of output bytes
+void blake3_keyed_preexpanded(const uint8_t expanded_key[32],
+                              const uint8_t* data, size_t data_len,
+                              uint8_t* out, size_t out_len) noexcept;
+
+/// Fingerprint all 16 encoded registers using a pre-expanded BLAKE3 key.
+///
+/// Same as blake3_keyed_fingerprint but avoids redundant key expansion
+/// when the caller has already called blake3_preexpand_128.
+///
+/// @param expanded_key  32-byte pre-expanded key
+/// @param encoded_regs  array of 16 × uint64_t encoded register values
+/// @param out128        16-byte output fingerprint
+void blake3_keyed_fingerprint_preexpanded(const uint8_t expanded_key[32],
+                                          const uint64_t encoded_regs[16],
+                                          uint8_t out128[16]) noexcept;
 
 /// Fingerprint all 16 encoded registers using BLAKE3_KEYED_128.
 ///

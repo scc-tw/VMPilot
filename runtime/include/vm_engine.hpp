@@ -70,6 +70,9 @@ using Common::VM::Crypto::FPE_Encode;
 using Common::VM::Crypto::FPE_Decode;
 using Common::VM::Crypto::blake3_keyed_128;
 using Common::VM::Crypto::blake3_keyed_fingerprint;
+using Common::VM::Crypto::blake3_preexpand_128;
+using Common::VM::Crypto::blake3_keyed_preexpanded;
+using Common::VM::Crypto::blake3_keyed_fingerprint_preexpanded;
 using Common::VM::secure_zero;
 using Common::VM::opcode_writes_reg;
 
