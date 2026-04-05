@@ -172,12 +172,14 @@ jobs:
 
       # ── Upload raw + clean result ──
       - name: Upload benchmark JSON
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: bench-${{ matrix.platform }}
           path: |
             bench_raw.json
             bench_clean.json
+          if-no-files-found: warn
 
       # ── Store in gh-pages (push to main/dev only — becomes baseline) ──
       - name: Convert for chart
