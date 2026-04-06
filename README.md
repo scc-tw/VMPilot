@@ -106,7 +106,7 @@ Serializer::build_units()       -- convert segmentation results to CompilationUn
   +-> Serializer::dump/load()   -- round-trip to TOML manifest + binary format
 ```
 
-### Runtime VM (doc 16/17/19 forward-secrecy)
+### Runtime VM
 
 ```
 VM Bytecode Blob
@@ -116,13 +116,13 @@ VmEngine::create()              -- blob validation, key derivation, state init
   |
   v
 dispatch_unit() pipeline        -- fixed-width N sub-instructions per dispatch unit
-  |   Phase A-C:  fetch, decrypt (SipHash), decode (two-layer PRP)
-  |   Phase D:    ORAM scan (branchless) + handler dispatch (55 opcodes)
-  |   Phase E:    branchless FPE encode (Speck64/128 XEX mode)
-  |   Phase F-G:  BLAKE3 fingerprint + key ratchet (entangled)
-  |   Phase H-I:  16-register re-encode, stack hygiene
-  |   Phase K:    enc_state advance (8-byte full-instruction ratchet)
-  |   Phase L:    branchless BB MAC verification + transition MUX
+  |   fetch, decrypt (SipHash), decode (two-layer PRP)
+  |   ORAM scan (branchless) + handler dispatch (55 opcodes)
+  |   branchless FPE encode (Speck64/128 XEX mode)
+  |   BLAKE3 fingerprint + key ratchet (entangled)
+  |   16-register re-encode, stack hygiene
+  |   enc_state advance (8-byte full-instruction ratchet)
+  |   branchless BB MAC verification + transition MUX
   v
 VmExecResult                    -- decoded return value
 ```
@@ -158,13 +158,13 @@ Protected Binary
 
 ## Security Model
 
-The runtime VM implements the **doc 16 forward-secrecy extension** with **doc 17 rolling-state ratchet** and **doc 19 timing normalization**:
+The runtime VM implements **forward secrecy** with a **rolling-state ratchet** and **timing normalization**:
 
 - **Per-instruction FPE encoding** -- registers are encrypted with Speck64/128 in XEX mode; the key ratchets every instruction via `BLAKE3_KEYED(key, opcode || register_fingerprint)`
-- **8-byte full-instruction ratchet** (doc 17) -- all 8 bytes of the decrypted instruction drive the enc_state SipHash chain; any decryption error cascades into all subsequent instructions
+- **8-byte full-instruction ratchet** -- all 8 bytes of the decrypted instruction drive the enc_state SipHash chain; any decryption error cascades into all subsequent instructions
 - **BB chain evolution** -- one-way BLAKE3 chain state updated on every basic block transition; compromising the current state reveals nothing about past states (preimage resistance >= 2^256)
 - **Eager re-encoding** -- all 16 registers re-encoded on every BB transition; dead registers sanitized to `Enc(K_new, 0)` to prevent path-merge fingerprint desync
-- **Branchless execution** (doc 19) -- Phase E (FPE encode), Phase L (BB transition), and ORAM scans use bitwise MUX to prevent timing side channels
+- **Branchless execution** -- FPE encode, BB transition, and ORAM scans use bitwise MUX to prevent timing side channels
 - **Stack hygiene** -- all intermediate key material (Speck round keys, XEX tweaks, plaintext temporaries) zeroed via `secure_zero()` after use
 - **ORAM strategies** -- `RollingKeyOram` (full IND-CPA security) and `DirectOram` (fast testing) via compile-time policy selection
 
@@ -390,14 +390,6 @@ third_party/                         Git submodules
     elfio-modern/                    ELF parsing
 ```
 
-## Tools
-
-| Tool | Usage | Purpose |
-|------|-------|---------|
-| `dump_regions` | `dump_regions <binary>` | Show segmentation groups and sites |
-| `dump_compile` | `dump_compile <binary> [key]` | Full pipeline dump: segmentation, grouping, units, bytecodes |
-| `verify_roundtrip` | `verify_roundtrip <binary>` | Verify serializer dump/load round-trip (exit 0 = pass) |
-
 ## CI
 
 | Compiler | Status |
@@ -416,7 +408,7 @@ third_party/                         Git submodules
 - [x] **Backend** -- work-stealing thread pool, pluggable `CompilerBackend` interface, SimpleBackend stub
 - [x] **Unified Diagnostics** -- `DiagnosticCollector` with thread-safe collection, `DiagnosticCode` enum, summary report
 - [x] **Linker** -- ELF/PE/Mach-O editors with CRTP dispatch, stub emitters (x86-64, ARM64, x86-32), PayloadBuilder, FallbackChain dependency strategies
-- [x] **Runtime VM** -- doc 16/17/19 forward-secrecy engine: Speck-FPE register encoding, BLAKE3 key ratchet, 55 opcodes, branchless dispatch unit, ORAM strategies, platform ASM trampolines (SysV x64, Win64, AAPCS64, cdecl/stdcall)
+- [x] **Runtime VM** -- forward-secrecy engine: Speck-FPE register encoding, BLAKE3 key ratchet, 55 opcodes, branchless dispatch unit, ORAM strategies, platform ASM trampolines (SysV x64, Win64, AAPCS64, cdecl/stdcall)
 - [x] **CI/CD** -- MSVC, GCC, Clang, Apple Clang on GitHub Actions
 - [x] **Modern CMake** -- presets, modular cmake/ includes, per-target sanitizers, CPM 0.42.1
 
@@ -472,12 +464,12 @@ flowchart TB
         EDIT --> STUB --> PAY
     end
 
-    subgraph Runtime["Runtime VM (doc 16/17/19)"]
+    subgraph Runtime["Runtime VM"]
         ENG["VmEngine&lt;Policy, Oram&gt;<br/><i>dispatch_unit pipeline</i>"]
         FPE["Speck-FPE Encoding<br/><i>per-instruction key ratchet<br/>XEX tweakable mode</i>"]
         HAND["55 Opcode Handlers<br/><i>data, arith, logic, compare,<br/>control, width, atomic</i>"]
         BRIDGE["Native Bridge<br/><i>platform ASM trampolines<br/>SysV/Win64/AAPCS64</i>"]
-        CHAIN["Forward Secrecy<br/><i>BLAKE3 chain evolution<br/>branchless Phase L</i>"]
+        CHAIN["Forward Secrecy<br/><i>BLAKE3 chain evolution<br/>branchless BB transition</i>"]
         ENG --> FPE --> HAND --> BRIDGE
         ENG --> CHAIN
     end
