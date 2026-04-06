@@ -55,6 +55,7 @@ add_library(VMPilot_Runtime STATIC
     src/oram_strategies.cpp
     src/classify_args.cpp
     src/tls_helpers.cpp
+    src/vm_intrinsics.cpp
     src/blob_builder.cpp
     src/program_builder.cpp
     src/handler_detail.cpp
@@ -138,6 +139,7 @@ if(ENABLE_TESTS)
         test_cfg_patterns
         test_native_call
         test_policy_matrix
+        test_tls_intrinsic
     )
         vmpilot_add_runtime_test(${_t} SOURCES test/integration/${_t}.cpp)
     endforeach()

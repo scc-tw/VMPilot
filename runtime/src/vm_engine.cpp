@@ -7,6 +7,7 @@
 /// ensure link-time availability without exposing implementation in the header.
 
 #include "vm_engine.hpp"
+#include "vm_intrinsics.hpp"
 
 #include <vm/vm_encoding.hpp>
 #include <vm/hardware_rng.hpp>
@@ -121,6 +122,24 @@ VmEngine<Policy, Oram>::create(
     // 5. Copy native call entries
     auto raw_trans = m->blob.native_calls();
     m->native_calls.assign(raw_trans.begin(), raw_trans.end());
+
+    // 5b. Resolve intrinsic native calls (runtime-provided functions).
+    //
+    // The blob stores a sentinel target_offset (INTRINSIC_BASE + id) for
+    // built-in intrinsics whose addresses are unknown at blob-build time.
+    // Patch them here so the handler's (target_offset + load_base_delta)
+    // yields the correct function pointer.
+    for (auto& te : m->native_calls) {
+        if (is_intrinsic_target(te.target_offset)) {
+            auto id = static_cast<IntrinsicId>(
+                te.target_offset - INTRINSIC_BASE);
+            auto* fn = resolve_intrinsic(id);
+            if (!fn)
+                return tl::make_unexpected(DiagnosticCode::NativeCallBridgeFailed);
+            te.target_offset = reinterpret_cast<uint64_t>(fn)
+                             - static_cast<uint64_t>(load_base_delta);
+        }
+    }
 
     // 6. Derive global memory encoding (LUT-based, unchanged from doc 15)
     derive_memory_tables(stored_seed, m->mem.encode, m->mem.decode);
