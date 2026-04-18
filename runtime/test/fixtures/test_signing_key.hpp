@@ -1,0 +1,34 @@
+#ifndef VMPILOT_RUNTIME_TEST_FIXTURES_TEST_SIGNING_KEY_HPP
+#define VMPILOT_RUNTIME_TEST_FIXTURES_TEST_SIGNING_KEY_HPP
+
+#include <array>
+#include <cstdint>
+
+// Hard-coded Ed25519 test keypair — RFC 8032 §7.1 Test 1.
+//
+// This is a publicly known test vector used to produce deterministic fixture
+// signatures. It is safe to commit because it is not associated with any
+// production signing authority. Production builds must never embed this
+// public key as the `VendorTrustRoot`.
+
+namespace VMPilot::Fixtures::TestKey {
+
+// 32-byte Ed25519 seed (aka the private key material).
+constexpr std::array<std::uint8_t, 32> kPrivateSeed = {
+    0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60,
+    0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0xc4,
+    0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19,
+    0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae, 0x7f, 0x60,
+};
+
+// 32-byte Ed25519 public key derived from kPrivateSeed.
+constexpr std::array<std::uint8_t, 32> kPublicKey = {
+    0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7,
+    0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64, 0x07, 0x3a,
+    0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25,
+    0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a,
+};
+
+}  // namespace VMPilot::Fixtures::TestKey
+
+#endif  // VMPILOT_RUNTIME_TEST_FIXTURES_TEST_SIGNING_KEY_HPP

@@ -87,9 +87,39 @@ add_subdirectory(example)
 if(ENABLE_TESTS)
     include(GoogleTest)
 
+    # ──────────────────────────────────────────────────────────────────────
+    # Test-only fixture generator (Stage 0 of the runtime redesign migration)
+    #
+    # Produces signed, canonically-encoded fixtures (PackageBindingRecord,
+    # etc.) for consumption by later-stage acceptance tests. The signing path
+    # talks to Botan directly on purpose so the production crypto adaptor
+    # never ships a `Sign_Ed25519` entry point. Only linked into test
+    # binaries that explicitly opt in via `WITH_FIXTURES`.
+    # ──────────────────────────────────────────────────────────────────────
+    add_library(vmpilot_runtime_test_fixtures STATIC
+        test/fixtures/sign_ed25519_testonly.cpp
+        test/fixtures/fixture_generator.cpp
+    )
+    # Botan 3 headers require C++20; crypto submodule already compiles at
+    # that level. Fixture TUs include Botan headers directly so they also
+    # need C++20. Test binaries that link the fixtures but don't include
+    # Botan headers themselves (no direct #include <botan/...>) keep C++17.
+    target_compile_features(vmpilot_runtime_test_fixtures PUBLIC cxx_std_20)
+    target_include_directories(vmpilot_runtime_test_fixtures
+        PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/test
+                ${CMAKE_SOURCE_DIR}/common/include
+                ${CMAKE_SOURCE_DIR}/common/include/vm
+        PRIVATE ${CRYPTO_INCLUDE_DIR}
+    )
+    target_link_libraries(vmpilot_runtime_test_fixtures
+        PUBLIC  VMPilot_Common
+        PRIVATE vmpilot_options
+                vmpilot_sanitizer
+    )
+
     # Helper: define a runtime test with standard boilerplate.
     function(vmpilot_add_runtime_test name)
-        cmake_parse_arguments(ARG "" "" "SOURCES;EXTRA_INCLUDES" ${ARGN})
+        cmake_parse_arguments(ARG "WITH_FIXTURES" "" "SOURCES;EXTRA_INCLUDES" ${ARGN})
         add_executable(${name} ${ARG_SOURCES})
         target_include_directories(${name}
             PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
@@ -101,6 +131,10 @@ if(ENABLE_TESTS)
                     vmpilot_options
                     vmpilot_sanitizer
         )
+        if(ARG_WITH_FIXTURES)
+            target_include_directories(${name} PRIVATE ${CRYPTO_INCLUDE_DIR})
+            target_link_libraries(${name} PRIVATE vmpilot_runtime_test_fixtures)
+        endif()
         gtest_discover_tests(${name})
     endfunction()
 
@@ -147,6 +181,12 @@ if(ENABLE_TESTS)
     vmpilot_add_runtime_test(test_vm_runner
         SOURCES test/integration/test_vm_runner.cpp
         EXTRA_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+    # ── fixtures/ — Stage 0 infrastructure smoke test ──
+
+    vmpilot_add_runtime_test(test_fixture_smoke
+        SOURCES test/fixtures/test_fixture_smoke.cpp
+        WITH_FIXTURES)
 
     # ── security/ — Doc 15-19 cryptographic invariants ──
 
