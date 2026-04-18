@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "VMPilot_crypto.hpp"
+#include "binding/inner_partition.hpp"
 #include "cbor/strict.hpp"
 #include "vm/domain_labels.hpp"
 
@@ -202,10 +203,9 @@ accept_package(const std::uint8_t* artifact_data,
         return err(AcceptError::AntiDowngradeEpochTooOld);
     }
 
-    // 7. Whole-package binding. The inner partition and envelope body are
-    //    re-hashed under their domain labels; each digest must match the
-    //    one committed in the signed PBR. Stages 6/7 will replace the
-    //    inner-as-opaque-blob usage with per-table slicing.
+    // 7. Whole-package binding. Envelope body first: the layout hash commits
+    //    to the fixed header + canonical CBOR metadata, so any locator
+    //    tamper that parses cleanly still fails here.
     const std::size_t envelope_body_len = env.metadata_offset + env.metadata_length;
     if (envelope_body_len > artifact_size) {
         return err(AcceptError::PbrLocatorOutOfBounds);
@@ -218,6 +218,10 @@ accept_package(const std::uint8_t* artifact_data,
         return err(AcceptError::ArtifactLayoutHashMismatch);
     }
 
+    // 8. Inner partition: parse as a strict-CBOR map and hash each
+    //    sub-table's payload independently. Distinct payloads + distinct
+    //    domain labels mean the three PBR commitments commit to three
+    //    distinct byte ranges, not the same bytes three times.
     if (env.inner_metadata_partition.offset + env.inner_metadata_partition.length >
             artifact_size) {
         return err(AcceptError::PbrLocatorOutOfBounds);
@@ -226,20 +230,28 @@ accept_package(const std::uint8_t* artifact_data,
         artifact_data + env.inner_metadata_partition.offset;
     const std::size_t inner_len = static_cast<std::size_t>(env.inner_metadata_partition.length);
 
+    auto inner_or = parse_inner_partition(inner_bytes, inner_len);
+    if (!inner_or) return err(AcceptError::PbrPartitionMalformed);
+    const InnerPartition& inner = *inner_or;
+
     const auto ubt_computed = domain_hash_sha256(
-        VMPilot::DomainLabels::Hash::UnitBindingTable, inner_bytes, inner_len);
+        VMPilot::DomainLabels::Hash::UnitBindingTable,
+        inner.unit_binding_table.data(), inner.unit_binding_table.size());
     if (!hash_equals(ubt_computed, *ubt_or)) {
         return err(AcceptError::UnitBindingTableHashMismatch);
     }
 
     const auto rpt_computed = domain_hash_sha256(
-        VMPilot::DomainLabels::Hash::ResolvedProfileTable, inner_bytes, inner_len);
+        VMPilot::DomainLabels::Hash::ResolvedProfileTable,
+        inner.resolved_profile_table.data(), inner.resolved_profile_table.size());
     if (!hash_equals(rpt_computed, *rpt_or)) {
         return err(AcceptError::ResolvedProfileTableHashMismatch);
     }
 
     const auto reg_computed = domain_hash_sha256(
-        VMPilot::DomainLabels::Hash::RuntimeSpecRegistry, inner_bytes, inner_len);
+        VMPilot::DomainLabels::Hash::RuntimeSpecRegistry,
+        inner.runtime_specialization_registry.data(),
+        inner.runtime_specialization_registry.size());
     if (!hash_equals(reg_computed, *reg_or)) {
         return err(AcceptError::RuntimeSpecializationRegistryHashMismatch);
     }

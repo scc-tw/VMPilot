@@ -327,6 +327,102 @@ PackageBindingRecordBuilder::build_partition_bytes() const {
     return wrap_partition_array(signed_.canonical_bytes, auth_bytes);
 }
 
+// ─── RuntimeSpecializationRegistryBuilder ───────────────────────────────
+
+RuntimeSpecializationRegistryBuilder::RuntimeSpecializationRegistryBuilder()
+    : registry_version_{"registry-v1"},
+      runtime_build_id_{"vmpilot-dev-runtime-build"},
+      package_schema_version_{"package-schema-v1"},
+      registry_epoch_{1} {
+    // Default entry covers F1 × standard with a happy-path happy-profile.
+    // Tests that exercise non-default family/policy combinations call
+    // clear_entries() first.
+    RegistryEntrySpec e;
+    e.runtime_specialization_id = "f1-standard-v1";
+    e.family_id = "f1";
+    e.requested_policy_id = "standard";
+    e.profile_revision = "rev1";
+    entries_.push_back(std::move(e));
+}
+
+RuntimeSpecializationRegistryBuilder&
+RuntimeSpecializationRegistryBuilder::registry_version(std::string v) {
+    registry_version_ = std::move(v); return *this;
+}
+RuntimeSpecializationRegistryBuilder&
+RuntimeSpecializationRegistryBuilder::runtime_build_id(std::string v) {
+    runtime_build_id_ = std::move(v); return *this;
+}
+RuntimeSpecializationRegistryBuilder&
+RuntimeSpecializationRegistryBuilder::package_schema_version(std::string v) {
+    package_schema_version_ = std::move(v); return *this;
+}
+RuntimeSpecializationRegistryBuilder&
+RuntimeSpecializationRegistryBuilder::registry_epoch(std::uint64_t v) {
+    registry_epoch_ = v; return *this;
+}
+RuntimeSpecializationRegistryBuilder&
+RuntimeSpecializationRegistryBuilder::add_entry(RegistryEntrySpec e) {
+    entries_.push_back(std::move(e)); return *this;
+}
+RuntimeSpecializationRegistryBuilder&
+RuntimeSpecializationRegistryBuilder::clear_entries() {
+    entries_.clear(); return *this;
+}
+
+std::vector<std::uint8_t>
+RuntimeSpecializationRegistryBuilder::build() const {
+    // Entry field IDs must match runtime/src/registry/registry.cpp.
+    using namespace VMPilot::Fixtures::Cbor;
+
+    std::vector<std::vector<std::uint8_t>> entry_bytes;
+    entry_bytes.reserve(entries_.size());
+    for (const auto& e : entries_) {
+        MapBuilder m;
+        m.put_uint(1,  encode_text(e.runtime_specialization_id));
+        m.put_uint(2,  encode_text(e.family_id));
+        m.put_uint(3,  encode_text(e.requested_policy_id));
+        m.put_uint(4,  encode_text(e.profile_revision));
+        m.put_uint(5,  encode_text(e.semantic_contract_version));
+        m.put_uint(6,  encode_text(e.execution_contract_ref));
+        m.put_uint(7,  encode_bytes(std::vector<std::uint8_t>(
+            e.required_runtime_primitives_hash.begin(),
+            e.required_runtime_primitives_hash.end())));
+        m.put_uint(8,  encode_bytes(std::vector<std::uint8_t>(
+            e.required_runtime_helpers_hash.begin(),
+            e.required_runtime_helpers_hash.end())));
+        m.put_uint(9,  encode_bytes(std::vector<std::uint8_t>(
+            e.provider_requirement_hash.begin(),
+            e.provider_requirement_hash.end())));
+        m.put_uint(10, encode_bytes(std::vector<std::uint8_t>(
+            e.accepted_profile_content_hash.begin(),
+            e.accepted_profile_content_hash.end())));
+        m.put_uint(11, encode_uint(e.diagnostic_visibility_class));
+        m.put_uint(12, encode_uint(e.enabled_in_this_runtime ? 1 : 0));
+        entry_bytes.push_back(m.build());
+    }
+
+    MapBuilder header;
+    header.put_uint(1, encode_text(registry_version_));
+    header.put_uint(2, encode_text(runtime_build_id_));
+    header.put_uint(3, encode_text(package_schema_version_));
+    header.put_uint(4, encode_uint(registry_epoch_));
+    header.put_uint(5, encode_array(entry_bytes));
+    return header.build();
+}
+
+std::vector<std::uint8_t>
+build_inner_partition_bytes(const std::vector<std::uint8_t>& unit_binding_table_bytes,
+                            const std::vector<std::uint8_t>& resolved_profile_table_bytes,
+                            const std::vector<std::uint8_t>& registry_bytes) {
+    using namespace VMPilot::Fixtures::Cbor;
+    MapBuilder m;
+    m.put_uint(1, encode_bytes(unit_binding_table_bytes));
+    m.put_uint(2, encode_bytes(resolved_profile_table_bytes));
+    m.put_uint(3, encode_bytes(registry_bytes));
+    return m.build();
+}
+
 // ─── PackageArtifactBuilder ─────────────────────────────────────────────
 
 PackageArtifactBuilder::PackageArtifactBuilder()
@@ -335,7 +431,9 @@ PackageArtifactBuilder::PackageArtifactBuilder()
       encoding_id_{"canonical-metadata-bytes-v1"},
       anti_downgrade_epoch_{1},
       minimum_runtime_epoch_{1},
-      inner_bytes_(std::vector<std::uint8_t>(64, 0xAB)),
+      unit_binding_table_bytes_(std::vector<std::uint8_t>(32, 0xAB)),
+      resolved_profile_table_bytes_(std::vector<std::uint8_t>(48, 0xBC)),
+      registry_bytes_{RuntimeSpecializationRegistryBuilder{}.build()},
       payload_bytes_(std::vector<std::uint8_t>(96, 0xCD)),
       signing_seed_{TestKey::kPrivateSeed},
       signing_public_key_{TestKey::kPublicKey},
@@ -363,7 +461,19 @@ PackageArtifactBuilder::minimum_runtime_epoch(std::uint64_t v) {
 }
 PackageArtifactBuilder&
 PackageArtifactBuilder::inner_partition_bytes(std::vector<std::uint8_t> v) {
-    inner_bytes_ = std::move(v); return *this;
+    inner_bytes_override_ = std::move(v); return *this;
+}
+PackageArtifactBuilder&
+PackageArtifactBuilder::unit_binding_table_bytes(std::vector<std::uint8_t> v) {
+    unit_binding_table_bytes_ = std::move(v); return *this;
+}
+PackageArtifactBuilder&
+PackageArtifactBuilder::resolved_profile_table_bytes(std::vector<std::uint8_t> v) {
+    resolved_profile_table_bytes_ = std::move(v); return *this;
+}
+PackageArtifactBuilder&
+PackageArtifactBuilder::registry_bytes(std::vector<std::uint8_t> v) {
+    registry_bytes_ = std::move(v); return *this;
 }
 PackageArtifactBuilder&
 PackageArtifactBuilder::payload_bytes(std::vector<std::uint8_t> v) {
@@ -383,17 +493,40 @@ PackageArtifactBuilder::auth_key_id(std::string v) {
 }
 
 PackageArtifactAssembly PackageArtifactBuilder::build() const {
-    // Inner-partition-derived hashes — doc 06 §6.1 `unit_binding_table_hash`
-    // and friends. Domain labels differ so the three digests don't
-    // collide despite covering the same byte range. Stages 6/7 will
-    // introduce real per-table byte slicing; the contract surface stays
-    // the same.
-    const auto ubt_hash = VMPilot::Cbor::domain_hash_sha256(
-        VMPilot::DomainLabels::Hash::UnitBindingTable, inner_bytes_);
-    const auto rpt_hash = VMPilot::Cbor::domain_hash_sha256(
-        VMPilot::DomainLabels::Hash::ResolvedProfileTable, inner_bytes_);
-    const auto reg_hash = VMPilot::Cbor::domain_hash_sha256(
-        VMPilot::DomainLabels::Hash::RuntimeSpecRegistry, inner_bytes_);
+    // Assemble the inner partition from its three sub-tables unless the
+    // caller supplied a pre-built partition override (used by tests that
+    // want to feed in intentionally malformed inner bytes).
+    const std::vector<std::uint8_t> inner_bytes =
+        inner_bytes_override_.empty()
+            ? build_inner_partition_bytes(unit_binding_table_bytes_,
+                                          resolved_profile_table_bytes_,
+                                          registry_bytes_)
+            : inner_bytes_override_;
+
+    // Per-sub-table hashes. Each covers only its own byte range, domain-
+    // separated, matching the acceptance rule in runtime/src/binding/
+    // package.cpp. If the override is in use, fall back to hashing the
+    // whole partition — there's no sub-table structure to slice.
+    std::array<std::uint8_t, 32> ubt_hash{};
+    std::array<std::uint8_t, 32> rpt_hash{};
+    std::array<std::uint8_t, 32> reg_hash{};
+    if (inner_bytes_override_.empty()) {
+        ubt_hash = VMPilot::Cbor::domain_hash_sha256(
+            VMPilot::DomainLabels::Hash::UnitBindingTable, unit_binding_table_bytes_);
+        rpt_hash = VMPilot::Cbor::domain_hash_sha256(
+            VMPilot::DomainLabels::Hash::ResolvedProfileTable, resolved_profile_table_bytes_);
+        reg_hash = VMPilot::Cbor::domain_hash_sha256(
+            VMPilot::DomainLabels::Hash::RuntimeSpecRegistry, registry_bytes_);
+    } else {
+        // Override path — tests that go here have also typically set
+        // specific hash mismatches as part of their expected failure.
+        ubt_hash = VMPilot::Cbor::domain_hash_sha256(
+            VMPilot::DomainLabels::Hash::UnitBindingTable, inner_bytes);
+        rpt_hash = VMPilot::Cbor::domain_hash_sha256(
+            VMPilot::DomainLabels::Hash::ResolvedProfileTable, inner_bytes);
+        reg_hash = VMPilot::Cbor::domain_hash_sha256(
+            VMPilot::DomainLabels::Hash::RuntimeSpecRegistry, inner_bytes);
+    }
 
     // Two-pass artifact_layout_hash computation:
     //
@@ -427,7 +560,7 @@ PackageArtifactAssembly PackageArtifactBuilder::build() const {
 
     OuterEnvelopeBuilder oeb1;
     oeb1.pbr_bytes(placeholder_partition)
-        .inner_partition_bytes(inner_bytes_)
+        .inner_partition_bytes(inner_bytes)
         .payload_bytes(payload_bytes_);
     const auto placeholder_envelope = oeb1.build();
 
@@ -463,7 +596,7 @@ PackageArtifactAssembly PackageArtifactBuilder::build() const {
 
     OuterEnvelopeBuilder oeb2;
     oeb2.pbr_bytes(real_partition)
-        .inner_partition_bytes(inner_bytes_)
+        .inner_partition_bytes(inner_bytes)
         .payload_bytes(payload_bytes_);
     const auto final_envelope = oeb2.build();
 

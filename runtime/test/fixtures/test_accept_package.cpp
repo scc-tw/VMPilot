@@ -170,10 +170,18 @@ TEST(AcceptPackage, AntiDowngradeEpochBelowThresholdRejected) {
 
 TEST(AcceptPackage, TamperedInnerPartitionBreaksUnitBindingHash) {
     auto art = VMPilot::Fixtures::PackageArtifactBuilder{}.build();
-    // Flip a byte in the inner partition. The signed PBR commits to the
-    // three inner-derived hashes; the first mismatch the verifier reaches
-    // is the unit_binding_table one.
-    art.bytes[art.inner_offset + 1] ^= 0xAA;
+    // Inner partition is a CBOR map with three byte-string sub-tables.
+    // The layout starts:
+    //   0xa3           map(3)
+    //   0x01           key = 1 (unit_binding_table)
+    //   0x58 0x20      bytes(32)
+    //   <32 bytes UBT>
+    //   0x02           key = 2 ...
+    //
+    // Byte 4 onwards is inside the UBT payload; flipping it preserves
+    // CBOR validity but breaks the unit_binding_table_hash commitment.
+    ASSERT_GE(art.inner_length, 8u);
+    art.bytes[art.inner_offset + 5] ^= 0xAA;
     auto r = accept(art);
     ASSERT_FALSE(r.has_value());
     EXPECT_EQ(r.error(), AcceptError::UnitBindingTableHashMismatch);
