@@ -68,6 +68,7 @@ add_library(VMPilot_Runtime STATIC
     src/binding/resolved_profile.cpp
     src/registry/registry.cpp
     src/provider/local_embedded.cpp
+    src/tokens.cpp
     ${PLATFORM_ASM_SOURCES}
 )
 
@@ -201,6 +202,10 @@ if(ENABLE_TESTS)
     )
         vmpilot_add_runtime_test(${_t} SOURCES test/integration/${_t}.cpp)
     endforeach()
+
+    vmpilot_add_runtime_test(test_tokens
+        SOURCES test/integration/test_tokens.cpp
+        WITH_FIXTURES)
 
     vmpilot_add_runtime_test(test_vm_runner
         SOURCES test/integration/test_vm_runner.cpp
