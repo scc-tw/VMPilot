@@ -109,6 +109,22 @@ accept_package(const std::uint8_t* artifact_data,
     }
     const std::uint8_t* pbr_bytes = artifact_data + env.package_binding_record.offset;
 
+    // 1a. Trust root sanity. trust_root_is_well_formed() guards magic,
+    //     version, usage label, zero-key, and string termination — any
+    //     tamper of the pinned .vmpltr section fails here before a
+    //     single signature byte is touched.
+    if (!trust_root_is_well_formed()) {
+        return err(AcceptError::TrustRootMalformed);
+    }
+    // Enforce the `key_usage` label separately. trust_root_is_well_formed
+    // already rejects a wrong usage string, but making the check explicit
+    // at every verification site means future key_usage types (e.g.
+    // entitlement signing) can't accidentally satisfy artifact verification.
+    if (std::strcmp(root.key_usage,
+                    VMPilot::Runtime::kTrustRootKeyUsage) != 0) {
+        return err(AcceptError::TrustRootKeyUsageMismatch);
+    }
+
     // 2. The PBR partition is a strict CBOR array of exactly two elements:
     //    [0] byte string holding the PBR canonical content (fields 1..9)
     //    [1] map holding the PackageBindingAuth (doc 06 §9.2)
@@ -138,6 +154,16 @@ accept_package(const std::uint8_t* artifact_data,
     // auth objects that name a different key until delegated trust is
     // implemented (Stage 10+).
     if (*auth_key_id_or != root.root_key_id) return err(AcceptError::AuthKeyIdMismatch);
+
+    // signature_alg_id must match the algorithm the embedded key is
+    // declared for. Without this check an artifact signed with a future
+    // alg (post-quantum etc.) could slip past when the runtime only
+    // knows how to verify Ed25519.
+    auto auth_alg_or = require_text(auth_v, kAuth_SignatureAlgId);
+    if (!auth_alg_or) return err(auth_alg_or.error());
+    if (*auth_alg_or != root.signature_alg_id) {
+        return err(AcceptError::AuthSignatureAlgMismatch);
+    }
 
     auto auth_domain_or = require_text(auth_v, kAuth_CoveredDomain);
     if (!auth_domain_or) return err(auth_domain_or.error());

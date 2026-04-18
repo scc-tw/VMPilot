@@ -73,11 +73,16 @@ enum class AcceptError : std::uint8_t {
     WrongHashSize,                // expected 32 bytes for a *_hash field
     SignatureWrongSize,
 
+    // Trust root sanity.
+    TrustRootMalformed,           // trust_root_is_well_formed() == false
+    TrustRootKeyUsageMismatch,    // root.key_usage != "artifact_binding_root"
+
     // Authenticity.
     SignatureInvalid,
     AuthCoveredDomainMismatch,    // binding_auth.covered_domain != "package-binding-v1"
     AuthKindUnsupported,
     AuthKeyIdMismatch,            // delegate not supported yet; reject unknown key_id
+    AuthSignatureAlgMismatch,     // binding_auth.signature_alg_id != root.signature_alg_id
 
     // Acceptance policy gates.
     UnsupportedPackageSchemaVersion,

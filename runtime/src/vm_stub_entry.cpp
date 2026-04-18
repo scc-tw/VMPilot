@@ -244,14 +244,28 @@ int64_t vm_stub_entry_artifact(const VmStubArtifactArgs* args) noexcept {
 
     // Stage 5: package acceptance. Runtime epoch state is a compile-time
     // default for now — Stage 12 will wire in persistent state.
-    VMPilot::Runtime::Binding::AcceptConfig cfg{
-        {"package-schema-v1"},
-        {"canonical-metadata-bytes-v1"},
-        VMPilot::Runtime::Binding::RuntimeEpochState{
+    //
+    // The supported schema and canonical-encoding lists are central to
+    // every acceptance check, so they live in a single named constant
+    // rather than an inline initializer list duplicated at every call
+    // site. Future Stage-12 config loading will replace this function.
+    const auto cfg = [] {
+        VMPilot::Runtime::Binding::AcceptConfig c;
+        c.supported_schema_versions     = {"package-schema-v1"};
+        c.supported_canonical_encodings = {"canonical-metadata-bytes-v1"};
+        c.epoch = VMPilot::Runtime::Binding::RuntimeEpochState{
             /*runtime_epoch          */ 2,
             /*minimum_accepted_epoch */ 1,
-        },
-    };
+        };
+        return c;
+    }();
+
+    // Root epoch cross-check. VendorTrustRoot.root_epoch tracks trust-
+    // anchor rotation; rotation handling is Stage-12 territory but a
+    // zero value in a shipping runtime is always a provisioning bug.
+    if (VMPilot::Runtime::trust_root().root_epoch == 0) {
+        return fail_closed();
+    }
 
     auto pkg_or = VMPilot::Runtime::Binding::accept_package(
         args->artifact_data, static_cast<std::size_t>(args->artifact_size),

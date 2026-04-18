@@ -108,8 +108,9 @@ enum class UnitAcceptError : std::uint8_t {
     DescriptorUnitIdentityMismatch,
     UnitDescriptorBindingRecordIdMismatch,
 
-    // Epoch gate.
-    AntiDowngradeEpochTooOld,
+    // Epoch gates.
+    AntiDowngradeEpochTooOld,          // UBR vs runtime.minimum_accepted_epoch
+    PackageEpochBelowUnitEpoch,        // PBR.anti_downgrade_epoch < UBR's (doc 06 §10)
 };
 
 tl::expected<AcceptedUnit, UnitAcceptError>

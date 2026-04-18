@@ -431,9 +431,18 @@ accept_unit_entry(const std::uint8_t* artifact_data,
         return err(UnitAcceptError::PayloadSha256Mismatch);
     }
 
-    // 8. Anti-downgrade gate (per-unit).
+    // 8. Anti-downgrade gates.
+    //    8a. UBR vs runtime floor.
     if (ubr.anti_downgrade_epoch < config.epoch.minimum_accepted_epoch) {
         return err(UnitAcceptError::AntiDowngradeEpochTooOld);
+    }
+    //    8b. Package must monotonically cover the unit (doc 06 §10):
+    //         package anti-downgrade epoch >= unit anti-downgrade epoch.
+    //         Otherwise a PBR from an older ship could paper over a newer
+    //         UBR, which is exactly the downgrade scenario the lattice
+    //         exists to prevent.
+    if (accepted_pkg.anti_downgrade_epoch < ubr.anti_downgrade_epoch) {
+        return err(UnitAcceptError::PackageEpochBelowUnitEpoch);
     }
 
     AcceptedUnit out;
