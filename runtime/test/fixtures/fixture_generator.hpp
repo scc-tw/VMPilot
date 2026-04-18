@@ -77,6 +77,122 @@ private:
     std::string auth_key_id_;
 };
 
+// ─── UnitDescriptor builder ─────────────────────────────────────────────
+
+class UnitDescriptorBuilder {
+public:
+    UnitDescriptorBuilder();
+
+    UnitDescriptorBuilder& descriptor_version(std::string v);
+    UnitDescriptorBuilder& unit_id(std::string v);
+    UnitDescriptorBuilder& unit_identity_hash(std::array<std::uint8_t, 32> v);
+    UnitDescriptorBuilder& family_id(std::string v);
+    UnitDescriptorBuilder& requested_policy_id(std::string v);
+    UnitDescriptorBuilder& resolved_family_profile_id(std::string v);
+    UnitDescriptorBuilder& payload_sha256(std::array<std::uint8_t, 32> v);
+    UnitDescriptorBuilder& payload_size(std::uint64_t v);
+    UnitDescriptorBuilder& unit_binding_record_id(std::string v);
+
+    std::vector<std::uint8_t> build() const;
+
+private:
+    std::string descriptor_version_;
+    std::string unit_id_;
+    std::array<std::uint8_t, 32> unit_identity_hash_{};
+    std::string family_id_;
+    std::string requested_policy_id_;
+    std::string resolved_family_profile_id_;
+    std::array<std::uint8_t, 32> payload_sha256_{};
+    std::uint64_t payload_size_{0};
+    std::string unit_binding_record_id_;
+};
+
+// ─── ResolvedFamilyProfile (minimal) builder ────────────────────────────
+//
+// Stage 7 only needs the profile to be identifiable by profile_id and
+// hash-verifiable. Full profile field parsing (policy_id / family_id /
+// profile_revision / runtime_specialization_id / etc.) arrives with
+// Stage 8 when dispatch actually consumes those fields.
+
+class ResolvedFamilyProfileBuilder {
+public:
+    ResolvedFamilyProfileBuilder();
+
+    ResolvedFamilyProfileBuilder& profile_id(std::string v);
+    ResolvedFamilyProfileBuilder& family_id(std::string v);
+    ResolvedFamilyProfileBuilder& requested_policy_id(std::string v);
+    ResolvedFamilyProfileBuilder& profile_revision(std::string v);
+    ResolvedFamilyProfileBuilder& runtime_specialization_id(std::string v);
+
+    std::vector<std::uint8_t> build() const;
+
+private:
+    std::string profile_id_;
+    std::string family_id_;
+    std::string requested_policy_id_;
+    std::string profile_revision_;
+    std::string runtime_specialization_id_;
+};
+
+// ─── UnitBindingRecord builder ──────────────────────────────────────────
+
+struct UnitBindingAuthSpec {
+    std::string kind{"package_signed_unit_inclusion_v1"};
+    std::array<std::uint8_t, 32> unit_binding_table_hash{};
+    std::uint64_t inclusion_index{0};
+    std::array<std::uint8_t, 32> record_hash{};
+};
+
+class UnitBindingRecordBuilder {
+public:
+    UnitBindingRecordBuilder();
+
+    UnitBindingRecordBuilder& unit_binding_record_id(std::string v);
+    UnitBindingRecordBuilder& unit_identity_hash(std::array<std::uint8_t, 32> v);
+    UnitBindingRecordBuilder& unit_descriptor_hash(std::array<std::uint8_t, 32> v);
+    UnitBindingRecordBuilder& family_id(std::string v);
+    UnitBindingRecordBuilder& requested_policy_id(std::string v);
+    UnitBindingRecordBuilder& resolved_family_profile_id(std::string v);
+    UnitBindingRecordBuilder& resolved_family_profile_content_hash(std::array<std::uint8_t, 32> v);
+    UnitBindingRecordBuilder& payload_sha256(std::array<std::uint8_t, 32> v);
+    UnitBindingRecordBuilder& payload_size(std::uint64_t v);
+    UnitBindingRecordBuilder& anti_downgrade_epoch(std::uint64_t v);
+    UnitBindingRecordBuilder& binding_auth(UnitBindingAuthSpec v);
+
+    std::vector<std::uint8_t> build() const;
+
+private:
+    std::string unit_binding_record_id_;
+    std::array<std::uint8_t, 32> unit_identity_hash_{};
+    std::array<std::uint8_t, 32> unit_descriptor_hash_{};
+    std::string family_id_;
+    std::string requested_policy_id_;
+    std::string resolved_family_profile_id_;
+    std::array<std::uint8_t, 32> resolved_family_profile_content_hash_{};
+    std::array<std::uint8_t, 32> payload_sha256_{};
+    std::uint64_t payload_size_{0};
+    std::uint64_t anti_downgrade_epoch_{1};
+    UnitBindingAuthSpec binding_auth_;
+};
+
+// Wrap a list of UBR canonical byte strings into a strict-CBOR array —
+// the on-disk shape of `unit_binding_table`. Each element in `ubr_bytes`
+// is itself the full UBR map encoding.
+std::vector<std::uint8_t>
+build_unit_binding_table_bytes(const std::vector<std::vector<std::uint8_t>>& ubr_bytes);
+
+// Wrap a list of (unit_id, descriptor_bytes) into the
+// UnitDescriptorTable CBOR map (text-keyed by unit_id).
+std::vector<std::uint8_t>
+build_unit_descriptor_table_bytes(
+    const std::vector<std::pair<std::string, std::vector<std::uint8_t>>>& entries);
+
+// Wrap a list of (profile_id, profile_bytes) into the
+// ResolvedFamilyProfileTable CBOR map (text-keyed by profile_id).
+std::vector<std::uint8_t>
+build_resolved_profile_table_bytes(
+    const std::vector<std::pair<std::string, std::vector<std::uint8_t>>>& entries);
+
 // ─── RuntimeSpecializationRegistry builder ──────────────────────────────
 //
 // Assembles the canonical CBOR bytes that make up the registry sub-table
@@ -118,14 +234,14 @@ private:
     std::vector<RegistryEntrySpec> entries_;
 };
 
-// Build the inner partition CBOR map that wraps the three sub-tables.
-// The UBT and profile-table payloads are arbitrary opaque bytes for now;
-// Stages 7+ will populate them with real content. `registry_bytes` should
-// be the output of RuntimeSpecializationRegistryBuilder::build().
+// Build the inner partition CBOR map that wraps the four sub-tables.
+// Keys 1..3 are committed by PBR hashes; key 4 (unit_descriptor_table)
+// flows through UBR.unit_descriptor_hash instead.
 std::vector<std::uint8_t>
 build_inner_partition_bytes(const std::vector<std::uint8_t>& unit_binding_table_bytes,
                             const std::vector<std::uint8_t>& resolved_profile_table_bytes,
-                            const std::vector<std::uint8_t>& registry_bytes);
+                            const std::vector<std::uint8_t>& registry_bytes,
+                            const std::vector<std::uint8_t>& unit_descriptor_table_bytes);
 
 // ─── PackageArtifact: full end-to-end artifact assembly ──────────────────
 //
@@ -172,10 +288,23 @@ public:
     PackageArtifactBuilder& inner_partition_bytes(std::vector<std::uint8_t> v);
 
     // Targeted sub-table overrides — only used when the caller has not
-    // already supplied a pre-built inner partition.
+    // already supplied a pre-built inner partition. Leaving any of these
+    // empty lets build() auto-assemble a self-consistent sub-table from
+    // the default UnitDescriptor / UnitBindingRecord / profile builders.
     PackageArtifactBuilder& unit_binding_table_bytes(std::vector<std::uint8_t> v);
     PackageArtifactBuilder& resolved_profile_table_bytes(std::vector<std::uint8_t> v);
+    PackageArtifactBuilder& unit_descriptor_table_bytes(std::vector<std::uint8_t> v);
     PackageArtifactBuilder& registry_bytes(std::vector<std::uint8_t> v);
+
+    // Unit identity for the default unit baked into auto-assembled sub-
+    // tables. Setters here are ignored when a caller has already fed in
+    // table-level override bytes above.
+    PackageArtifactBuilder& default_unit_id(std::string v);
+    PackageArtifactBuilder& default_unit_binding_record_id(std::string v);
+    PackageArtifactBuilder& default_resolved_family_profile_id(std::string v);
+    PackageArtifactBuilder& default_family_id(std::string v);
+    PackageArtifactBuilder& default_policy_id(std::string v);
+    PackageArtifactBuilder& default_unit_anti_downgrade_epoch(std::uint64_t v);
 
     PackageArtifactBuilder& payload_bytes(std::vector<std::uint8_t> v);
     PackageArtifactBuilder& signing_seed(std::array<std::uint8_t, 32> v);
@@ -192,11 +321,23 @@ private:
     std::uint64_t minimum_runtime_epoch_;
 
     // If non-empty the pre-built inner partition is used verbatim. Otherwise
-    // build() assembles a CBOR map out of the three sub-table fields.
+    // build() assembles a CBOR map out of the four sub-table fields, with
+    // any individually overridden sub-table swapped in.
     std::vector<std::uint8_t> inner_bytes_override_;
     std::vector<std::uint8_t> unit_binding_table_bytes_;
     std::vector<std::uint8_t> resolved_profile_table_bytes_;
+    std::vector<std::uint8_t> unit_descriptor_table_bytes_;
     std::vector<std::uint8_t> registry_bytes_;
+
+    // Default-unit specs used to auto-assemble sub-tables when they are
+    // not overridden. build() keeps these in sync so the generated UBR,
+    // descriptor, and profile all agree with each other.
+    std::string default_unit_id_{"u-happy"};
+    std::string default_record_id_{"ubr-happy"};
+    std::string default_profile_id_{"rfp-happy"};
+    std::string default_family_id_{"f1"};
+    std::string default_policy_id_{"standard"};
+    std::uint64_t default_unit_anti_downgrade_epoch_{1};
 
     std::vector<std::uint8_t> payload_bytes_;
     std::array<std::uint8_t, 32> signing_seed_;

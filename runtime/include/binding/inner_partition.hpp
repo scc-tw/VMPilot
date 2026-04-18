@@ -9,24 +9,21 @@
 
 // Structured inner metadata partition.
 //
-// The outer envelope carries a single `inner_metadata_partition_ref` locator
-// pointing at one contiguous range of bytes. Inside that range we store a
-// strict-CBOR map keyed by small unsigned integers — each key names a
-// specific sub-table. PBR commits to the hash of each sub-table's raw byte
-// payload (not the CBOR envelope around it), so hash commitments stay stable
-// across CBOR re-encodes of the outer map.
-//
-// Schema (doc 06 §6.1 describes the three hashes; doc 15 §5.1 describes the
-// inner partition shape):
+// Schema (doc 06 §6.1 + doc 15 §5.1):
 //
 //     {
-//       1: bytes  // unit_binding_table   — Stage 7 populates
-//       2: bytes  // resolved_profile_table — Stage 7 populates
-//       3: bytes  // runtime_specialization_registry — Stage 6 populates
+//       1: bytes  unit_binding_table               — Stage 7
+//       2: bytes  resolved_profile_table           — Stage 7
+//       3: bytes  runtime_specialization_registry  — Stage 6
+//       4: bytes  unit_descriptor_table            — Stage 7 (no PBR hash;
+//                                                   authenticity flows
+//                                                   through UBR per
+//                                                   doc 06 §6.3)
 //     }
 //
-// Stages 6 and 7 layer concrete content inside each byte string without
-// changing the outer map shape.
+// Keys 1..3 are committed by PackageBindingRecord hashes. Key 4 is NOT
+// separately hashed — each UnitBindingRecord carries a
+// `unit_descriptor_hash` that covers its corresponding descriptor.
 
 namespace VMPilot::Runtime::Binding {
 
@@ -45,6 +42,7 @@ struct InnerPartition {
     std::vector<std::uint8_t> unit_binding_table;
     std::vector<std::uint8_t> resolved_profile_table;
     std::vector<std::uint8_t> runtime_specialization_registry;
+    std::vector<std::uint8_t> unit_descriptor_table;
 };
 
 tl::expected<InnerPartition, InnerPartitionError>

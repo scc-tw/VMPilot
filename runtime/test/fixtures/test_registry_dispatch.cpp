@@ -232,20 +232,44 @@ TEST(Registry, FullArtifactRegistryIsReachable) {
 }
 
 TEST(Registry, MutatingRegistryBytesBreaksPbrCommitment) {
+    // Locate the registry sub-range inside the inner partition and flip a
+    // byte inside its payload. PBR commits to the registry bytes under a
+    // domain label; any content mutation must surface as a
+    // RuntimeSpecializationRegistryHashMismatch during accept_package.
     auto art = VMPilot::Fixtures::PackageArtifactBuilder{}.build();
     auto env = parse_outer_envelope(art.bytes);
     ASSERT_TRUE(env.has_value());
 
-    // Flip a byte somewhere inside the inner partition. Because the
-    // registry bytes are the last sub-table value, flipping the very
-    // last byte of the inner partition range lands inside the registry
-    // payload. PBR commits to the registry sub-range under the
-    // `runtime-specialization-registry-v1` domain label, so the
-    // accept_package check must fire.
-    const auto inner_end =
-        env->inner_metadata_partition.offset + env->inner_metadata_partition.length;
-    ASSERT_GE(inner_end, 1u);
-    art.bytes[inner_end - 1] ^= 0x01;
+    // The inner partition is a strict-CBOR map; parse it and re-scan the
+    // buffer to find where sub-table 3 (registry) begins.
+    auto inner = VMPilot::Runtime::Binding::parse_inner_partition(
+        art.bytes.data() + env->inner_metadata_partition.offset,
+        env->inner_metadata_partition.length);
+    ASSERT_TRUE(inner.has_value());
+    const auto& reg_bytes = inner->runtime_specialization_registry;
+    ASSERT_FALSE(reg_bytes.empty());
+
+    // Find the registry bytes within the artifact — search for the first
+    // occurrence of the full registry payload inside the inner partition
+    // range. The test encoder emits the registry as a single contiguous
+    // byte string, so this is a reliable fingerprint.
+    const std::size_t inner_start = env->inner_metadata_partition.offset;
+    const std::size_t inner_end = inner_start + env->inner_metadata_partition.length;
+    std::size_t reg_offset = 0;
+    bool found = false;
+    for (std::size_t i = inner_start; i + reg_bytes.size() <= inner_end; ++i) {
+        if (std::memcmp(art.bytes.data() + i, reg_bytes.data(), reg_bytes.size()) == 0) {
+            reg_offset = i;
+            found = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(found);
+
+    // Flip a byte well inside the registry payload so we don't hit a
+    // CBOR structural byte of either the registry envelope or the
+    // enclosing inner partition map.
+    art.bytes[reg_offset + reg_bytes.size() / 2] ^= 0x01;
 
     auto accepted = accept_package(art.bytes.data(), art.bytes.size(),
                                    VMPilot::Runtime::trust_root(), *env,

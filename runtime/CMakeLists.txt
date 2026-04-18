@@ -63,6 +63,7 @@ add_library(VMPilot_Runtime STATIC
     src/envelope/outer.cpp
     src/binding/package.cpp
     src/binding/inner_partition.cpp
+    src/binding/unit.cpp
     src/registry/registry.cpp
     ${PLATFORM_ASM_SOURCES}
 )
@@ -215,6 +216,10 @@ if(ENABLE_TESTS)
 
     vmpilot_add_runtime_test(test_registry_dispatch
         SOURCES test/fixtures/test_registry_dispatch.cpp
+        WITH_FIXTURES)
+
+    vmpilot_add_runtime_test(test_accept_unit_entry
+        SOURCES test/fixtures/test_accept_unit_entry.cpp
         WITH_FIXTURES)
 
     # ── security/ — Doc 15-19 cryptographic invariants ──

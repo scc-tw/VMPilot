@@ -9,6 +9,7 @@
 #include "sign_ed25519_testonly.hpp"
 #include "test_signing_key.hpp"
 
+#include "VMPilot_crypto.hpp"
 #include "cbor/strict.hpp"
 #include "vm/domain_labels.hpp"
 
@@ -327,6 +328,219 @@ PackageBindingRecordBuilder::build_partition_bytes() const {
     return wrap_partition_array(signed_.canonical_bytes, auth_bytes);
 }
 
+// ─── UnitDescriptor / UnitBindingRecord / ResolvedFamilyProfile ─────────
+
+UnitDescriptorBuilder::UnitDescriptorBuilder()
+    : descriptor_version_{"descriptor-v1"},
+      unit_id_{"u-happy"},
+      unit_identity_hash_{filled(0x50)},
+      family_id_{"f1"},
+      requested_policy_id_{"standard"},
+      resolved_family_profile_id_{"rfp-happy"},
+      unit_binding_record_id_{"ubr-happy"} {}
+
+UnitDescriptorBuilder& UnitDescriptorBuilder::descriptor_version(std::string v) {
+    descriptor_version_ = std::move(v); return *this;
+}
+UnitDescriptorBuilder& UnitDescriptorBuilder::unit_id(std::string v) {
+    unit_id_ = std::move(v); return *this;
+}
+UnitDescriptorBuilder& UnitDescriptorBuilder::unit_identity_hash(std::array<std::uint8_t, 32> v) {
+    unit_identity_hash_ = v; return *this;
+}
+UnitDescriptorBuilder& UnitDescriptorBuilder::family_id(std::string v) {
+    family_id_ = std::move(v); return *this;
+}
+UnitDescriptorBuilder& UnitDescriptorBuilder::requested_policy_id(std::string v) {
+    requested_policy_id_ = std::move(v); return *this;
+}
+UnitDescriptorBuilder& UnitDescriptorBuilder::resolved_family_profile_id(std::string v) {
+    resolved_family_profile_id_ = std::move(v); return *this;
+}
+UnitDescriptorBuilder& UnitDescriptorBuilder::payload_sha256(std::array<std::uint8_t, 32> v) {
+    payload_sha256_ = v; return *this;
+}
+UnitDescriptorBuilder& UnitDescriptorBuilder::payload_size(std::uint64_t v) {
+    payload_size_ = v; return *this;
+}
+UnitDescriptorBuilder& UnitDescriptorBuilder::unit_binding_record_id(std::string v) {
+    unit_binding_record_id_ = std::move(v); return *this;
+}
+
+std::vector<std::uint8_t> UnitDescriptorBuilder::build() const {
+    using namespace VMPilot::Fixtures::Cbor;
+
+    MapBuilder pi;
+    pi.put_uint(1, encode_bytes(bytes_from(payload_sha256_)));
+    pi.put_uint(2, encode_uint(payload_size_));
+    const auto pi_bytes = pi.build();
+
+    MapBuilder m;
+    m.put_uint(1, encode_text(descriptor_version_));
+    m.put_uint(2, encode_text(unit_id_));
+    m.put_uint(3, encode_bytes(bytes_from(unit_identity_hash_)));
+    m.put_uint(4, encode_text(family_id_));
+    m.put_uint(5, encode_text(requested_policy_id_));
+    m.put_uint(6, encode_text(resolved_family_profile_id_));
+    m.put_uint(7, pi_bytes);
+    m.put_uint(8, encode_text(unit_binding_record_id_));
+    return m.build();
+}
+
+ResolvedFamilyProfileBuilder::ResolvedFamilyProfileBuilder()
+    : profile_id_{"rfp-happy"},
+      family_id_{"f1"},
+      requested_policy_id_{"standard"},
+      profile_revision_{"rev1"},
+      runtime_specialization_id_{"f1-standard-v1"} {}
+
+ResolvedFamilyProfileBuilder&
+ResolvedFamilyProfileBuilder::profile_id(std::string v) {
+    profile_id_ = std::move(v); return *this;
+}
+ResolvedFamilyProfileBuilder&
+ResolvedFamilyProfileBuilder::family_id(std::string v) {
+    family_id_ = std::move(v); return *this;
+}
+ResolvedFamilyProfileBuilder&
+ResolvedFamilyProfileBuilder::requested_policy_id(std::string v) {
+    requested_policy_id_ = std::move(v); return *this;
+}
+ResolvedFamilyProfileBuilder&
+ResolvedFamilyProfileBuilder::profile_revision(std::string v) {
+    profile_revision_ = std::move(v); return *this;
+}
+ResolvedFamilyProfileBuilder&
+ResolvedFamilyProfileBuilder::runtime_specialization_id(std::string v) {
+    runtime_specialization_id_ = std::move(v); return *this;
+}
+
+std::vector<std::uint8_t> ResolvedFamilyProfileBuilder::build() const {
+    // Minimal Layer-1 / Layer-3 skeleton. Full profile surface arrives
+    // with Stage 8 when dispatch consumes policy/family/runtime_spec_id.
+    using namespace VMPilot::Fixtures::Cbor;
+    MapBuilder m;
+    m.put_uint(1, encode_text(profile_id_));
+    m.put_uint(2, encode_text(family_id_));
+    m.put_uint(3, encode_text(requested_policy_id_));
+    m.put_uint(4, encode_text(profile_revision_));
+    m.put_uint(5, encode_text(runtime_specialization_id_));
+    return m.build();
+}
+
+UnitBindingRecordBuilder::UnitBindingRecordBuilder()
+    : unit_binding_record_id_{"ubr-happy"},
+      unit_identity_hash_{filled(0x50)},
+      unit_descriptor_hash_{filled(0x60)},
+      family_id_{"f1"},
+      requested_policy_id_{"standard"},
+      resolved_family_profile_id_{"rfp-happy"},
+      resolved_family_profile_content_hash_{filled(0x70)},
+      payload_sha256_{filled(0x80)},
+      payload_size_{0},
+      anti_downgrade_epoch_{1} {}
+
+UnitBindingRecordBuilder&
+UnitBindingRecordBuilder::unit_binding_record_id(std::string v) {
+    unit_binding_record_id_ = std::move(v); return *this;
+}
+UnitBindingRecordBuilder&
+UnitBindingRecordBuilder::unit_identity_hash(std::array<std::uint8_t, 32> v) {
+    unit_identity_hash_ = v; return *this;
+}
+UnitBindingRecordBuilder&
+UnitBindingRecordBuilder::unit_descriptor_hash(std::array<std::uint8_t, 32> v) {
+    unit_descriptor_hash_ = v; return *this;
+}
+UnitBindingRecordBuilder&
+UnitBindingRecordBuilder::family_id(std::string v) {
+    family_id_ = std::move(v); return *this;
+}
+UnitBindingRecordBuilder&
+UnitBindingRecordBuilder::requested_policy_id(std::string v) {
+    requested_policy_id_ = std::move(v); return *this;
+}
+UnitBindingRecordBuilder&
+UnitBindingRecordBuilder::resolved_family_profile_id(std::string v) {
+    resolved_family_profile_id_ = std::move(v); return *this;
+}
+UnitBindingRecordBuilder&
+UnitBindingRecordBuilder::resolved_family_profile_content_hash(std::array<std::uint8_t, 32> v) {
+    resolved_family_profile_content_hash_ = v; return *this;
+}
+UnitBindingRecordBuilder&
+UnitBindingRecordBuilder::payload_sha256(std::array<std::uint8_t, 32> v) {
+    payload_sha256_ = v; return *this;
+}
+UnitBindingRecordBuilder&
+UnitBindingRecordBuilder::payload_size(std::uint64_t v) {
+    payload_size_ = v; return *this;
+}
+UnitBindingRecordBuilder&
+UnitBindingRecordBuilder::anti_downgrade_epoch(std::uint64_t v) {
+    anti_downgrade_epoch_ = v; return *this;
+}
+UnitBindingRecordBuilder&
+UnitBindingRecordBuilder::binding_auth(UnitBindingAuthSpec v) {
+    binding_auth_ = std::move(v); return *this;
+}
+
+std::vector<std::uint8_t> UnitBindingRecordBuilder::build() const {
+    using namespace VMPilot::Fixtures::Cbor;
+
+    MapBuilder pi;
+    pi.put_uint(1, encode_bytes(bytes_from(payload_sha256_)));
+    pi.put_uint(2, encode_uint(payload_size_));
+    const auto pi_bytes = pi.build();
+
+    MapBuilder auth;
+    auth.put_uint(1, encode_text(binding_auth_.kind));
+    auth.put_uint(2, encode_bytes(bytes_from(binding_auth_.unit_binding_table_hash)));
+    auth.put_uint(3, encode_uint(binding_auth_.inclusion_index));
+    auth.put_uint(4, encode_bytes(bytes_from(binding_auth_.record_hash)));
+    const auto auth_bytes = auth.build();
+
+    MapBuilder m;
+    m.put_uint(1,  encode_text(unit_binding_record_id_));
+    m.put_uint(2,  encode_bytes(bytes_from(unit_identity_hash_)));
+    m.put_uint(3,  encode_bytes(bytes_from(unit_descriptor_hash_)));
+    m.put_uint(4,  encode_text(family_id_));
+    m.put_uint(5,  encode_text(requested_policy_id_));
+    m.put_uint(6,  encode_text(resolved_family_profile_id_));
+    m.put_uint(7,  encode_bytes(bytes_from(resolved_family_profile_content_hash_)));
+    m.put_uint(8,  pi_bytes);
+    m.put_uint(9,  encode_uint(anti_downgrade_epoch_));
+    m.put_uint(10, auth_bytes);
+    return m.build();
+}
+
+std::vector<std::uint8_t>
+build_unit_binding_table_bytes(const std::vector<std::vector<std::uint8_t>>& ubr_bytes) {
+    return VMPilot::Fixtures::Cbor::encode_array(ubr_bytes);
+}
+
+std::vector<std::uint8_t>
+build_unit_descriptor_table_bytes(
+    const std::vector<std::pair<std::string, std::vector<std::uint8_t>>>& entries) {
+    using namespace VMPilot::Fixtures::Cbor;
+    MapBuilder m;
+    for (const auto& [unit_id, bytes] : entries) {
+        m.put_text(unit_id, encode_bytes(bytes));
+    }
+    return m.build();
+}
+
+std::vector<std::uint8_t>
+build_resolved_profile_table_bytes(
+    const std::vector<std::pair<std::string, std::vector<std::uint8_t>>>& entries) {
+    using namespace VMPilot::Fixtures::Cbor;
+    MapBuilder m;
+    for (const auto& [profile_id, bytes] : entries) {
+        m.put_text(profile_id, encode_bytes(bytes));
+    }
+    return m.build();
+}
+
 // ─── RuntimeSpecializationRegistryBuilder ───────────────────────────────
 
 RuntimeSpecializationRegistryBuilder::RuntimeSpecializationRegistryBuilder()
@@ -414,12 +628,14 @@ RuntimeSpecializationRegistryBuilder::build() const {
 std::vector<std::uint8_t>
 build_inner_partition_bytes(const std::vector<std::uint8_t>& unit_binding_table_bytes,
                             const std::vector<std::uint8_t>& resolved_profile_table_bytes,
-                            const std::vector<std::uint8_t>& registry_bytes) {
+                            const std::vector<std::uint8_t>& registry_bytes,
+                            const std::vector<std::uint8_t>& unit_descriptor_table_bytes) {
     using namespace VMPilot::Fixtures::Cbor;
     MapBuilder m;
     m.put_uint(1, encode_bytes(unit_binding_table_bytes));
     m.put_uint(2, encode_bytes(resolved_profile_table_bytes));
     m.put_uint(3, encode_bytes(registry_bytes));
+    m.put_uint(4, encode_bytes(unit_descriptor_table_bytes));
     return m.build();
 }
 
@@ -431,8 +647,6 @@ PackageArtifactBuilder::PackageArtifactBuilder()
       encoding_id_{"canonical-metadata-bytes-v1"},
       anti_downgrade_epoch_{1},
       minimum_runtime_epoch_{1},
-      unit_binding_table_bytes_(std::vector<std::uint8_t>(32, 0xAB)),
-      resolved_profile_table_bytes_(std::vector<std::uint8_t>(48, 0xBC)),
       registry_bytes_{RuntimeSpecializationRegistryBuilder{}.build()},
       payload_bytes_(std::vector<std::uint8_t>(96, 0xCD)),
       signing_seed_{TestKey::kPrivateSeed},
@@ -472,8 +686,36 @@ PackageArtifactBuilder::resolved_profile_table_bytes(std::vector<std::uint8_t> v
     resolved_profile_table_bytes_ = std::move(v); return *this;
 }
 PackageArtifactBuilder&
+PackageArtifactBuilder::unit_descriptor_table_bytes(std::vector<std::uint8_t> v) {
+    unit_descriptor_table_bytes_ = std::move(v); return *this;
+}
+PackageArtifactBuilder&
 PackageArtifactBuilder::registry_bytes(std::vector<std::uint8_t> v) {
     registry_bytes_ = std::move(v); return *this;
+}
+PackageArtifactBuilder&
+PackageArtifactBuilder::default_unit_id(std::string v) {
+    default_unit_id_ = std::move(v); return *this;
+}
+PackageArtifactBuilder&
+PackageArtifactBuilder::default_unit_binding_record_id(std::string v) {
+    default_record_id_ = std::move(v); return *this;
+}
+PackageArtifactBuilder&
+PackageArtifactBuilder::default_resolved_family_profile_id(std::string v) {
+    default_profile_id_ = std::move(v); return *this;
+}
+PackageArtifactBuilder&
+PackageArtifactBuilder::default_family_id(std::string v) {
+    default_family_id_ = std::move(v); return *this;
+}
+PackageArtifactBuilder&
+PackageArtifactBuilder::default_policy_id(std::string v) {
+    default_policy_id_ = std::move(v); return *this;
+}
+PackageArtifactBuilder&
+PackageArtifactBuilder::default_unit_anti_downgrade_epoch(std::uint64_t v) {
+    default_unit_anti_downgrade_epoch_ = v; return *this;
 }
 PackageArtifactBuilder&
 PackageArtifactBuilder::payload_bytes(std::vector<std::uint8_t> v) {
@@ -493,33 +735,125 @@ PackageArtifactBuilder::auth_key_id(std::string v) {
 }
 
 PackageArtifactAssembly PackageArtifactBuilder::build() const {
-    // Assemble the inner partition from its three sub-tables unless the
-    // caller supplied a pre-built partition override (used by tests that
-    // want to feed in intentionally malformed inner bytes).
+    // ── 1. Compute the default unit's payload identity from payload_bytes_.
+    //       Used downstream by the default descriptor + UBR builders.
+    const auto payload_sha_vec = VMPilot::Crypto::SHA256(payload_bytes_, {});
+    std::array<std::uint8_t, 32> payload_sha{};
+    if (payload_sha_vec.size() == 32) {
+        std::memcpy(payload_sha.data(), payload_sha_vec.data(), 32);
+    }
+    const std::uint64_t payload_size = payload_bytes_.size();
+
+    // Stable fictitious unit identity hash — domain-separated from any real
+    // hash label used elsewhere. Tests that want cross-unit mismatches
+    // pass override sub-tables.
+    const std::array<std::uint8_t, 32> unit_identity{
+        0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7,
+        0xD8, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD, 0xDE, 0xDF,
+        0xE0, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7,
+        0xE8, 0xE9, 0xEA, 0xEB, 0xEC, 0xED, 0xEE, 0xEF,
+    };
+
+    // ── 2. Auto-assemble each inner sub-table when no override is given.
+    //       Defaults produce a single-unit package whose descriptor, UBR,
+    //       and profile all reference each other consistently.
+
+    std::vector<std::uint8_t> descriptor_bytes;
+    std::vector<std::uint8_t> profile_bytes;
+    std::vector<std::uint8_t> unit_binding_table_bytes = unit_binding_table_bytes_;
+    std::vector<std::uint8_t> resolved_profile_table_bytes = resolved_profile_table_bytes_;
+    std::vector<std::uint8_t> unit_descriptor_table_bytes = unit_descriptor_table_bytes_;
+
+    if (unit_binding_table_bytes.empty() ||
+        resolved_profile_table_bytes.empty() ||
+        unit_descriptor_table_bytes.empty()) {
+
+        descriptor_bytes = UnitDescriptorBuilder{}
+            .descriptor_version("descriptor-v1")
+            .unit_id(default_unit_id_)
+            .unit_identity_hash(unit_identity)
+            .family_id(default_family_id_)
+            .requested_policy_id(default_policy_id_)
+            .resolved_family_profile_id(default_profile_id_)
+            .payload_sha256(payload_sha)
+            .payload_size(payload_size)
+            .unit_binding_record_id(default_record_id_)
+            .build();
+
+        profile_bytes = ResolvedFamilyProfileBuilder{}
+            .profile_id(default_profile_id_)
+            .family_id(default_family_id_)
+            .requested_policy_id(default_policy_id_)
+            .build();
+
+        const auto descriptor_hash = VMPilot::Cbor::domain_hash_sha256(
+            VMPilot::DomainLabels::Hash::UnitDescriptor, descriptor_bytes);
+        const auto profile_hash = VMPilot::Cbor::domain_hash_sha256(
+            VMPilot::DomainLabels::Hash::ResolvedFamilyProfile, profile_bytes);
+
+        UnitBindingAuthSpec auth;
+        // unit_binding_table_hash inside binding_auth is informational —
+        // acceptance does not cryptographically verify it (see Stage 7
+        // commentary). We stuff a stable sentinel so diff-views read
+        // consistently.
+        for (std::size_t i = 0; i < 32; ++i) auth.unit_binding_table_hash[i] = 0xAA;
+        auth.inclusion_index = 0;
+        for (std::size_t i = 0; i < 32; ++i) auth.record_hash[i] = 0xBB;
+
+        const auto ubr_bytes = UnitBindingRecordBuilder{}
+            .unit_binding_record_id(default_record_id_)
+            .unit_identity_hash(unit_identity)
+            .unit_descriptor_hash(descriptor_hash)
+            .family_id(default_family_id_)
+            .requested_policy_id(default_policy_id_)
+            .resolved_family_profile_id(default_profile_id_)
+            .resolved_family_profile_content_hash(profile_hash)
+            .payload_sha256(payload_sha)
+            .payload_size(payload_size)
+            .anti_downgrade_epoch(default_unit_anti_downgrade_epoch_)
+            .binding_auth(auth)
+            .build();
+
+        if (unit_binding_table_bytes.empty()) {
+            unit_binding_table_bytes = build_unit_binding_table_bytes({ubr_bytes});
+        }
+        if (unit_descriptor_table_bytes.empty()) {
+            unit_descriptor_table_bytes =
+                build_unit_descriptor_table_bytes({{default_unit_id_, descriptor_bytes}});
+        }
+        if (resolved_profile_table_bytes.empty()) {
+            resolved_profile_table_bytes =
+                build_resolved_profile_table_bytes({{default_profile_id_, profile_bytes}});
+        }
+    }
+
+    // ── 3. Inner partition CBOR map, honouring any explicit override.
     const std::vector<std::uint8_t> inner_bytes =
         inner_bytes_override_.empty()
-            ? build_inner_partition_bytes(unit_binding_table_bytes_,
-                                          resolved_profile_table_bytes_,
-                                          registry_bytes_)
+            ? build_inner_partition_bytes(unit_binding_table_bytes,
+                                          resolved_profile_table_bytes,
+                                          registry_bytes_,
+                                          unit_descriptor_table_bytes)
             : inner_bytes_override_;
 
-    // Per-sub-table hashes. Each covers only its own byte range, domain-
-    // separated, matching the acceptance rule in runtime/src/binding/
-    // package.cpp. If the override is in use, fall back to hashing the
-    // whole partition — there's no sub-table structure to slice.
+    // ── 4. Per-sub-table hashes. Domain-separated so the three digests
+    //       differ even when two happen to cover identical bytes.
     std::array<std::uint8_t, 32> ubt_hash{};
     std::array<std::uint8_t, 32> rpt_hash{};
     std::array<std::uint8_t, 32> reg_hash{};
     if (inner_bytes_override_.empty()) {
         ubt_hash = VMPilot::Cbor::domain_hash_sha256(
-            VMPilot::DomainLabels::Hash::UnitBindingTable, unit_binding_table_bytes_);
+            VMPilot::DomainLabels::Hash::UnitBindingTable, unit_binding_table_bytes);
         rpt_hash = VMPilot::Cbor::domain_hash_sha256(
-            VMPilot::DomainLabels::Hash::ResolvedProfileTable, resolved_profile_table_bytes_);
+            VMPilot::DomainLabels::Hash::ResolvedProfileTable, resolved_profile_table_bytes);
         reg_hash = VMPilot::Cbor::domain_hash_sha256(
             VMPilot::DomainLabels::Hash::RuntimeSpecRegistry, registry_bytes_);
     } else {
-        // Override path — tests that go here have also typically set
-        // specific hash mismatches as part of their expected failure.
+        // Override path — tests that go here have typically set specific
+        // hash mismatches as part of their expected failure. Fall back to
+        // hashing the whole partition blob; Stage 5 acceptance tries to
+        // parse it as a CBOR map and will reject on PbrPartitionMalformed
+        // if the shape is wrong.
         ubt_hash = VMPilot::Cbor::domain_hash_sha256(
             VMPilot::DomainLabels::Hash::UnitBindingTable, inner_bytes);
         rpt_hash = VMPilot::Cbor::domain_hash_sha256(
