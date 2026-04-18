@@ -169,7 +169,17 @@ public:
     /// Raw blob size in bytes.
     [[nodiscard]] size_t raw_size() const noexcept { return size_; }
 
-    /// Whether the blob was compiled in debug mode.
+    /// Parse hint only; MUST NOT be used for policy dispatch in the
+    /// redesigned runtime.
+    ///
+    /// Legacy `vm_stub_entry(VmStubArgs*)` still branches on this for
+    /// backward compatibility while existing tests migrate. New code
+    /// must reach policy/family selection exclusively through the
+    /// signed `PackageBindingRecord` → `UnitBindingRecord` →
+    /// `ResolvedFamilyProfile` → `RuntimeSpecializationRegistry` chain
+    /// via `vm_stub_entry_artifact`. `BLOB_FLAG_DEBUG` survives as a
+    /// forward-compat payload variant hint; any path that dispatches on
+    /// it is a downgrade vector (see doc 08 §2).
     [[nodiscard]] bool is_debug() const noexcept {
         return (header().flags & BLOB_FLAG_DEBUG) != 0;
     }

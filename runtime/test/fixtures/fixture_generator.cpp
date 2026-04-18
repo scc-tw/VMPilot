@@ -647,7 +647,11 @@ PackageArtifactBuilder::PackageArtifactBuilder()
       encoding_id_{"canonical-metadata-bytes-v1"},
       anti_downgrade_epoch_{1},
       minimum_runtime_epoch_{1},
-      registry_bytes_{RuntimeSpecializationRegistryBuilder{}.build()},
+      // registry_bytes_ intentionally left empty. build() either uses the
+      // caller's override via registry_bytes() setter, or auto-generates a
+      // registry whose single entry carries the real profile hash
+      // (accepted_profile_content_hash) so Stage 8 dispatch can verify
+      // without a second fix-up pass.
       payload_bytes_(std::vector<std::uint8_t>(96, 0xCD)),
       signing_seed_{TestKey::kPrivateSeed},
       signing_public_key_{TestKey::kPublicKey},
@@ -827,12 +831,37 @@ PackageArtifactAssembly PackageArtifactBuilder::build() const {
         }
     }
 
+    // ── 2b. Registry: when no override is supplied, emit a registry whose
+    //        single default entry carries the real profile content hash.
+    //        This lets Stage 8 dispatch verify
+    //        `entry.accepted_profile_content_hash ==
+    //        ubr.resolved_family_profile_content_hash` without a second
+    //        fix-up pass on the caller's side.
+    std::vector<std::uint8_t> registry_bytes = registry_bytes_;
+    if (registry_bytes.empty()) {
+        std::array<std::uint8_t, 32> computed_profile_hash{};
+        if (!profile_bytes.empty()) {
+            computed_profile_hash = VMPilot::Cbor::domain_hash_sha256(
+                VMPilot::DomainLabels::Hash::ResolvedFamilyProfile, profile_bytes);
+        }
+        RuntimeSpecializationRegistryBuilder reg;
+        reg.clear_entries();
+        RegistryEntrySpec e;
+        e.runtime_specialization_id = "f1-standard-v1";
+        e.family_id                 = default_family_id_;
+        e.requested_policy_id       = default_policy_id_;
+        e.profile_revision          = "rev1";
+        e.accepted_profile_content_hash = computed_profile_hash;
+        reg.add_entry(e);
+        registry_bytes = reg.build();
+    }
+
     // ── 3. Inner partition CBOR map, honouring any explicit override.
     const std::vector<std::uint8_t> inner_bytes =
         inner_bytes_override_.empty()
             ? build_inner_partition_bytes(unit_binding_table_bytes,
                                           resolved_profile_table_bytes,
-                                          registry_bytes_,
+                                          registry_bytes,
                                           unit_descriptor_table_bytes)
             : inner_bytes_override_;
 
@@ -847,7 +876,7 @@ PackageArtifactAssembly PackageArtifactBuilder::build() const {
         rpt_hash = VMPilot::Cbor::domain_hash_sha256(
             VMPilot::DomainLabels::Hash::ResolvedProfileTable, resolved_profile_table_bytes);
         reg_hash = VMPilot::Cbor::domain_hash_sha256(
-            VMPilot::DomainLabels::Hash::RuntimeSpecRegistry, registry_bytes_);
+            VMPilot::DomainLabels::Hash::RuntimeSpecRegistry, registry_bytes);
     } else {
         // Override path — tests that go here have typically set specific
         // hash mismatches as part of their expected failure. Fall back to

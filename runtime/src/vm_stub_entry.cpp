@@ -20,8 +20,20 @@
 #include <vm_engine.hpp>
 #include <vm/blob_view.hpp>
 
+#include <binding/inner_partition.hpp>
+#include <binding/package.hpp>
+#include <binding/resolved_profile.hpp>
+#include <binding/unit.hpp>
+#include <envelope/outer.hpp>
+#include <registry/registry.hpp>
+#include <trust_root.hpp>
+
 #include <climits>
 #include <cstdlib>
+#include <cstring>
+#include <string>
+#include <string_view>
+#include <vector>
 
 using namespace VMPilot::Common::VM;
 using namespace VMPilot::Runtime;
@@ -114,4 +126,191 @@ int64_t vm_stub_entry(const VmStubArgs* args) noexcept {
     } else {
         return execute_with_policy<StandardPolicy>(args);
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Stage 8 — redesigned entry point driven by the signed artifact chain.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Flow:
+//   1. Outer envelope parse (Stage 4)
+//   2. accept_package  — PBR signature + epoch + table hashes (Stage 5)
+//   3. accept_unit_entry — descriptor / UBR / profile / payload hashes (Stage 7)
+//   4. parse profile header — surface runtime_specialization_id + revision
+//   5. Registry lookup (Stage 6)
+//   6. entry.accepted_profile_content_hash ==
+//        ubr.resolved_family_profile_content_hash    (doc 08 §4)
+//   7. dispatch via (family, policy) → VmEngine<Policy, Oram> template
+//
+// blob header flags are not consulted at any point; dispatch is entirely
+// driven by signed metadata.
+
+namespace {
+
+// Raw payload + seed slice extracted from the accepted artifact. Passed
+// to the policy-dispatch helper as a plain-data handoff so the template
+// caller doesn't need to know about VmStubArtifactArgs.
+struct PayloadDispatch {
+    const std::uint8_t*  payload_data;
+    std::uint64_t        payload_size;
+    const std::uint8_t*  stored_seed;
+    std::int64_t         load_base_delta;
+    const std::uint64_t* initial_regs;
+    std::uint8_t         num_regs;
+};
+
+template <typename Policy>
+int64_t execute_with_policy_on_payload(const PayloadDispatch& d) noexcept {
+    auto engine = VmEngine<Policy>::create(
+        d.payload_data,
+        static_cast<std::size_t>(d.payload_size),
+        d.stored_seed,
+        d.load_base_delta,
+        d.initial_regs,
+        d.num_regs);
+    if (!engine.has_value()) {
+#ifdef NDEBUG
+        std::abort();
+#else
+        return INT64_MIN;
+#endif
+    }
+    auto result = engine->execute();
+    if (!result.has_value()) {
+#ifdef NDEBUG
+        std::abort();
+#else
+        return INT64_MIN;
+#endif
+    }
+    return static_cast<int64_t>(result->return_value);
+}
+
+// Dispatch to VmEngine<Policy> based on the signed (family, policy) tuple.
+// Only F1 is supported today; F2 / F3 are reserved families from doc 01
+// that fail closed here until their runtime paths land.
+int64_t dispatch_to_engine(std::string_view family_id,
+                           std::string_view policy_id,
+                           const PayloadDispatch& d) noexcept {
+    if (family_id != "f1") {
+#ifdef NDEBUG
+        std::abort();
+#else
+        return INT64_MIN;
+#endif
+    }
+    if (policy_id == "debug") {
+        return execute_with_policy_on_payload<DebugPolicy>(d);
+    }
+    if (policy_id == "standard") {
+        return execute_with_policy_on_payload<StandardPolicy>(d);
+    }
+    if (policy_id == "highsec") {
+        return execute_with_policy_on_payload<HighSecPolicy>(d);
+    }
+#ifdef NDEBUG
+    std::abort();
+#else
+    return INT64_MIN;
+#endif
+}
+
+// Fail-closed return. Compiled-in debug diagnostics surface INT64_MIN so
+// tests can assert on it; release builds abort so no attacker-controlled
+// control flow leaks past a rejected artifact.
+[[nodiscard]] int64_t fail_closed() noexcept {
+#ifdef NDEBUG
+    std::abort();
+#else
+    return INT64_MIN;
+#endif
+}
+
+}  // namespace
+
+extern "C"
+int64_t vm_stub_entry_artifact(const VmStubArtifactArgs* args) noexcept {
+    if (!args || args->version != VM_STUB_ARTIFACT_ABI_VERSION) {
+        return fail_closed();
+    }
+    if (!args->artifact_data || args->artifact_size == 0 ||
+        !args->unit_id || !args->stored_seed) {
+        return fail_closed();
+    }
+
+    // Stage 4: outer envelope.
+    auto env_or = VMPilot::Runtime::Envelope::parse_outer_envelope(
+        args->artifact_data, static_cast<std::size_t>(args->artifact_size));
+    if (!env_or) return fail_closed();
+
+    // Stage 5: package acceptance. Runtime epoch state is a compile-time
+    // default for now — Stage 12 will wire in persistent state.
+    VMPilot::Runtime::Binding::AcceptConfig cfg{
+        {"package-schema-v1"},
+        {"canonical-metadata-bytes-v1"},
+        VMPilot::Runtime::Binding::RuntimeEpochState{
+            /*runtime_epoch          */ 2,
+            /*minimum_accepted_epoch */ 1,
+        },
+    };
+
+    auto pkg_or = VMPilot::Runtime::Binding::accept_package(
+        args->artifact_data, static_cast<std::size_t>(args->artifact_size),
+        VMPilot::Runtime::trust_root(), *env_or, cfg);
+    if (!pkg_or) return fail_closed();
+
+    // Stage 7: unit acceptance keyed by the stub-provided unit id.
+    auto unit_or = VMPilot::Runtime::Binding::accept_unit_entry(
+        args->artifact_data, static_cast<std::size_t>(args->artifact_size),
+        *env_or, *pkg_or, std::string_view{args->unit_id}, cfg);
+    if (!unit_or) return fail_closed();
+
+    // Stage 8 core: parse the profile header to learn the specialization
+    // id + profile revision, then consult the signed registry carried in
+    // the same inner partition.
+    auto profile_or =
+        VMPilot::Runtime::Binding::parse_resolved_family_profile_header(
+            unit_or->resolved_profile_bytes);
+    if (!profile_or) return fail_closed();
+
+    // Inner partition must re-open to expose the registry bytes. The
+    // hash was already verified by accept_package, so this parse is safe.
+    auto inner_or = VMPilot::Runtime::Binding::parse_inner_partition(
+        args->artifact_data + env_or->inner_metadata_partition.offset,
+        env_or->inner_metadata_partition.length);
+    if (!inner_or) return fail_closed();
+
+    auto reg_or = VMPilot::Runtime::Registry::parse(
+        inner_or->runtime_specialization_registry);
+    if (!reg_or) return fail_closed();
+
+    auto entry_or = VMPilot::Runtime::Registry::lookup(
+        *reg_or,
+        profile_or->runtime_specialization_id,
+        unit_or->ubr.family_id,
+        unit_or->ubr.requested_policy_id,
+        profile_or->profile_revision);
+    if (!entry_or) return fail_closed();
+    const VMPilot::Runtime::Registry::SpecializationEntry* entry = *entry_or;
+
+    // Registry commits to the specific profile content it was built for.
+    // Compare against the UBR's commitment; a mismatch means the producer
+    // shipped a registry that doesn't correspond to the profile this
+    // unit resolved to.
+    if (std::memcmp(entry->accepted_profile_content_hash.data(),
+                    unit_or->ubr.resolved_family_profile_content_hash.data(),
+                    32) != 0) {
+        return fail_closed();
+    }
+
+    // Dispatch.
+    PayloadDispatch d;
+    d.payload_data = args->artifact_data + env_or->payload_partition.offset;
+    d.payload_size = env_or->payload_partition.length;
+    d.stored_seed = args->stored_seed;
+    d.load_base_delta = args->load_base_delta;
+    d.initial_regs = args->initial_regs;
+    d.num_regs = static_cast<std::uint8_t>(args->num_regs);
+
+    return dispatch_to_engine(entry->family_id, entry->requested_policy_id, d);
 }

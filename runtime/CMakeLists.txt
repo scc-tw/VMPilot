@@ -64,6 +64,7 @@ add_library(VMPilot_Runtime STATIC
     src/binding/package.cpp
     src/binding/inner_partition.cpp
     src/binding/unit.cpp
+    src/binding/resolved_profile.cpp
     src/registry/registry.cpp
     ${PLATFORM_ASM_SOURCES}
 )
@@ -220,6 +221,11 @@ if(ENABLE_TESTS)
 
     vmpilot_add_runtime_test(test_accept_unit_entry
         SOURCES test/fixtures/test_accept_unit_entry.cpp
+        WITH_FIXTURES)
+
+    vmpilot_add_runtime_test(test_vm_stub_artifact
+        SOURCES test/fixtures/test_vm_stub_artifact.cpp
+        EXTRA_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/include
         WITH_FIXTURES)
 
     # ── security/ — Doc 15-19 cryptographic invariants ──

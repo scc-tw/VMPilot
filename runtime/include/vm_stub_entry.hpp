@@ -47,10 +47,15 @@
 ///     without crashing the test harness.
 
 #include <vm/vm_stub_args.hpp>
+#include <vm_stub_artifact_args.hpp>
 
 #include <cstdint>
 
-/// Entry point for loader-generated stubs.
+/// Legacy entry point for loader-generated stubs.
+///
+/// Still uses blob-header-flag dispatch (doc 08 §2 violation) for
+/// backward compatibility while existing tests migrate to the artifact
+/// path. New callers must target `vm_stub_entry_artifact`.
 ///
 /// @param args  Pointer to VmStubArgs built on the stack by the entry stub.
 /// @return      VM return value (plaintext, decoded from register 0),
@@ -58,5 +63,22 @@
 extern "C"
 int64_t vm_stub_entry(
     const VMPilot::Common::VM::VmStubArgs* args) noexcept;
+
+/// Redesigned entry point: consumes a full signed artifact + unit id,
+/// walks Stage 4-7 acceptance, resolves the runtime specialization via
+/// signed RuntimeSpecializationRegistry, and dispatches to the
+/// appropriate VmEngine template instantiation.
+///
+/// Policy / family selection flows through:
+///   OuterEnvelope -> accept_package -> accept_unit_entry ->
+///   parse_resolved_family_profile_header -> Registry::lookup ->
+///   (Policy, Oram) template tag -> VmEngine<Policy, Oram>::execute
+///
+/// Any failure along the chain returns INT64_MIN in debug builds and
+/// aborts in production — consistent with the legacy entry's
+/// fail-closed policy.
+extern "C"
+int64_t vm_stub_entry_artifact(
+    const VMPilot::Runtime::VmStubArtifactArgs* args) noexcept;
 
 #endif  // __RUNTIME_VM_STUB_ENTRY_HPP__
