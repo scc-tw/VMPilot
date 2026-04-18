@@ -188,6 +188,10 @@ if(ENABLE_TESTS)
         SOURCES test/fixtures/test_fixture_smoke.cpp
         WITH_FIXTURES)
 
+    vmpilot_add_runtime_test(test_verify_ed25519
+        SOURCES test/fixtures/test_verify_ed25519.cpp
+        WITH_FIXTURES)
+
     # ── security/ — Doc 15-19 cryptographic invariants ──
 
     foreach(_t IN ITEMS
