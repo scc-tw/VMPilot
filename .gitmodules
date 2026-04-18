@@ -16,3 +16,6 @@ url = ../VMPilot-crypto.git
 [submodule "third_party/elfio-modern"]
 	path = third_party/elfio-modern
 	url = https://github.com/scc-tw/elfio-modern.git
+[submodule "third_party/libcbor"]
+	path = third_party/libcbor
+	url = https://github.com/PJK/libcbor.git
