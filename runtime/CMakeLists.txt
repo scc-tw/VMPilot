@@ -69,6 +69,7 @@ add_library(VMPilot_Runtime STATIC
     src/registry/registry.cpp
     src/provider/local_embedded.cpp
     src/tokens.cpp
+    src/epoch_store.cpp
     ${PLATFORM_ASM_SOURCES}
 )
 
@@ -206,6 +207,9 @@ if(ENABLE_TESTS)
     vmpilot_add_runtime_test(test_tokens
         SOURCES test/integration/test_tokens.cpp
         WITH_FIXTURES)
+
+    vmpilot_add_runtime_test(test_epoch_store
+        SOURCES test/integration/test_epoch_store.cpp)
 
     vmpilot_add_runtime_test(test_vm_runner
         SOURCES test/integration/test_vm_runner.cpp
