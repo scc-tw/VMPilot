@@ -13,9 +13,6 @@
 
 // Strict subset CBOR decoder for binding-critical metadata.
 //
-// Accepts only the restricted deterministic profile described in
-// docs/research/zh-tw/family-redesign/07-canonical-metadata-bytes.md:
-//
 //   • Major types 0 (uint), 2 (bytes), 3 (text), 4 (array), 5 (map).
 //   • Shortest-form unsigned integer encoding.
 //   • Definite-length for all items.
@@ -116,7 +113,6 @@ parse_strict(const std::vector<std::uint8_t>& bytes) noexcept {
 }
 
 // Domain-separated hash helper matching the scheme in
-// docs/research/zh-tw/family-redesign/07-canonical-metadata-bytes.md §4.
 //
 //   out = SHA-256( length_prefix(domain_label) || canonical_bytes )
 //

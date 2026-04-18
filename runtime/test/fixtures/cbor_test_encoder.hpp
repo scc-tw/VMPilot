@@ -22,8 +22,6 @@
 //   • definite-length byte / text strings, arrays, maps
 //   • map keys sorted by encoded CBOR bytes (RFC 8949 §4.2.1)
 //   • no floats, no indefinite length, no tags
-//
-// Contract source: docs/research/zh-tw/family-redesign/07-canonical-metadata-bytes.md
 
 namespace VMPilot::Fixtures::Cbor {
 

@@ -9,10 +9,6 @@
 // labels (prepended to canonical bytes before `H(...)`) must never alias each
 // other; a verifier that reuses a hash label as a `covered_domain`, or vice
 // versa, is a correctness bug.
-//
-// Contract sources:
-//   docs/research/zh-tw/family-redesign/06-binding-record-and-payload-identity.md §9.4
-//   docs/research/zh-tw/family-redesign/07-canonical-metadata-bytes.md §4
 
 namespace VMPilot::DomainLabels {
 

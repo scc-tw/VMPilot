@@ -59,8 +59,12 @@ add_library(VMPilot_Runtime STATIC
     src/blob_builder.cpp
     src/program_builder.cpp
     src/handler_detail.cpp
+    src/trust_root_embed.cpp
     ${PLATFORM_ASM_SOURCES}
 )
+
+include(${CMAKE_SOURCE_DIR}/cmake/TrustRoot.cmake)
+vmpilot_configure_trust_root(VMPilot_Runtime)
 
 target_include_directories(VMPilot_Runtime
     PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -190,6 +194,10 @@ if(ENABLE_TESTS)
 
     vmpilot_add_runtime_test(test_verify_ed25519
         SOURCES test/fixtures/test_verify_ed25519.cpp
+        WITH_FIXTURES)
+
+    vmpilot_add_runtime_test(test_trust_root
+        SOURCES test/fixtures/test_trust_root.cpp
         WITH_FIXTURES)
 
     # ── security/ — Doc 15-19 cryptographic invariants ──

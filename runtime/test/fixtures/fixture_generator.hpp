@@ -30,8 +30,6 @@ struct SignedArtifact {
 
 // ─── PackageBindingRecord ────────────────────────────────────────────────
 //
-// Fields per docs/research/zh-tw/family-redesign/06-binding-record-and-payload-identity.md §6.1.
-
 class PackageBindingRecordBuilder {
 public:
     PackageBindingRecordBuilder();  // installs happy-path defaults
