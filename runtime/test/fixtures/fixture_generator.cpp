@@ -36,6 +36,48 @@ std::vector<std::uint8_t> bytes_from(const std::array<std::uint8_t, 32>& a) {
     return std::vector<std::uint8_t>(a.begin(), a.end());
 }
 
+std::string default_family_specific_unwind_surface_ref(
+    std::string_view family_id) {
+    if (family_id == "f1") return "f1-unwind-surface-v1";
+    if (family_id == "f2") return "f2-unwind-surface-v1";
+    if (family_id == "f3") return "f3-unwind-surface-v1";
+    return std::string(family_id) + "-unwind-surface-v1";
+}
+
+std::vector<std::uint8_t> encode_exception_unwind_contract(
+    const ExceptionUnwindContractSpec& spec,
+    std::string_view family_id) {
+    using namespace VMPilot::Fixtures::Cbor;
+
+    MapBuilder eh;
+    eh.put_uint(1, encode_text(spec.eh_contract_version));
+    eh.put_uint(2, encode_text(spec.executable_eh_status));
+    eh.put_uint(3, encode_text(spec.planned_executable_eh_epoch));
+    eh.put_uint(4, encode_text(spec.cross_protected_frame_unwind));
+    eh.put_uint(5, encode_text(spec.native_boundary_unwind_behavior));
+    eh.put_uint(6, encode_text(spec.handler_table_status));
+    eh.put_uint(7, encode_text(spec.cleanup_table_status));
+    eh.put_uint(8, encode_text(spec.frame_contract_ref));
+    eh.put_uint(9, encode_text(spec.stackmap_contract_ref));
+    eh.put_uint(10, encode_text(spec.resume_contract_ref));
+    eh.put_uint(11, encode_text(spec.verifier_rules_ref));
+    eh.put_uint(12, encode_text(
+        spec.family_specific_unwind_surface_ref.empty()
+            ? default_family_specific_unwind_surface_ref(family_id)
+            : spec.family_specific_unwind_surface_ref));
+
+    if (!spec.critical_extensions.empty()) {
+        std::vector<std::vector<std::uint8_t>> ext_bytes;
+        ext_bytes.reserve(spec.critical_extensions.size());
+        for (const auto& extension : spec.critical_extensions) {
+            ext_bytes.push_back(encode_text(extension));
+        }
+        eh.put_uint(13, encode_array(ext_bytes));
+    }
+
+    return eh.build();
+}
+
 }  // namespace
 
 // ─── PackageBindingRecordBuilder ────────────────────────────────────────
@@ -392,7 +434,8 @@ ResolvedFamilyProfileBuilder::ResolvedFamilyProfileBuilder()
       family_id_{"f1"},
       requested_policy_id_{"standard"},
       profile_revision_{"rev1"},
-      runtime_specialization_id_{"f1-standard-v1"} {}
+    runtime_specialization_id_{"f1-standard-v1"},
+    semantic_contract_version_{"semantic-contract-v1"} {}
 
 ResolvedFamilyProfileBuilder&
 ResolvedFamilyProfileBuilder::profile_id(std::string v) {
@@ -414,17 +457,34 @@ ResolvedFamilyProfileBuilder&
 ResolvedFamilyProfileBuilder::runtime_specialization_id(std::string v) {
     runtime_specialization_id_ = std::move(v); return *this;
 }
+ResolvedFamilyProfileBuilder&
+ResolvedFamilyProfileBuilder::semantic_contract_version(std::string v) {
+    semantic_contract_version_ = std::move(v); return *this;
+}
+ResolvedFamilyProfileBuilder&
+ResolvedFamilyProfileBuilder::exception_unwind_contract(ExceptionUnwindContractSpec v) {
+    exception_unwind_contract_ = std::move(v); return *this;
+}
 
 std::vector<std::uint8_t> ResolvedFamilyProfileBuilder::build() const {
-    // Minimal Layer-1 / Layer-3 skeleton. Full profile surface arrives
-    // with Stage 8 when dispatch consumes policy/family/runtime_spec_id.
+    // Minimal Layer-1 skeleton for Stages 8-9: dispatch header fields plus
+    // correctness_legality_contract.exception_unwind_contract.
     using namespace VMPilot::Fixtures::Cbor;
+
+    MapBuilder correctness_legality_contract;
+    correctness_legality_contract.put_uint(
+        1, encode_text(semantic_contract_version_));
+    correctness_legality_contract.put_uint(
+        2, encode_exception_unwind_contract(
+               exception_unwind_contract_, family_id_));
+
     MapBuilder m;
     m.put_uint(1, encode_text(profile_id_));
     m.put_uint(2, encode_text(family_id_));
     m.put_uint(3, encode_text(requested_policy_id_));
     m.put_uint(4, encode_text(profile_revision_));
     m.put_uint(5, encode_text(runtime_specialization_id_));
+    m.put_uint(6, correctness_legality_contract.build());
     return m.build();
 }
 
@@ -670,6 +730,14 @@ RuntimeSpecializationRegistryBuilder::build() const {
 
     return VMPilot::Fixtures::Cbor::encode_array(
         {VMPilot::Fixtures::Cbor::encode_bytes(canonical), auth_bytes});
+}
+
+std::array<std::uint8_t, 32>
+sha256_of(const std::vector<std::uint8_t>& bytes) {
+    const auto digest = VMPilot::Crypto::SHA256(bytes, {});
+    std::array<std::uint8_t, 32> out{};
+    if (digest.size() == 32) std::memcpy(out.data(), digest.data(), 32);
+    return out;
 }
 
 std::vector<std::uint8_t>

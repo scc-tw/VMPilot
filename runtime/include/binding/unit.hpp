@@ -112,6 +112,24 @@ enum class UnitAcceptError : std::uint8_t {
     // Epoch gates.
     AntiDowngradeEpochTooOld,          // UBR vs runtime.minimum_accepted_epoch
     PackageEpochBelowUnitEpoch,        // PBR.anti_downgrade_epoch < UBR's (doc 06 §10)
+
+    // Tier floor (doc 15 §9 #4).
+    PolicyBelowRuntimeFloor,           // UBR.policy < config.minimum_policy_floor
+
+    // Profile ↔ UBR cross-field mismatches (doc 08 §9 #2).
+    ProfileFamilyIdMismatch,           // profile.family_id       != ubr.family_id
+    ProfilePolicyIdMismatch,           // profile.policy_id       != ubr.policy_id
+    ProfileIdMismatch,                 // profile.profile_id      != ubr.profile_id
+
+    // Stage 9 — reserved exception / unwind surface.
+    ExceptionUnwindContractMalformed,
+    ExecutableEhStatusNotReservedDisabled,
+    HandlerTableNotReservedEmpty,
+    CleanupTableNotReservedEmpty,
+    CrossProtectedFrameUnwindPermitted,
+    NativeBoundaryUnwindBehaviorNotFailClosed,
+    UnknownEhCriticalExtension,
+    FamilySpecificUnwindSurfaceMismatch,
 };
 
 tl::expected<AcceptedUnit, UnitAcceptError>

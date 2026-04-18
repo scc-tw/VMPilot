@@ -59,6 +59,7 @@ add_library(VMPilot_Runtime STATIC
     src/blob_builder.cpp
     src/program_builder.cpp
     src/handler_detail.cpp
+    src/eh_guard.cpp
     src/trust_root_embed.cpp
     src/envelope/outer.cpp
     src/binding/package.cpp
@@ -68,6 +69,16 @@ add_library(VMPilot_Runtime STATIC
     src/registry/registry.cpp
     ${PLATFORM_ASM_SOURCES}
 )
+
+# eh_guard.cpp must catch structured exceptions raised by native code
+# (C++ throws, RaiseException, signals) that cross the platform_call
+# trampoline. MSVC /EHsc does not let catch(...) intercept SEH; /EHa
+# removes that restriction. Only eh_guard.cpp needs this — the rest of
+# the runtime keeps /EHsc for the smaller codegen.
+if(MSVC)
+    set_source_files_properties(src/eh_guard.cpp
+        PROPERTIES COMPILE_OPTIONS "/EHa")
+endif()
 
 include(${CMAKE_SOURCE_DIR}/cmake/TrustRoot.cmake)
 vmpilot_configure_trust_root(VMPilot_Runtime)
@@ -228,6 +239,11 @@ if(ENABLE_TESTS)
         EXTRA_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/include
         WITH_FIXTURES)
 
+    vmpilot_add_runtime_test(test_spec_compliance
+        SOURCES test/fixtures/test_spec_compliance.cpp
+        EXTRA_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/include
+        WITH_FIXTURES)
+
     # ── security/ — Doc 15-19 cryptographic invariants ──
 
     foreach(_t IN ITEMS
@@ -240,6 +256,11 @@ if(ENABLE_TESTS)
     )
         vmpilot_add_runtime_test(${_t} SOURCES test/security/${_t}.cpp)
     endforeach()
+
+    vmpilot_add_runtime_test(test_eh_guard
+        SOURCES test/security/test_eh_guard.cpp
+        EXTRA_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/include
+        WITH_FIXTURES)
 
     # ── robustness/ — error paths + boundary values ──
 

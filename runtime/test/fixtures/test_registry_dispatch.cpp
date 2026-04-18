@@ -20,6 +20,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -34,15 +35,16 @@
 
 namespace {
 
+using VMPilot::Runtime::Binding::accept_package;
 using VMPilot::Runtime::Binding::AcceptError;
 using VMPilot::Runtime::Binding::parse_inner_partition;
-using VMPilot::Runtime::Binding::accept_package;
 using VMPilot::Runtime::Envelope::parse_outer_envelope;
+using VMPilot::Runtime::Registry::lookup;
 using VMPilot::Runtime::Registry::LookupError;
+using VMPilot::Runtime::Registry::parse;
+using VMPilot::Runtime::Registry::parse_partition;
 using VMPilot::Runtime::Registry::ParseError;
 using VMPilot::Runtime::Registry::Registry;
-using VMPilot::Runtime::Registry::lookup;
-using VMPilot::Runtime::Registry::parse;
 
 VMPilot::Runtime::Binding::AcceptConfig default_config() {
     return VMPilot::Runtime::Binding::AcceptConfig{
@@ -57,7 +59,8 @@ VMPilot::Runtime::Binding::AcceptConfig default_config() {
 // ─── Registry parse + lookup happy path ──────────────────────────────────
 
 TEST(Registry, HappyPathBuilderParses) {
-    const auto bytes = VMPilot::Fixtures::RuntimeSpecializationRegistryBuilder{}.build();
+    const auto bytes = VMPilot::Fixtures::RuntimeSpecializationRegistryBuilder{}
+                           .build_canonical_bytes();
     auto reg = parse(bytes);
     ASSERT_TRUE(reg.has_value()) << "err = " << static_cast<int>(reg.error());
     EXPECT_EQ(reg->registry_version, "registry-v1");
@@ -73,56 +76,61 @@ TEST(Registry, HappyPathBuilderParses) {
 }
 
 TEST(Registry, LookupFindsEnabledEntry) {
-    const auto bytes = VMPilot::Fixtures::RuntimeSpecializationRegistryBuilder{}.build();
+    const auto bytes = VMPilot::Fixtures::RuntimeSpecializationRegistryBuilder{}
+                           .build_canonical_bytes();
     auto reg = parse(bytes);
     ASSERT_TRUE(reg.has_value());
-    auto hit = lookup(*reg, "f1-standard-v1",
-                      VMPilot::DomainLabels::FamilyId::F1,
-                      VMPilot::DomainLabels::PolicyId::Standard, "rev1");
+    auto hit =
+        lookup(*reg, "f1-standard-v1", VMPilot::DomainLabels::FamilyId::F1,
+               VMPilot::DomainLabels::PolicyId::Standard, "rev1");
     ASSERT_TRUE(hit.has_value());
     EXPECT_EQ((*hit)->runtime_specialization_id, "f1-standard-v1");
 }
 
 TEST(Registry, LookupWrongFamilyReturnsNotFound) {
-    const auto bytes = VMPilot::Fixtures::RuntimeSpecializationRegistryBuilder{}.build();
+    const auto bytes = VMPilot::Fixtures::RuntimeSpecializationRegistryBuilder{}
+                           .build_canonical_bytes();
     auto reg = parse(bytes);
     ASSERT_TRUE(reg.has_value());
-    auto hit = lookup(*reg, "f1-standard-v1",
-                      VMPilot::DomainLabels::FamilyId::F2,
-                      VMPilot::DomainLabels::PolicyId::Standard, "rev1");
+    auto hit =
+        lookup(*reg, "f1-standard-v1", VMPilot::DomainLabels::FamilyId::F2,
+               VMPilot::DomainLabels::PolicyId::Standard, "rev1");
     ASSERT_FALSE(hit.has_value());
     EXPECT_EQ(hit.error(), LookupError::NotFound);
 }
 
 TEST(Registry, LookupWrongPolicyReturnsNotFound) {
-    const auto bytes = VMPilot::Fixtures::RuntimeSpecializationRegistryBuilder{}.build();
+    const auto bytes = VMPilot::Fixtures::RuntimeSpecializationRegistryBuilder{}
+                           .build_canonical_bytes();
     auto reg = parse(bytes);
     ASSERT_TRUE(reg.has_value());
-    auto hit = lookup(*reg, "f1-standard-v1",
-                      VMPilot::DomainLabels::FamilyId::F1,
-                      VMPilot::DomainLabels::PolicyId::HighSec, "rev1");
+    auto hit =
+        lookup(*reg, "f1-standard-v1", VMPilot::DomainLabels::FamilyId::F1,
+               VMPilot::DomainLabels::PolicyId::HighSec, "rev1");
     ASSERT_FALSE(hit.has_value());
     EXPECT_EQ(hit.error(), LookupError::NotFound);
 }
 
 TEST(Registry, LookupWrongRevisionReturnsNotFound) {
-    const auto bytes = VMPilot::Fixtures::RuntimeSpecializationRegistryBuilder{}.build();
+    const auto bytes = VMPilot::Fixtures::RuntimeSpecializationRegistryBuilder{}
+                           .build_canonical_bytes();
     auto reg = parse(bytes);
     ASSERT_TRUE(reg.has_value());
-    auto hit = lookup(*reg, "f1-standard-v1",
-                      VMPilot::DomainLabels::FamilyId::F1,
-                      VMPilot::DomainLabels::PolicyId::Standard, "rev99");
+    auto hit =
+        lookup(*reg, "f1-standard-v1", VMPilot::DomainLabels::FamilyId::F1,
+               VMPilot::DomainLabels::PolicyId::Standard, "rev99");
     ASSERT_FALSE(hit.has_value());
     EXPECT_EQ(hit.error(), LookupError::NotFound);
 }
 
 TEST(Registry, LookupWrongSpecIdReturnsNotFound) {
-    const auto bytes = VMPilot::Fixtures::RuntimeSpecializationRegistryBuilder{}.build();
+    const auto bytes = VMPilot::Fixtures::RuntimeSpecializationRegistryBuilder{}
+                           .build_canonical_bytes();
     auto reg = parse(bytes);
     ASSERT_TRUE(reg.has_value());
-    auto hit = lookup(*reg, "does-not-exist",
-                      VMPilot::DomainLabels::FamilyId::F1,
-                      VMPilot::DomainLabels::PolicyId::Standard, "rev1");
+    auto hit =
+        lookup(*reg, "does-not-exist", VMPilot::DomainLabels::FamilyId::F1,
+               VMPilot::DomainLabels::PolicyId::Standard, "rev1");
     ASSERT_FALSE(hit.has_value());
     EXPECT_EQ(hit.error(), LookupError::NotFound);
 }
@@ -140,13 +148,13 @@ TEST(Registry, DisabledEntrySurfacesDistinctError) {
     const auto bytes = VMPilot::Fixtures::RuntimeSpecializationRegistryBuilder{}
                            .clear_entries()
                            .add_entry(std::move(e))
-                           .build();
+                           .build_canonical_bytes();
     auto reg = parse(bytes);
     ASSERT_TRUE(reg.has_value());
 
-    auto hit = lookup(*reg, "f3-experimental",
-                      VMPilot::DomainLabels::FamilyId::F3,
-                      VMPilot::DomainLabels::PolicyId::Debug, "rev1");
+    auto hit =
+        lookup(*reg, "f3-experimental", VMPilot::DomainLabels::FamilyId::F3,
+               VMPilot::DomainLabels::PolicyId::Debug, "rev1");
     ASSERT_FALSE(hit.has_value());
     EXPECT_EQ(hit.error(), LookupError::Disabled);
 }
@@ -173,12 +181,11 @@ TEST(Registry, EnabledOverridesDisabledWhenBothMatch) {
                            .clear_entries()
                            .add_entry(enabled)
                            .add_entry(disabled)
-                           .build();
+                           .build_canonical_bytes();
     auto reg = parse(bytes);
     ASSERT_TRUE(reg.has_value());
 
-    auto hit = lookup(*reg, "shared",
-                      VMPilot::DomainLabels::FamilyId::F1,
+    auto hit = lookup(*reg, "shared", VMPilot::DomainLabels::FamilyId::F1,
                       VMPilot::DomainLabels::PolicyId::Standard, "rev1");
     ASSERT_TRUE(hit.has_value());
     EXPECT_TRUE((*hit)->enabled_in_this_runtime);
@@ -201,7 +208,7 @@ TEST(Registry, DuplicateLookupTupleRejected) {
                            .clear_entries()
                            .add_entry(a)
                            .add_entry(b)
-                           .build();
+                           .build_canonical_bytes();
     auto reg = parse(bytes);
     ASSERT_FALSE(reg.has_value());
     EXPECT_EQ(reg.error(), ParseError::DuplicateEntry);
@@ -227,9 +234,9 @@ TEST(Registry, FullArtifactRegistryIsReachable) {
     const auto art = VMPilot::Fixtures::PackageArtifactBuilder{}.build();
     auto env = parse_outer_envelope(art.bytes);
     ASSERT_TRUE(env.has_value());
-    auto accepted = accept_package(art.bytes.data(), art.bytes.size(),
-                                   VMPilot::Runtime::trust_root(), *env,
-                                   default_config());
+    auto accepted =
+        accept_package(art.bytes.data(), art.bytes.size(),
+                       VMPilot::Runtime::trust_root(), *env, default_config());
     ASSERT_TRUE(accepted.has_value());
 
     // Walk through the same inner-partition path a real runtime would:
@@ -240,11 +247,12 @@ TEST(Registry, FullArtifactRegistryIsReachable) {
         env->inner_metadata_partition.length);
     ASSERT_TRUE(inner.has_value());
 
-    auto reg = parse(inner->runtime_specialization_registry);
+    auto reg = parse_partition(inner->runtime_specialization_registry,
+                               VMPilot::Runtime::trust_root());
     ASSERT_TRUE(reg.has_value());
-    auto hit = lookup(*reg, "f1-standard-v1",
-                      VMPilot::DomainLabels::FamilyId::F1,
-                      VMPilot::DomainLabels::PolicyId::Standard, "rev1");
+    auto hit =
+        lookup(*reg, "f1-standard-v1", VMPilot::DomainLabels::FamilyId::F1,
+               VMPilot::DomainLabels::PolicyId::Standard, "rev1");
     ASSERT_TRUE(hit.has_value());
 }
 
@@ -271,11 +279,13 @@ TEST(Registry, MutatingRegistryBytesBreaksPbrCommitment) {
     // range. The test encoder emits the registry as a single contiguous
     // byte string, so this is a reliable fingerprint.
     const std::size_t inner_start = env->inner_metadata_partition.offset;
-    const std::size_t inner_end = inner_start + env->inner_metadata_partition.length;
+    const std::size_t inner_end =
+        inner_start + env->inner_metadata_partition.length;
     std::size_t reg_offset = 0;
     bool found = false;
     for (std::size_t i = inner_start; i + reg_bytes.size() <= inner_end; ++i) {
-        if (std::memcmp(art.bytes.data() + i, reg_bytes.data(), reg_bytes.size()) == 0) {
+        if (std::memcmp(art.bytes.data() + i, reg_bytes.data(),
+                        reg_bytes.size()) == 0) {
             reg_offset = i;
             found = true;
             break;
@@ -288,9 +298,9 @@ TEST(Registry, MutatingRegistryBytesBreaksPbrCommitment) {
     // enclosing inner partition map.
     art.bytes[reg_offset + reg_bytes.size() / 2] ^= 0x01;
 
-    auto accepted = accept_package(art.bytes.data(), art.bytes.size(),
-                                   VMPilot::Runtime::trust_root(), *env,
-                                   default_config());
+    auto accepted =
+        accept_package(art.bytes.data(), art.bytes.size(),
+                       VMPilot::Runtime::trust_root(), *env, default_config());
     ASSERT_FALSE(accepted.has_value());
     EXPECT_EQ(accepted.error(),
               AcceptError::RuntimeSpecializationRegistryHashMismatch);

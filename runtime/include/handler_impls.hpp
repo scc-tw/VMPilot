@@ -37,6 +37,7 @@
 ///   LOAD/POP:   MemVal from guest/ORAM -> im.mem.decode_lut() -> plaintext
 
 #include "handler_traits.hpp"
+#include "eh_guard.hpp"
 #include "platform_call.hpp"
 
 #include <vm/encoded_value.hpp>
@@ -824,18 +825,18 @@ struct HandlerTraits<VmOpcode::NATIVE_CALL, P> {
             is_variadic ? desc.fp_count : static_cast<uint8_t>(0), returns_fp);
 
         // Call via platform-specific ASM trampoline
-        uint64_t result;
-        if (returns_struct && abi == CallABI::AAPCS64) {
-            result = platform_call_struct(&desc, struct_ptr);
-        } else {
-            result = platform_call(&desc);
-        }
+        auto result_or = EH::guarded_platform_call(
+            &desc, returns_struct && abi == CallABI::AAPCS64, struct_ptr);
 
         // Zero plaintext args from stack (forward secrecy)
         secure_zero(raw_args, sizeof(raw_args));
 
+        if (!result_or) {
+            return tl::make_unexpected(result_or.error());
+        }
+
         // Store plaintext result; pipeline will FPE-encode reg 0
-        e.regs[0] = RegVal(result);
+        e.regs[0] = RegVal(*result_or);
         e.native_call_nonce++;
         return {};
     }

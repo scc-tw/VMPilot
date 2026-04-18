@@ -83,6 +83,8 @@ const char* to_string(DiagnosticCode code) noexcept {
         case DiagnosticCode::EpochResyncFailed:        return "RT:epoch_resync_failed";
         case DiagnosticCode::ShadowStackOverflow:      return "RT:shadow_stack_overflow";
         case DiagnosticCode::InvalidOpcodeAlias:       return "RT:invalid_opcode_alias";
+        case DiagnosticCode::NativeBoundaryUnwindTrapped:
+            return "RT:native_boundary_unwind_trapped";
         // 0x0007: Loader
         case DiagnosticCode::PatchInputInvalid:          return "LDR:input_invalid";
         case DiagnosticCode::PatchOutputFailed:          return "LDR:output_failed";

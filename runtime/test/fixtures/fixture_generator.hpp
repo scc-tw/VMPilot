@@ -117,10 +117,27 @@ private:
 
 // ─── ResolvedFamilyProfile (minimal) builder ────────────────────────────
 //
-// Stage 7 only needs the profile to be identifiable by profile_id and
-// hash-verifiable. Full profile field parsing (policy_id / family_id /
-// profile_revision / runtime_specialization_id / etc.) arrives with
-// Stage 8 when dispatch actually consumes those fields.
+// The shared header fields (profile_id / family_id / policy_id /
+// profile_revision / runtime_specialization_id) are consumed by Stage 8.
+// Stage 9 additionally requires the Layer-1 exception_unwind_contract
+// reserved surface to be present in canonical profile bytes.
+
+struct ExceptionUnwindContractSpec {
+    std::string eh_contract_version{"eh-contract-v1"};
+    std::string executable_eh_status{"reserved_disabled_v1"};
+    std::string planned_executable_eh_epoch{"v1_1"};
+    std::string cross_protected_frame_unwind{"forbidden"};
+    std::string native_boundary_unwind_behavior{
+        "translate_to_trap_or_fail_closed"};
+    std::string handler_table_status{"reserved_empty"};
+    std::string cleanup_table_status{"reserved_empty"};
+    std::string frame_contract_ref{"frame-contract-v1"};
+    std::string stackmap_contract_ref{"stackmap-contract-v1"};
+    std::string resume_contract_ref{"resume-contract-v1"};
+    std::string verifier_rules_ref{"exception-unwind-verifier-rules-v1"};
+    std::string family_specific_unwind_surface_ref;
+    std::vector<std::string> critical_extensions;
+};
 
 class ResolvedFamilyProfileBuilder {
 public:
@@ -137,6 +154,8 @@ public:
     }
     ResolvedFamilyProfileBuilder& profile_revision(std::string v);
     ResolvedFamilyProfileBuilder& runtime_specialization_id(std::string v);
+    ResolvedFamilyProfileBuilder& semantic_contract_version(std::string v);
+    ResolvedFamilyProfileBuilder& exception_unwind_contract(ExceptionUnwindContractSpec v);
 
     std::vector<std::uint8_t> build() const;
 
@@ -146,6 +165,8 @@ private:
     std::string requested_policy_id_;
     std::string profile_revision_;
     std::string runtime_specialization_id_;
+    std::string semantic_contract_version_;
+    ExceptionUnwindContractSpec exception_unwind_contract_;
 };
 
 // ─── UnitBindingRecord builder ──────────────────────────────────────────
@@ -194,6 +215,12 @@ private:
     std::uint64_t anti_downgrade_epoch_{1};
     UnitBindingAuthSpec binding_auth_;
 };
+
+// SHA-256 of the given bytes. Wraps VMPilot::Crypto::SHA256 so tests
+// can reach the digest without including VMPilot_crypto.hpp (which
+// opens an ambiguous `Crypto` namespace against runtime internals).
+std::array<std::uint8_t, 32>
+sha256_of(const std::vector<std::uint8_t>& bytes);
 
 // Wrap a list of UBR canonical byte strings into a strict-CBOR array —
 // the on-disk shape of `unit_binding_table`. Each element in `ubr_bytes`

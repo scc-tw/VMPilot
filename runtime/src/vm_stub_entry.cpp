@@ -286,6 +286,19 @@ int64_t vm_stub_entry_artifact(const VmStubArtifactArgs* args) noexcept {
             unit_or->resolved_profile_bytes);
     if (!profile_or) return fail_closed();
 
+    // Profile ↔ UBR cross-check (doc 08 §9 #2). The profile's embedded
+    // policy / family / profile_id must agree with the UBR that
+    // referenced it; otherwise a producer could swap a debug-policy
+    // profile in under a highsec-policy UBR and land the weaker code
+    // path despite the signed commitments.
+    if (profile_or->family_id != unit_or->ubr.family_id) return fail_closed();
+    if (profile_or->requested_policy_id != unit_or->ubr.requested_policy_id) {
+        return fail_closed();
+    }
+    if (profile_or->profile_id != unit_or->ubr.resolved_family_profile_id) {
+        return fail_closed();
+    }
+
     // Inner partition must re-open to expose the registry bytes. The
     // hash was already verified by accept_package, so this parse is safe.
     auto inner_or = VMPilot::Runtime::Binding::parse_inner_partition(
@@ -332,6 +345,23 @@ int64_t vm_stub_entry_artifact(const VmStubArtifactArgs* args) noexcept {
     constexpr std::array<std::uint8_t, 32> kNoProviderRequirement{};
     if (entry->provider_requirement_hash != kNoProviderRequirement) {
         return fail_closed();
+    }
+
+    // Payload-level blob header vs signed UBR policy (doc 08 §9 #6).
+    // The blob header's BLOB_FLAG_DEBUG is parse hint only, but a
+    // mismatch between it and the UBR-committed policy is a producer
+    // bug at best and a downgrade attempt at worst. UBR wins on
+    // dispatch; any mismatch is fail-closed.
+    {
+        auto payload_blob_or = VMPilot::Common::VM::BlobView::create(
+            args->artifact_data + env_or->payload_partition.offset,
+            static_cast<std::size_t>(env_or->payload_partition.length));
+        if (!payload_blob_or.has_value()) return fail_closed();
+        const bool blob_says_debug = payload_blob_or->is_debug();
+        const bool ubr_says_debug =
+            unit_or->ubr.requested_policy_id ==
+            VMPilot::DomainLabels::PolicyId::Debug;
+        if (blob_says_debug != ubr_says_debug) return fail_closed();
     }
 
     // Dispatch.

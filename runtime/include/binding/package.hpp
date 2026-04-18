@@ -11,6 +11,7 @@
 
 #include "envelope/outer.hpp"
 #include "trust_root.hpp"
+#include "vm/family_policy.hpp"
 
 // PackageBindingRecord acceptance.
 //
@@ -42,6 +43,15 @@ struct AcceptConfig {
     std::vector<std::string> supported_schema_versions;
     std::vector<std::string> supported_canonical_encodings;
     RuntimeEpochState epoch;
+
+    // Per-unit policy floor (doc 15 §9 #4-#5). Enforced in
+    // accept_unit_entry: UBR.requested_policy_id must be numerically
+    // >= this floor in the {Debug, Standard, HighSec} ordering.
+    // Default is Debug — i.e. no floor. Highsec runtimes raise this to
+    // HighSec so a standard-tier package silently loaded on a highsec
+    // runtime cannot unlock execution.
+    VMPilot::DomainLabels::PolicyId minimum_policy_floor{
+        VMPilot::DomainLabels::PolicyId::Debug};
 };
 
 // What survives acceptance. Retain enough to let Stages 6/7 verify unit

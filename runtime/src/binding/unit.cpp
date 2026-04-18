@@ -5,7 +5,9 @@
 
 #include "VMPilot_crypto.hpp"
 #include "binding/inner_partition.hpp"
+#include "binding/resolved_profile.hpp"
 #include "cbor/strict.hpp"
+#include "eh_guard.hpp"
 #include "vm/domain_labels.hpp"
 #include "vm/family_policy.hpp"
 
@@ -76,6 +78,31 @@ bool copy32(std::array<std::uint8_t, 32>& out,
 bool hash_equals(const std::array<std::uint8_t, 32>& a,
                  const std::array<std::uint8_t, 32>& b) noexcept {
     return std::memcmp(a.data(), b.data(), 32) == 0;
+}
+
+UnitAcceptError map_eh_contract_error(
+    VMPilot::Runtime::EH::ContractVerifyError error) noexcept {
+    using VMPilot::Runtime::EH::ContractVerifyError;
+
+    switch (error) {
+        case ContractVerifyError::MalformedContract:
+            return UnitAcceptError::ExceptionUnwindContractMalformed;
+        case ContractVerifyError::ExecutableEhStatusNotReservedDisabled:
+            return UnitAcceptError::ExecutableEhStatusNotReservedDisabled;
+        case ContractVerifyError::CrossProtectedFrameUnwindPermitted:
+            return UnitAcceptError::CrossProtectedFrameUnwindPermitted;
+        case ContractVerifyError::NativeBoundaryBehaviorNotFailClosed:
+            return UnitAcceptError::NativeBoundaryUnwindBehaviorNotFailClosed;
+        case ContractVerifyError::HandlerTableNotReservedEmpty:
+            return UnitAcceptError::HandlerTableNotReservedEmpty;
+        case ContractVerifyError::CleanupTableNotReservedEmpty:
+            return UnitAcceptError::CleanupTableNotReservedEmpty;
+        case ContractVerifyError::UnknownCriticalExtension:
+            return UnitAcceptError::UnknownEhCriticalExtension;
+        case ContractVerifyError::FamilySpecificUnwindSurfaceMismatch:
+            return UnitAcceptError::FamilySpecificUnwindSurfaceMismatch;
+    }
+    return UnitAcceptError::ExceptionUnwindContractMalformed;
 }
 
 // ─── Field extraction helpers ───────────────────────────────────────────
@@ -475,6 +502,39 @@ accept_unit_entry(const std::uint8_t* artifact_data,
         return err(UnitAcceptError::ResolvedProfileContentHashMismatch);
     }
 
+    // 6b. Profile ↔ UBR cross-check (doc 08 §9 #2). The profile's own
+    //     embedded (family_id / policy_id / profile_id) must agree with
+    //     the UBR that referenced it. Otherwise a producer could slide a
+    //     debug-policy profile in under a highsec-policy UBR: every
+    //     hash still matches (UBR committed to this exact profile), but
+    //     the profile's declared policy contradicts the UBR's claim and
+    //     the runtime would dispatch on the wrong tier.
+    auto profile_header = parse_resolved_family_profile_header(profile_bytes);
+    if (!profile_header) {
+        return err(UnitAcceptError::ResolvedProfileTableMalformed);
+    }
+    if (profile_header->family_id != ubr.family_id) {
+        return err(UnitAcceptError::ProfileFamilyIdMismatch);
+    }
+    if (profile_header->requested_policy_id != ubr.requested_policy_id) {
+        return err(UnitAcceptError::ProfilePolicyIdMismatch);
+    }
+    if (profile_header->profile_id != ubr.resolved_family_profile_id) {
+        return err(UnitAcceptError::ProfileIdMismatch);
+    }
+
+    // 6c. Stage 9 — 1.0 reserved exception/unwind surface verifier.
+    //     The profile must carry the typed contract, but 1.0 runtime only
+    //     accepts the strictly reserved posture: executable EH disabled,
+    //     empty handler/cleanup tables, cross-frame unwind forbidden, and
+    //     native boundary unwind translated to trap/fail-closed.
+    auto eh_contract =
+        VMPilot::Runtime::EH::verify_reserved_exception_unwind_contract(
+            profile_bytes, ubr.family_id);
+    if (!eh_contract) {
+        return err(map_eh_contract_error(eh_contract.error()));
+    }
+
     // 7. Payload identity: single-unit packaging for now — the whole
     //    payload partition belongs to this unit. Multi-unit payload
     //    slicing is a future stage.
@@ -508,6 +568,15 @@ accept_unit_entry(const std::uint8_t* artifact_data,
     //         exists to prevent.
     if (accepted_pkg.anti_downgrade_epoch < ubr.anti_downgrade_epoch) {
         return err(UnitAcceptError::PackageEpochBelowUnitEpoch);
+    }
+
+    //    8c. Runtime policy floor (doc 15 §9 #4). The enum ordering is
+    //         Debug(1) < Standard(2) < HighSec(3) — numerically
+    //         comparable. A standard-tier package cannot unlock a
+    //         runtime that requires highsec.
+    if (static_cast<std::uint8_t>(ubr.requested_policy_id) <
+        static_cast<std::uint8_t>(config.minimum_policy_floor)) {
+        return err(UnitAcceptError::PolicyBelowRuntimeFloor);
     }
 
     AcceptedUnit out;

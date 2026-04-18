@@ -83,6 +83,7 @@ enum class DiagnosticCode : uint32_t {
     EpochResyncFailed          = 0x0006'0011,
     ShadowStackOverflow        = 0x0006'0012,
     InvalidOpcodeAlias         = 0x0006'0013,
+    NativeBoundaryUnwindTrapped= 0x0006'0014,
 
     // --- 0x0007: Loader ---
     PatchInputInvalid          = 0x0007'0001,
