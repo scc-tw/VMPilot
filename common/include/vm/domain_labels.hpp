@@ -44,6 +44,10 @@ namespace Hash {
     // 6/7, sharpens the semantics without changing the label.
     constexpr std::string_view UnitBindingTable        = "unit-binding-table-v1";
     constexpr std::string_view ResolvedProfileTable    = "resolved-profile-table-v1";
+    // Provider / entitlement layer (doc 14, doc 10).
+    constexpr std::string_view PolicyRequirement       = "policy-requirement-v1";
+    constexpr std::string_view ProviderEvidence        = "provider-evidence-v1";
+    constexpr std::string_view EntitlementCertificate  = "entitlement-certificate-v1";
 }  // namespace Hash
 
 }  // namespace VMPilot::DomainLabels

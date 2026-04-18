@@ -67,6 +67,7 @@ add_library(VMPilot_Runtime STATIC
     src/binding/unit.cpp
     src/binding/resolved_profile.cpp
     src/registry/registry.cpp
+    src/provider/local_embedded.cpp
     ${PLATFORM_ASM_SOURCES}
 )
 
@@ -196,6 +197,7 @@ if(ENABLE_TESTS)
         test_native_call
         test_policy_matrix
         test_tls_intrinsic
+        test_provider_local
     )
         vmpilot_add_runtime_test(${_t} SOURCES test/integration/${_t}.cpp)
     endforeach()
