@@ -244,6 +244,18 @@ public:
     RuntimeSpecializationRegistryBuilder& add_entry(RegistryEntrySpec e);
     RuntimeSpecializationRegistryBuilder& clear_entries();
 
+    RuntimeSpecializationRegistryBuilder& signing_seed(std::array<std::uint8_t, 32> v);
+    RuntimeSpecializationRegistryBuilder& auth_key_id(std::string v);
+
+    // The inner canonical CBOR map of the registry (unsigned). Tests
+    // that want to verify raw canonical round-trips use this entry
+    // point; runtime consumers should target `build()` instead.
+    std::vector<std::uint8_t> build_canonical_bytes() const;
+
+    // The signed on-disk partition: strict-CBOR array of
+    // [canonical_bytes, RegistryBindingAuth]. This is what goes into
+    // the inner partition's `runtime_specialization_registry` slot and
+    // what `Registry::parse_partition` consumes.
     std::vector<std::uint8_t> build() const;
 
 private:
@@ -252,6 +264,8 @@ private:
     std::string package_schema_version_;
     std::uint64_t registry_epoch_;
     std::vector<RegistryEntrySpec> entries_;
+    std::array<std::uint8_t, 32> signing_seed_;
+    std::string auth_key_id_;
 };
 
 // Build the inner partition CBOR map that wraps the four sub-tables.

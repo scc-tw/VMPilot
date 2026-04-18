@@ -28,6 +28,12 @@ constexpr std::uint64_t kUd_PayloadIdentity              = 7;
 constexpr std::uint64_t kUd_UnitBindingRecordId          = 8;
 
 // ─── UBR field IDs (doc 06 §5.1) ────────────────────────────────────────
+//
+// The UBR canonical bytes carry only fields 1..9. `binding_auth` is the
+// second element of the wrapping CBOR array — see doc 06 §9.3. Separating
+// them avoids the self-referential commitment problem where
+// binding_auth.record_hash would have to commit to bytes that include
+// itself.
 constexpr std::uint64_t kUbr_UnitBindingRecordId                  = 1;
 constexpr std::uint64_t kUbr_UnitIdentityHash                     = 2;
 constexpr std::uint64_t kUbr_UnitDescriptorHash                   = 3;
@@ -37,7 +43,6 @@ constexpr std::uint64_t kUbr_ResolvedFamilyProfileId              = 6;
 constexpr std::uint64_t kUbr_ResolvedFamilyProfileContentHash     = 7;
 constexpr std::uint64_t kUbr_PayloadIdentity                      = 8;
 constexpr std::uint64_t kUbr_AntiDowngradeEpoch                   = 9;
-constexpr std::uint64_t kUbr_BindingAuth                          = 10;
 
 // ─── PayloadIdentity sub-map field IDs (doc 06 §3.1) ────────────────────
 constexpr std::uint64_t kPi_Sha256Digest  = 1;
@@ -207,9 +212,34 @@ parse_binding_auth(const Value& auth_v) noexcept {
     return out;
 }
 
+// Parse a single UBT entry (CBOR array[2] = [canonical_without_auth_bytes,
+// UnitBindingAuth_map]) and verify the record_hash inside the auth object
+// matches the domain-hashed canonical bytes. This is where doc 06 §9.3's
+// "record_hash commits to UBR content minus auth" rule actually fires.
 tl::expected<UnitBindingRecord, UnitAcceptError>
-parse_unit_binding_record(const Value& ubr_v) noexcept {
-    if (ubr_v.kind() != Value::Kind::Map) return err(UnitAcceptError::UnitBindingRecordMalformed);
+parse_unit_binding_record(const Value& wrapper_v) noexcept {
+    if (wrapper_v.kind() != Value::Kind::Array) {
+        return err(UnitAcceptError::UnitBindingRecordMalformed);
+    }
+    if (wrapper_v.as_array().size() != 2) {
+        return err(UnitAcceptError::UnitBindingRecordMalformed);
+    }
+    const Value& canonical_v = wrapper_v.as_array()[0];
+    const Value& auth_v      = wrapper_v.as_array()[1];
+    if (canonical_v.kind() != Value::Kind::Bytes) {
+        return err(UnitAcceptError::UnitBindingRecordMalformed);
+    }
+    if (auth_v.kind() != Value::Kind::Map) {
+        return err(UnitAcceptError::UnitBindingAuthMalformed);
+    }
+
+    const auto& canonical_bytes = canonical_v.as_bytes();
+    auto inner_or = parse_strict(canonical_bytes.data(), canonical_bytes.size());
+    if (!inner_or) return err(UnitAcceptError::UnitBindingRecordMalformed);
+    const Value& ubr_v = *inner_or;
+    if (ubr_v.kind() != Value::Kind::Map) {
+        return err(UnitAcceptError::UnitBindingRecordMalformed);
+    }
 
     RequireCtx ctx{
         UnitAcceptError::MissingCoreField,
@@ -244,10 +274,19 @@ parse_unit_binding_record(const Value& ubr_v) noexcept {
     auto pid = parse_payload_identity(*pid_v, UnitAcceptError::UnitBindingRecordMalformed);
     if (!pid) return err(pid.error());
 
-    const Value* auth_v = ubr_v.find_by_uint_key(kUbr_BindingAuth);
-    if (auth_v == nullptr) return err(UnitAcceptError::MissingCoreField);
-    auto auth = parse_binding_auth(*auth_v);
+    auto auth = parse_binding_auth(auth_v);
     if (!auth) return err(auth.error());
+
+    // Record hash must commit to the exact canonical bytes we just parsed.
+    // Without this the wrapper's element [0] could be swapped for any
+    // other UBR's canonical bytes and acceptance would continue on
+    // stale content.
+    const auto computed_record_hash = domain_hash_sha256(
+        VMPilot::DomainLabels::Hash::UnitBindingRecord,
+        canonical_bytes.data(), canonical_bytes.size());
+    if (!hash_equals(computed_record_hash, auth->record_hash)) {
+        return err(UnitAcceptError::UnitBindingRecordRecordHashMismatch);
+    }
 
     UnitBindingRecord out;
     out.unit_binding_record_id                    = std::move(*id);
@@ -280,7 +319,12 @@ lookup_descriptor_bytes(const std::vector<std::uint8_t>& table_bytes,
     return v->as_bytes();
 }
 
-// UnitBindingTable: CBOR array of UBR maps. Linear scan by record id.
+// UnitBindingTable: CBOR array of [canonical_bytes, auth_map] wrappers.
+// Linear scan — fully parse each wrapper, match by record_id, and return
+// the parsed UBR with its inclusion_index cross-checked against its
+// position in the array. Any structural anomaly surfaces UbtMalformed
+// before content mismatches so fuzzed or truncated tables don't reach
+// downstream acceptance logic with half-initialised state.
 tl::expected<UnitBindingRecord, UnitAcceptError>
 lookup_ubr(const std::vector<std::uint8_t>& table_bytes,
            std::string_view record_id) noexcept {
@@ -289,15 +333,36 @@ lookup_ubr(const std::vector<std::uint8_t>& table_bytes,
     const Value& tree = *tree_or;
     if (tree.kind() != Value::Kind::Array) return err(UnitAcceptError::UnitBindingTableMalformed);
 
-    for (const auto& entry : tree.as_array()) {
-        if (entry.kind() != Value::Kind::Map) {
+    const auto& entries = tree.as_array();
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        const Value& entry = entries[i];
+        // Fast filter: peek at element [0] canonical bytes for the
+        // record id before paying for full parse + hash verification.
+        if (entry.kind() != Value::Kind::Array) {
             return err(UnitAcceptError::UnitBindingTableMalformed);
         }
-        const Value* id_v = entry.find_by_uint_key(kUbr_UnitBindingRecordId);
-        if (id_v == nullptr || id_v->kind() != Value::Kind::Text) continue;
-        if (id_v->as_text() == record_id) {
-            return parse_unit_binding_record(entry);
+        if (entry.as_array().size() != 2) {
+            return err(UnitAcceptError::UnitBindingTableMalformed);
         }
+        const Value& canonical_v = entry.as_array()[0];
+        if (canonical_v.kind() != Value::Kind::Bytes) {
+            return err(UnitAcceptError::UnitBindingTableMalformed);
+        }
+        auto peek_or = parse_strict(canonical_v.as_bytes().data(),
+                                    canonical_v.as_bytes().size());
+        if (!peek_or) continue;
+        const Value* id_v = peek_or->find_by_uint_key(kUbr_UnitBindingRecordId);
+        if (id_v == nullptr || id_v->kind() != Value::Kind::Text) continue;
+        if (id_v->as_text() != record_id) continue;
+
+        // Match: parse fully (verifies record_hash) and cross-check the
+        // auth's inclusion_index against the UBR's real position.
+        auto parsed = parse_unit_binding_record(entry);
+        if (!parsed) return err(parsed.error());
+        if (parsed->binding_auth.inclusion_index != i) {
+            return err(UnitAcceptError::UnitBindingAuthMalformed);
+        }
+        return parsed;
     }
     return err(UnitAcceptError::UnitBindingRecordNotFound);
 }

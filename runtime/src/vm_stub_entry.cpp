@@ -293,8 +293,15 @@ int64_t vm_stub_entry_artifact(const VmStubArtifactArgs* args) noexcept {
         env_or->inner_metadata_partition.length);
     if (!inner_or) return fail_closed();
 
-    auto reg_or = VMPilot::Runtime::Registry::parse(
-        inner_or->runtime_specialization_registry);
+    // Registry partition (doc 08 §3.1): strict-CBOR array of
+    // [canonical_bytes, RegistryBindingAuth]. parse_partition verifies
+    // the signature against VendorTrustRoot with covered_domain
+    // "runtime-specialization-registry-v1" before handing back the
+    // parsed Registry. The PBR-level commitment over the whole
+    // partition bytes was already verified by accept_package.
+    auto reg_or = VMPilot::Runtime::Registry::parse_partition(
+        inner_or->runtime_specialization_registry,
+        VMPilot::Runtime::trust_root());
     if (!reg_or) return fail_closed();
 
     auto entry_or = VMPilot::Runtime::Registry::lookup(
@@ -313,6 +320,17 @@ int64_t vm_stub_entry_artifact(const VmStubArtifactArgs* args) noexcept {
     if (std::memcmp(entry->accepted_profile_content_hash.data(),
                     unit_or->ubr.resolved_family_profile_content_hash.data(),
                     32) != 0) {
+        return fail_closed();
+    }
+
+    // provider_satisfies gate (doc 08 §4 rule 4). An all-zero hash
+    // encodes the "no provider requirement" convention; anything else
+    // names a signed ProviderRequirement that only Stage 10's
+    // TrustProvider infrastructure can evaluate. Until that lands,
+    // any entry that demands a provider is fail-closed — which is
+    // exactly the stance doc 08 §7 forbids us from working around.
+    constexpr std::array<std::uint8_t, 32> kNoProviderRequirement{};
+    if (entry->provider_requirement_hash != kNoProviderRequirement) {
         return fail_closed();
     }
 

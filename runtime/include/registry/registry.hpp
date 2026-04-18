@@ -10,6 +10,7 @@
 
 #include <tl/expected.hpp>
 
+#include "trust_root.hpp"
 #include "vm/family_policy.hpp"
 
 // RuntimeSpecializationRegistry parser + lookup.
@@ -83,6 +84,15 @@ enum class ParseError : std::uint8_t {
     DuplicateEntry,           // two entries share the same lookup tuple
     UnknownFamilyId,
     UnknownPolicyId,
+
+    // Partition wrapper (see parse_partition below).
+    PartitionMalformed,
+    AuthKindUnsupported,
+    AuthKeyIdMismatch,
+    AuthSignatureAlgMismatch,
+    AuthCoveredDomainMismatch,
+    SignatureWrongSize,
+    SignatureInvalid,
 };
 
 enum class LookupError : std::uint8_t {
@@ -90,15 +100,34 @@ enum class LookupError : std::uint8_t {
     Disabled,                 // matched but enabled_in_this_runtime == false
 };
 
-// Parse registry bytes produced by the fixture / compiler. Caller is
-// expected to have already verified that `data` matches the PBR's
-// runtime_specialization_registry_hash commitment.
+// Parse registry canonical bytes (the byte string that ends up inside
+// the partition wrapper's element [0]). Callers that already unwrapped
+// the partition or assembled the registry bytes themselves use this
+// entry point; runtime dispatch should prefer `parse_partition` below.
 tl::expected<Registry, ParseError>
 parse(const std::uint8_t* data, std::size_t size) noexcept;
 
 inline tl::expected<Registry, ParseError>
 parse(const std::vector<std::uint8_t>& bytes) noexcept {
     return parse(bytes.data(), bytes.size());
+}
+
+// Parse a signed registry partition. The on-disk form is a strict-CBOR
+// array[2] of [canonical_bytes, binding_auth_map], matching the pattern
+// established by PackageBindingRecord partitions. The binding_auth
+// signs the canonical bytes under covered_domain
+// "runtime-specialization-registry-v1", verified against the supplied
+// VendorTrustRoot.
+//
+// Contract source: docs/research/zh-tw/family-redesign/08-runtime-specialization-registry.md §3.1
+tl::expected<Registry, ParseError>
+parse_partition(const std::uint8_t* data, std::size_t size,
+                const VMPilot::Runtime::VendorTrustRoot& root) noexcept;
+
+inline tl::expected<Registry, ParseError>
+parse_partition(const std::vector<std::uint8_t>& bytes,
+                const VMPilot::Runtime::VendorTrustRoot& root) noexcept {
+    return parse_partition(bytes.data(), bytes.size(), root);
 }
 
 // Look up an entry by its exact (spec_id, family, policy, profile_revision)

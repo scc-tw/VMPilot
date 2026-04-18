@@ -493,25 +493,40 @@ std::vector<std::uint8_t> UnitBindingRecordBuilder::build() const {
     pi.put_uint(2, encode_uint(payload_size_));
     const auto pi_bytes = pi.build();
 
+    // Fields 1..9 — this is the "canonical UBR content" that
+    // record_hash commits to. binding_auth is NOT part of it; the
+    // wrapper array below attaches auth as a sibling element.
+    MapBuilder m;
+    m.put_uint(1, encode_text(unit_binding_record_id_));
+    m.put_uint(2, encode_bytes(bytes_from(unit_identity_hash_)));
+    m.put_uint(3, encode_bytes(bytes_from(unit_descriptor_hash_)));
+    m.put_uint(4, encode_text(family_id_));
+    m.put_uint(5, encode_text(requested_policy_id_));
+    m.put_uint(6, encode_text(resolved_family_profile_id_));
+    m.put_uint(7, encode_bytes(bytes_from(resolved_family_profile_content_hash_)));
+    m.put_uint(8, pi_bytes);
+    m.put_uint(9, encode_uint(anti_downgrade_epoch_));
+    const auto canonical_bytes = m.build();
+
+    // Auto-populate record_hash unless the caller explicitly set a
+    // non-zero one — negative tests that want to ship a mismatched
+    // hash (to exercise the verifier) can still do so.
+    UnitBindingAuthSpec auth_spec = binding_auth_;
+    const std::array<std::uint8_t, 32> zero{};
+    if (auth_spec.record_hash == zero) {
+        auth_spec.record_hash = VMPilot::Cbor::domain_hash_sha256(
+            VMPilot::DomainLabels::Hash::UnitBindingRecord, canonical_bytes);
+    }
+
     MapBuilder auth;
-    auth.put_uint(1, encode_text(binding_auth_.kind));
-    auth.put_uint(2, encode_bytes(bytes_from(binding_auth_.unit_binding_table_hash)));
-    auth.put_uint(3, encode_uint(binding_auth_.inclusion_index));
-    auth.put_uint(4, encode_bytes(bytes_from(binding_auth_.record_hash)));
+    auth.put_uint(1, encode_text(auth_spec.kind));
+    auth.put_uint(2, encode_bytes(bytes_from(auth_spec.unit_binding_table_hash)));
+    auth.put_uint(3, encode_uint(auth_spec.inclusion_index));
+    auth.put_uint(4, encode_bytes(bytes_from(auth_spec.record_hash)));
     const auto auth_bytes = auth.build();
 
-    MapBuilder m;
-    m.put_uint(1,  encode_text(unit_binding_record_id_));
-    m.put_uint(2,  encode_bytes(bytes_from(unit_identity_hash_)));
-    m.put_uint(3,  encode_bytes(bytes_from(unit_descriptor_hash_)));
-    m.put_uint(4,  encode_text(family_id_));
-    m.put_uint(5,  encode_text(requested_policy_id_));
-    m.put_uint(6,  encode_text(resolved_family_profile_id_));
-    m.put_uint(7,  encode_bytes(bytes_from(resolved_family_profile_content_hash_)));
-    m.put_uint(8,  pi_bytes);
-    m.put_uint(9,  encode_uint(anti_downgrade_epoch_));
-    m.put_uint(10, auth_bytes);
-    return m.build();
+    // Wrapper: [canonical_bytes, auth_map].
+    return encode_array({encode_bytes(canonical_bytes), auth_bytes});
 }
 
 std::vector<std::uint8_t>
@@ -547,7 +562,9 @@ RuntimeSpecializationRegistryBuilder::RuntimeSpecializationRegistryBuilder()
     : registry_version_{"registry-v1"},
       runtime_build_id_{"vmpilot-dev-runtime-build"},
       package_schema_version_{"package-schema-v1"},
-      registry_epoch_{1} {
+      registry_epoch_{1},
+      signing_seed_{TestKey::kPrivateSeed},
+      auth_key_id_{"vmpilot-dev-rfc8032-test1"} {
     // Default entry covers F1 × standard with a happy-path happy-profile.
     // Tests that exercise non-default family/policy combinations call
     // clear_entries() first.
@@ -583,9 +600,17 @@ RuntimeSpecializationRegistryBuilder&
 RuntimeSpecializationRegistryBuilder::clear_entries() {
     entries_.clear(); return *this;
 }
+RuntimeSpecializationRegistryBuilder&
+RuntimeSpecializationRegistryBuilder::signing_seed(std::array<std::uint8_t, 32> v) {
+    signing_seed_ = v; return *this;
+}
+RuntimeSpecializationRegistryBuilder&
+RuntimeSpecializationRegistryBuilder::auth_key_id(std::string v) {
+    auth_key_id_ = std::move(v); return *this;
+}
 
 std::vector<std::uint8_t>
-RuntimeSpecializationRegistryBuilder::build() const {
+RuntimeSpecializationRegistryBuilder::build_canonical_bytes() const {
     // Entry field IDs must match runtime/src/registry/registry.cpp.
     using namespace VMPilot::Fixtures::Cbor;
 
@@ -623,6 +648,28 @@ RuntimeSpecializationRegistryBuilder::build() const {
     header.put_uint(4, encode_uint(registry_epoch_));
     header.put_uint(5, encode_array(entry_bytes));
     return header.build();
+}
+
+std::vector<std::uint8_t>
+RuntimeSpecializationRegistryBuilder::build() const {
+    const auto canonical = build_canonical_bytes();
+    const auto sig = Sign::sign_ed25519(
+        signing_seed_,
+        VMPilot::DomainLabels::Auth::RuntimeSpecRegistry,
+        canonical);
+
+    VMPilot::Fixtures::Cbor::MapBuilder auth;
+    auth.put_uint(1, VMPilot::Fixtures::Cbor::encode_text("vendor_signature_v1"));
+    auth.put_uint(2, VMPilot::Fixtures::Cbor::encode_text(auth_key_id_));
+    auth.put_uint(3, VMPilot::Fixtures::Cbor::encode_text("ed25519-pure-v1"));
+    auth.put_uint(4, VMPilot::Fixtures::Cbor::encode_text(
+        std::string(VMPilot::DomainLabels::Auth::RuntimeSpecRegistry)));
+    std::vector<std::uint8_t> sig_vec(sig.begin(), sig.end());
+    auth.put_uint(5, VMPilot::Fixtures::Cbor::encode_bytes(sig_vec));
+    const auto auth_bytes = auth.build();
+
+    return VMPilot::Fixtures::Cbor::encode_array(
+        {VMPilot::Fixtures::Cbor::encode_bytes(canonical), auth_bytes});
 }
 
 std::vector<std::uint8_t>
@@ -797,12 +844,14 @@ PackageArtifactAssembly PackageArtifactBuilder::build() const {
 
         UnitBindingAuthSpec auth;
         // unit_binding_table_hash inside binding_auth is informational —
-        // acceptance does not cryptographically verify it (see Stage 7
-        // commentary). We stuff a stable sentinel so diff-views read
-        // consistently.
+        // acceptance does not cryptographically verify it against the UBT
+        // (cyclic definition; doc 06 §9.3 intent is audit-debug only).
+        // A stable sentinel reads consistently in hex dumps.
         for (std::size_t i = 0; i < 32; ++i) auth.unit_binding_table_hash[i] = 0xAA;
         auth.inclusion_index = 0;
-        for (std::size_t i = 0; i < 32; ++i) auth.record_hash[i] = 0xBB;
+        // record_hash left zero — UnitBindingRecordBuilder auto-computes
+        // domain_hash("unit-binding-record-v1", canonical_bytes_minus_auth)
+        // which the parser verifies.
 
         const auto ubr_bytes = UnitBindingRecordBuilder{}
             .unit_binding_record_id(default_record_id_)

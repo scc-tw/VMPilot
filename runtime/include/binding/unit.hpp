@@ -96,8 +96,9 @@ enum class UnitAcceptError : std::uint8_t {
     UnknownPolicyId,
 
     // Whole-unit binding (doc 06 §7.2).
-    PackageUbtHashMismatch,          // UBR.binding_auth.unit_binding_table_hash
-                                     // != accepted_package.unit_binding_table_hash
+    UnitBindingRecordRecordHashMismatch,  // binding_auth.record_hash !=
+                                          // domain_hash("unit-binding-record-v1",
+                                          //             canonical_bytes_minus_auth)
     UnitDescriptorHashMismatch,
     ResolvedProfileContentHashMismatch,
     PayloadSha256Mismatch,

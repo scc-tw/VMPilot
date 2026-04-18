@@ -3,7 +3,10 @@
 #include <cstring>
 #include <utility>
 
+#include "VMPilot_crypto.hpp"
 #include "cbor/strict.hpp"
+#include "trust_root.hpp"
+#include "vm/domain_labels.hpp"
 #include "vm/family_policy.hpp"
 
 namespace VMPilot::Runtime::Registry {
@@ -169,6 +172,77 @@ parse(const std::uint8_t* data, std::size_t size) noexcept {
     }
 
     return out;
+}
+
+// ─── Registry partition wrapper (doc 08 §3.1) ───────────────────────────
+
+namespace {
+
+constexpr std::uint64_t kAuth_Kind              = 1;
+constexpr std::uint64_t kAuth_KeyId             = 2;
+constexpr std::uint64_t kAuth_SignatureAlgId    = 3;
+constexpr std::uint64_t kAuth_CoveredDomain     = 4;
+constexpr std::uint64_t kAuth_Signature         = 5;
+
+constexpr std::string_view kAuthKindVendorSignatureV1 = "vendor_signature_v1";
+
+tl::expected<std::string, ParseError>
+require_text_in_auth(const Value& m, std::uint64_t key) noexcept {
+    const Value* v = m.find_by_uint_key(key);
+    if (v == nullptr) return err(ParseError::MissingField);
+    if (v->kind() != Value::Kind::Text) return err(ParseError::WrongFieldType);
+    return v->as_text();
+}
+
+}  // namespace
+
+tl::expected<Registry, ParseError>
+parse_partition(const std::uint8_t* data, std::size_t size,
+                const VMPilot::Runtime::VendorTrustRoot& root) noexcept {
+    auto tree_or = parse_strict(data, size);
+    if (!tree_or) return err(ParseError::PartitionMalformed);
+    const Value& tree = *tree_or;
+    if (tree.kind() != Value::Kind::Array) return err(ParseError::PartitionMalformed);
+    if (tree.as_array().size() != 2) return err(ParseError::PartitionMalformed);
+
+    const Value& canonical_v = tree.as_array()[0];
+    const Value& auth_v      = tree.as_array()[1];
+    if (canonical_v.kind() != Value::Kind::Bytes) return err(ParseError::PartitionMalformed);
+    if (auth_v.kind() != Value::Kind::Map) return err(ParseError::PartitionMalformed);
+
+    auto kind = require_text_in_auth(auth_v, kAuth_Kind);
+    if (!kind) return err(kind.error());
+    if (*kind != kAuthKindVendorSignatureV1) return err(ParseError::AuthKindUnsupported);
+
+    auto key_id = require_text_in_auth(auth_v, kAuth_KeyId);
+    if (!key_id) return err(key_id.error());
+    if (*key_id != root.root_key_id) return err(ParseError::AuthKeyIdMismatch);
+
+    auto alg_id = require_text_in_auth(auth_v, kAuth_SignatureAlgId);
+    if (!alg_id) return err(alg_id.error());
+    if (*alg_id != root.signature_alg_id) return err(ParseError::AuthSignatureAlgMismatch);
+
+    auto domain = require_text_in_auth(auth_v, kAuth_CoveredDomain);
+    if (!domain) return err(domain.error());
+    if (*domain != VMPilot::DomainLabels::Auth::RuntimeSpecRegistry) {
+        return err(ParseError::AuthCoveredDomainMismatch);
+    }
+
+    const Value* sig_v = auth_v.find_by_uint_key(kAuth_Signature);
+    if (sig_v == nullptr) return err(ParseError::MissingField);
+    if (sig_v->kind() != Value::Kind::Bytes) return err(ParseError::WrongFieldType);
+    const auto& signature = sig_v->as_bytes();
+    if (signature.size() != 64) return err(ParseError::SignatureWrongSize);
+
+    const std::vector<std::uint8_t> pubkey_vec(
+        root.public_key, root.public_key + sizeof(root.public_key));
+    const bool ok = VMPilot::Crypto::Verify_Ed25519(
+        pubkey_vec, signature,
+        std::string(VMPilot::DomainLabels::Auth::RuntimeSpecRegistry),
+        canonical_v.as_bytes());
+    if (!ok) return err(ParseError::SignatureInvalid);
+
+    return parse(canonical_v.as_bytes().data(), canonical_v.as_bytes().size());
 }
 
 tl::expected<const SpecializationEntry*, LookupError>
