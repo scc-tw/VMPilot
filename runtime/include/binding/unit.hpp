@@ -12,6 +12,7 @@
 
 #include "binding/package.hpp"
 #include "envelope/outer.hpp"
+#include "vm/family_policy.hpp"
 
 // Per-unit acceptance: the gate that fires every time a protected unit is
 // about to run. Consumes the AcceptedPackage surface from Stage 5 plus the
@@ -33,8 +34,8 @@ struct UnitDescriptor {
     std::string descriptor_version;
     std::string unit_id;
     std::array<std::uint8_t, 32> unit_identity_hash;
-    std::string family_id;
-    std::string requested_policy_id;
+    VMPilot::DomainLabels::FamilyId family_id;
+    VMPilot::DomainLabels::PolicyId requested_policy_id;
     std::string resolved_family_profile_id;
     PayloadIdentity payload_identity;
     std::string unit_binding_record_id;
@@ -54,8 +55,8 @@ struct UnitBindingRecord {
     std::string unit_binding_record_id;
     std::array<std::uint8_t, 32> unit_identity_hash;
     std::array<std::uint8_t, 32> unit_descriptor_hash;
-    std::string family_id;
-    std::string requested_policy_id;
+    VMPilot::DomainLabels::FamilyId family_id;
+    VMPilot::DomainLabels::PolicyId requested_policy_id;
     std::string resolved_family_profile_id;
     std::array<std::uint8_t, 32> resolved_family_profile_content_hash;
     PayloadIdentity payload_identity;
@@ -91,6 +92,8 @@ enum class UnitAcceptError : std::uint8_t {
     WrongFieldType,
     MissingCoreField,
     WrongHashSize,
+    UnknownFamilyId,
+    UnknownPolicyId,
 
     // Whole-unit binding (doc 06 §7.2).
     PackageUbtHashMismatch,          // UBR.binding_auth.unit_binding_table_hash

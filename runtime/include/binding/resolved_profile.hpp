@@ -8,6 +8,8 @@
 
 #include <tl/expected.hpp>
 
+#include "vm/family_policy.hpp"
+
 // Minimal ResolvedFamilyProfile header parser.
 //
 // Stage 8 only needs the five fields that feed registry dispatch:
@@ -24,8 +26,8 @@ namespace VMPilot::Runtime::Binding {
 
 struct ResolvedFamilyProfileHeader {
     std::string profile_id;
-    std::string family_id;
-    std::string requested_policy_id;
+    VMPilot::DomainLabels::FamilyId family_id;
+    VMPilot::DomainLabels::PolicyId requested_policy_id;
     std::string profile_revision;
     std::string runtime_specialization_id;
 };
@@ -35,6 +37,8 @@ enum class ResolvedFamilyProfileParseError : std::uint8_t {
     NotAMap,
     MissingField,
     WrongFieldType,
+    UnknownFamilyId,
+    UnknownPolicyId,
 };
 
 tl::expected<ResolvedFamilyProfileHeader, ResolvedFamilyProfileParseError>

@@ -7,6 +7,7 @@
 #include "binding/inner_partition.hpp"
 #include "cbor/strict.hpp"
 #include "vm/domain_labels.hpp"
+#include "vm/family_policy.hpp"
 
 namespace VMPilot::Runtime::Binding {
 
@@ -151,6 +152,11 @@ parse_unit_descriptor_bytes(const std::vector<std::uint8_t>& bytes) noexcept {
     if (!prof) return err(prof.error());
     if (!ubr) return err(ubr.error());
 
+    auto fam_enum = VMPilot::DomainLabels::parse_family_id(*fam);
+    if (!fam_enum) return err(UnitAcceptError::UnknownFamilyId);
+    auto pol_enum = VMPilot::DomainLabels::parse_policy_id(*pol);
+    if (!pol_enum) return err(UnitAcceptError::UnknownPolicyId);
+
     const Value* pid_v = tree.find_by_uint_key(kUd_PayloadIdentity);
     if (pid_v == nullptr) return err(UnitAcceptError::MissingCoreField);
     auto pid = parse_payload_identity(*pid_v, UnitAcceptError::UnitDescriptorMalformed);
@@ -160,8 +166,8 @@ parse_unit_descriptor_bytes(const std::vector<std::uint8_t>& bytes) noexcept {
     out.descriptor_version              = std::move(*ver);
     out.unit_id                          = std::move(*uid);
     out.unit_identity_hash               = *uih;
-    out.family_id                        = std::move(*fam);
-    out.requested_policy_id              = std::move(*pol);
+    out.family_id                        = *fam_enum;
+    out.requested_policy_id              = *pol_enum;
     out.resolved_family_profile_id       = std::move(*prof);
     out.payload_identity                 = *pid;
     out.unit_binding_record_id           = std::move(*ubr);
@@ -228,6 +234,11 @@ parse_unit_binding_record(const Value& ubr_v) noexcept {
     if (!pch) return err(pch.error());
     if (!epoch) return err(epoch.error());
 
+    auto fam_enum = VMPilot::DomainLabels::parse_family_id(*fam);
+    if (!fam_enum) return err(UnitAcceptError::UnknownFamilyId);
+    auto pol_enum = VMPilot::DomainLabels::parse_policy_id(*pol);
+    if (!pol_enum) return err(UnitAcceptError::UnknownPolicyId);
+
     const Value* pid_v = ubr_v.find_by_uint_key(kUbr_PayloadIdentity);
     if (pid_v == nullptr) return err(UnitAcceptError::MissingCoreField);
     auto pid = parse_payload_identity(*pid_v, UnitAcceptError::UnitBindingRecordMalformed);
@@ -242,8 +253,8 @@ parse_unit_binding_record(const Value& ubr_v) noexcept {
     out.unit_binding_record_id                    = std::move(*id);
     out.unit_identity_hash                         = *uih;
     out.unit_descriptor_hash                       = *udh;
-    out.family_id                                  = std::move(*fam);
-    out.requested_policy_id                        = std::move(*pol);
+    out.family_id                                  = *fam_enum;
+    out.requested_policy_id                        = *pol_enum;
     out.resolved_family_profile_id                 = std::move(*prof);
     out.resolved_family_profile_content_hash       = *pch;
     out.payload_identity                           = *pid;

@@ -66,8 +66,9 @@ TEST(Registry, HappyPathBuilderParses) {
     EXPECT_EQ(reg->registry_epoch, 1u);
     ASSERT_EQ(reg->entries.size(), 1u);
     EXPECT_EQ(reg->entries[0].runtime_specialization_id, "f1-standard-v1");
-    EXPECT_EQ(reg->entries[0].family_id, "f1");
-    EXPECT_EQ(reg->entries[0].requested_policy_id, "standard");
+    EXPECT_EQ(reg->entries[0].family_id, VMPilot::DomainLabels::FamilyId::F1);
+    EXPECT_EQ(reg->entries[0].requested_policy_id,
+              VMPilot::DomainLabels::PolicyId::Standard);
     EXPECT_TRUE(reg->entries[0].enabled_in_this_runtime);
 }
 
@@ -75,7 +76,9 @@ TEST(Registry, LookupFindsEnabledEntry) {
     const auto bytes = VMPilot::Fixtures::RuntimeSpecializationRegistryBuilder{}.build();
     auto reg = parse(bytes);
     ASSERT_TRUE(reg.has_value());
-    auto hit = lookup(*reg, "f1-standard-v1", "f1", "standard", "rev1");
+    auto hit = lookup(*reg, "f1-standard-v1",
+                      VMPilot::DomainLabels::FamilyId::F1,
+                      VMPilot::DomainLabels::PolicyId::Standard, "rev1");
     ASSERT_TRUE(hit.has_value());
     EXPECT_EQ((*hit)->runtime_specialization_id, "f1-standard-v1");
 }
@@ -84,7 +87,9 @@ TEST(Registry, LookupWrongFamilyReturnsNotFound) {
     const auto bytes = VMPilot::Fixtures::RuntimeSpecializationRegistryBuilder{}.build();
     auto reg = parse(bytes);
     ASSERT_TRUE(reg.has_value());
-    auto hit = lookup(*reg, "f1-standard-v1", "f2", "standard", "rev1");
+    auto hit = lookup(*reg, "f1-standard-v1",
+                      VMPilot::DomainLabels::FamilyId::F2,
+                      VMPilot::DomainLabels::PolicyId::Standard, "rev1");
     ASSERT_FALSE(hit.has_value());
     EXPECT_EQ(hit.error(), LookupError::NotFound);
 }
@@ -93,7 +98,9 @@ TEST(Registry, LookupWrongPolicyReturnsNotFound) {
     const auto bytes = VMPilot::Fixtures::RuntimeSpecializationRegistryBuilder{}.build();
     auto reg = parse(bytes);
     ASSERT_TRUE(reg.has_value());
-    auto hit = lookup(*reg, "f1-standard-v1", "f1", "highsec", "rev1");
+    auto hit = lookup(*reg, "f1-standard-v1",
+                      VMPilot::DomainLabels::FamilyId::F1,
+                      VMPilot::DomainLabels::PolicyId::HighSec, "rev1");
     ASSERT_FALSE(hit.has_value());
     EXPECT_EQ(hit.error(), LookupError::NotFound);
 }
@@ -102,7 +109,9 @@ TEST(Registry, LookupWrongRevisionReturnsNotFound) {
     const auto bytes = VMPilot::Fixtures::RuntimeSpecializationRegistryBuilder{}.build();
     auto reg = parse(bytes);
     ASSERT_TRUE(reg.has_value());
-    auto hit = lookup(*reg, "f1-standard-v1", "f1", "standard", "rev99");
+    auto hit = lookup(*reg, "f1-standard-v1",
+                      VMPilot::DomainLabels::FamilyId::F1,
+                      VMPilot::DomainLabels::PolicyId::Standard, "rev99");
     ASSERT_FALSE(hit.has_value());
     EXPECT_EQ(hit.error(), LookupError::NotFound);
 }
@@ -111,7 +120,9 @@ TEST(Registry, LookupWrongSpecIdReturnsNotFound) {
     const auto bytes = VMPilot::Fixtures::RuntimeSpecializationRegistryBuilder{}.build();
     auto reg = parse(bytes);
     ASSERT_TRUE(reg.has_value());
-    auto hit = lookup(*reg, "does-not-exist", "f1", "standard", "rev1");
+    auto hit = lookup(*reg, "does-not-exist",
+                      VMPilot::DomainLabels::FamilyId::F1,
+                      VMPilot::DomainLabels::PolicyId::Standard, "rev1");
     ASSERT_FALSE(hit.has_value());
     EXPECT_EQ(hit.error(), LookupError::NotFound);
 }
@@ -133,7 +144,9 @@ TEST(Registry, DisabledEntrySurfacesDistinctError) {
     auto reg = parse(bytes);
     ASSERT_TRUE(reg.has_value());
 
-    auto hit = lookup(*reg, "f3-experimental", "f3", "debug", "rev1");
+    auto hit = lookup(*reg, "f3-experimental",
+                      VMPilot::DomainLabels::FamilyId::F3,
+                      VMPilot::DomainLabels::PolicyId::Debug, "rev1");
     ASSERT_FALSE(hit.has_value());
     EXPECT_EQ(hit.error(), LookupError::Disabled);
 }
@@ -164,7 +177,9 @@ TEST(Registry, EnabledOverridesDisabledWhenBothMatch) {
     auto reg = parse(bytes);
     ASSERT_TRUE(reg.has_value());
 
-    auto hit = lookup(*reg, "shared", "f1", "standard", "rev1");
+    auto hit = lookup(*reg, "shared",
+                      VMPilot::DomainLabels::FamilyId::F1,
+                      VMPilot::DomainLabels::PolicyId::Standard, "rev1");
     ASSERT_TRUE(hit.has_value());
     EXPECT_TRUE((*hit)->enabled_in_this_runtime);
 }
@@ -227,7 +242,9 @@ TEST(Registry, FullArtifactRegistryIsReachable) {
 
     auto reg = parse(inner->runtime_specialization_registry);
     ASSERT_TRUE(reg.has_value());
-    auto hit = lookup(*reg, "f1-standard-v1", "f1", "standard", "rev1");
+    auto hit = lookup(*reg, "f1-standard-v1",
+                      VMPilot::DomainLabels::FamilyId::F1,
+                      VMPilot::DomainLabels::PolicyId::Standard, "rev1");
     ASSERT_TRUE(hit.has_value());
 }
 

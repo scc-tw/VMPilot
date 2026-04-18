@@ -10,6 +10,8 @@
 
 #include <tl/expected.hpp>
 
+#include "vm/family_policy.hpp"
+
 // RuntimeSpecializationRegistry parser + lookup.
 //
 // The registry is the signed runtime-path selection authority. Every
@@ -42,8 +44,8 @@ namespace VMPilot::Runtime::Registry {
 
 struct SpecializationEntry {
     std::string runtime_specialization_id;
-    std::string family_id;
-    std::string requested_policy_id;
+    VMPilot::DomainLabels::FamilyId family_id;
+    VMPilot::DomainLabels::PolicyId requested_policy_id;
     std::string profile_revision;
     std::string semantic_contract_version;
     std::string execution_contract_ref;
@@ -79,6 +81,8 @@ enum class ParseError : std::uint8_t {
     WrongHashSize,
     EnabledFlagOutOfRange,
     DuplicateEntry,           // two entries share the same lookup tuple
+    UnknownFamilyId,
+    UnknownPolicyId,
 };
 
 enum class LookupError : std::uint8_t {
@@ -108,8 +112,8 @@ parse(const std::vector<std::uint8_t>& bytes) noexcept {
 tl::expected<const SpecializationEntry*, LookupError>
 lookup(const Registry& reg,
        std::string_view spec_id,
-       std::string_view family_id,
-       std::string_view policy_id,
+       VMPilot::DomainLabels::FamilyId family_id,
+       VMPilot::DomainLabels::PolicyId policy_id,
        std::string_view profile_revision) noexcept;
 
 }  // namespace VMPilot::Runtime::Registry

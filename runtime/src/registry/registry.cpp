@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "cbor/strict.hpp"
+#include "vm/family_policy.hpp"
 
 namespace VMPilot::Runtime::Registry {
 
@@ -77,6 +78,10 @@ parse_entry(const Value& entry_v) noexcept {
     if (!family) return err(family.error());
     auto policy = require_text(entry_v, kEnt_PolicyId);
     if (!policy) return err(policy.error());
+    auto fam_enum = VMPilot::DomainLabels::parse_family_id(*family);
+    if (!fam_enum) return err(ParseError::UnknownFamilyId);
+    auto pol_enum = VMPilot::DomainLabels::parse_policy_id(*policy);
+    if (!pol_enum) return err(ParseError::UnknownPolicyId);
     auto revision = require_text(entry_v, kEnt_ProfileRevision);
     if (!revision) return err(revision.error());
     auto semantic = require_text(entry_v, kEnt_SemanticContractVersion);
@@ -99,8 +104,8 @@ parse_entry(const Value& entry_v) noexcept {
 
     SpecializationEntry out;
     out.runtime_specialization_id           = std::move(*spec_id);
-    out.family_id                           = std::move(*family);
-    out.requested_policy_id                 = std::move(*policy);
+    out.family_id                           = *fam_enum;
+    out.requested_policy_id                 = *pol_enum;
     out.profile_revision                    = std::move(*revision);
     out.semantic_contract_version           = std::move(*semantic);
     out.execution_contract_ref              = std::move(*exec_ref);
@@ -169,8 +174,8 @@ parse(const std::uint8_t* data, std::size_t size) noexcept {
 tl::expected<const SpecializationEntry*, LookupError>
 lookup(const Registry& reg,
        std::string_view spec_id,
-       std::string_view family_id,
-       std::string_view policy_id,
+       VMPilot::DomainLabels::FamilyId family_id,
+       VMPilot::DomainLabels::PolicyId policy_id,
        std::string_view profile_revision) noexcept {
     const SpecializationEntry* disabled_match = nullptr;
     for (const auto& e : reg.entries) {

@@ -30,6 +30,7 @@
 #include "envelope/outer.hpp"
 #include "trust_root.hpp"
 #include "vm/domain_labels.hpp"
+#include "vm/family_policy.hpp"
 
 #include "fixtures/fixture_generator.hpp"
 
@@ -79,8 +80,9 @@ TEST(AcceptUnitEntry, DefaultFixtureAccepted) {
                                b.env, b.pkg, "u-happy", default_config());
     ASSERT_TRUE(r.has_value()) << "err = " << static_cast<int>(r.error());
     EXPECT_EQ(r->descriptor.unit_id, "u-happy");
-    EXPECT_EQ(r->descriptor.family_id, "f1");
-    EXPECT_EQ(r->descriptor.requested_policy_id, "standard");
+    EXPECT_EQ(r->descriptor.family_id, VMPilot::DomainLabels::FamilyId::F1);
+    EXPECT_EQ(r->descriptor.requested_policy_id,
+              VMPilot::DomainLabels::PolicyId::Standard);
     EXPECT_EQ(r->descriptor.resolved_family_profile_id, "rfp-happy");
     EXPECT_EQ(r->ubr.unit_binding_record_id, "ubr-happy");
     EXPECT_EQ(r->ubr.anti_downgrade_epoch, 1u);

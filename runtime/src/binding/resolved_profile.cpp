@@ -1,6 +1,7 @@
 #include "binding/resolved_profile.hpp"
 
 #include "cbor/strict.hpp"
+#include "vm/family_policy.hpp"
 
 namespace VMPilot::Runtime::Binding {
 
@@ -51,10 +52,15 @@ parse_resolved_family_profile_header(const std::uint8_t* data, std::size_t size)
     if (!rev) return err(rev.error());
     if (!spec) return err(spec.error());
 
+    auto fam_enum = VMPilot::DomainLabels::parse_family_id(*fid);
+    if (!fam_enum) return err(ResolvedFamilyProfileParseError::UnknownFamilyId);
+    auto pol_enum = VMPilot::DomainLabels::parse_policy_id(*rpid);
+    if (!pol_enum) return err(ResolvedFamilyProfileParseError::UnknownPolicyId);
+
     ResolvedFamilyProfileHeader out;
     out.profile_id                      = std::move(*pid);
-    out.family_id                       = std::move(*fid);
-    out.requested_policy_id             = std::move(*rpid);
+    out.family_id                       = *fam_enum;
+    out.requested_policy_id             = *pol_enum;
     out.profile_revision                = std::move(*rev);
     out.runtime_specialization_id       = std::move(*spec);
     return out;

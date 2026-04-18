@@ -7,6 +7,8 @@
 #include <string_view>
 #include <vector>
 
+#include "vm/family_policy.hpp"
+
 // Test fixture builder for the redesigned binding artifacts.
 //
 // Each builder exposes defaults matching a "well-formed happy path" fixture,
@@ -87,7 +89,13 @@ public:
     UnitDescriptorBuilder& unit_id(std::string v);
     UnitDescriptorBuilder& unit_identity_hash(std::array<std::uint8_t, 32> v);
     UnitDescriptorBuilder& family_id(std::string v);
+    UnitDescriptorBuilder& family_id(VMPilot::DomainLabels::FamilyId v) {
+        return family_id(std::string(VMPilot::DomainLabels::to_text(v)));
+    }
     UnitDescriptorBuilder& requested_policy_id(std::string v);
+    UnitDescriptorBuilder& requested_policy_id(VMPilot::DomainLabels::PolicyId v) {
+        return requested_policy_id(std::string(VMPilot::DomainLabels::to_text(v)));
+    }
     UnitDescriptorBuilder& resolved_family_profile_id(std::string v);
     UnitDescriptorBuilder& payload_sha256(std::array<std::uint8_t, 32> v);
     UnitDescriptorBuilder& payload_size(std::uint64_t v);
@@ -120,7 +128,13 @@ public:
 
     ResolvedFamilyProfileBuilder& profile_id(std::string v);
     ResolvedFamilyProfileBuilder& family_id(std::string v);
+    ResolvedFamilyProfileBuilder& family_id(VMPilot::DomainLabels::FamilyId v) {
+        return family_id(std::string(VMPilot::DomainLabels::to_text(v)));
+    }
     ResolvedFamilyProfileBuilder& requested_policy_id(std::string v);
+    ResolvedFamilyProfileBuilder& requested_policy_id(VMPilot::DomainLabels::PolicyId v) {
+        return requested_policy_id(std::string(VMPilot::DomainLabels::to_text(v)));
+    }
     ResolvedFamilyProfileBuilder& profile_revision(std::string v);
     ResolvedFamilyProfileBuilder& runtime_specialization_id(std::string v);
 
@@ -151,7 +165,13 @@ public:
     UnitBindingRecordBuilder& unit_identity_hash(std::array<std::uint8_t, 32> v);
     UnitBindingRecordBuilder& unit_descriptor_hash(std::array<std::uint8_t, 32> v);
     UnitBindingRecordBuilder& family_id(std::string v);
+    UnitBindingRecordBuilder& family_id(VMPilot::DomainLabels::FamilyId v) {
+        return family_id(std::string(VMPilot::DomainLabels::to_text(v)));
+    }
     UnitBindingRecordBuilder& requested_policy_id(std::string v);
+    UnitBindingRecordBuilder& requested_policy_id(VMPilot::DomainLabels::PolicyId v) {
+        return requested_policy_id(std::string(VMPilot::DomainLabels::to_text(v)));
+    }
     UnitBindingRecordBuilder& resolved_family_profile_id(std::string v);
     UnitBindingRecordBuilder& resolved_family_profile_content_hash(std::array<std::uint8_t, 32> v);
     UnitBindingRecordBuilder& payload_sha256(std::array<std::uint8_t, 32> v);

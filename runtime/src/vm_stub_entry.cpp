@@ -189,24 +189,23 @@ int64_t execute_with_policy_on_payload(const PayloadDispatch& d) noexcept {
 // Dispatch to VmEngine<Policy> based on the signed (family, policy) tuple.
 // Only F1 is supported today; F2 / F3 are reserved families from doc 01
 // that fail closed here until their runtime paths land.
-int64_t dispatch_to_engine(std::string_view family_id,
-                           std::string_view policy_id,
+int64_t dispatch_to_engine(VMPilot::DomainLabels::FamilyId family_id,
+                           VMPilot::DomainLabels::PolicyId policy_id,
                            const PayloadDispatch& d) noexcept {
-    if (family_id != "f1") {
+    if (family_id != VMPilot::DomainLabels::FamilyId::F1) {
 #ifdef NDEBUG
         std::abort();
 #else
         return INT64_MIN;
 #endif
     }
-    if (policy_id == "debug") {
-        return execute_with_policy_on_payload<DebugPolicy>(d);
-    }
-    if (policy_id == "standard") {
-        return execute_with_policy_on_payload<StandardPolicy>(d);
-    }
-    if (policy_id == "highsec") {
-        return execute_with_policy_on_payload<HighSecPolicy>(d);
+    switch (policy_id) {
+        case VMPilot::DomainLabels::PolicyId::Debug:
+            return execute_with_policy_on_payload<DebugPolicy>(d);
+        case VMPilot::DomainLabels::PolicyId::Standard:
+            return execute_with_policy_on_payload<StandardPolicy>(d);
+        case VMPilot::DomainLabels::PolicyId::HighSec:
+            return execute_with_policy_on_payload<HighSecPolicy>(d);
     }
 #ifdef NDEBUG
     std::abort();
@@ -286,10 +285,10 @@ int64_t vm_stub_entry_artifact(const VmStubArtifactArgs* args) noexcept {
 
     auto entry_or = VMPilot::Runtime::Registry::lookup(
         *reg_or,
-        profile_or->runtime_specialization_id,
+        std::string_view{profile_or->runtime_specialization_id},
         unit_or->ubr.family_id,
         unit_or->ubr.requested_policy_id,
-        profile_or->profile_revision);
+        std::string_view{profile_or->profile_revision});
     if (!entry_or) return fail_closed();
     const VMPilot::Runtime::Registry::SpecializationEntry* entry = *entry_or;
 
