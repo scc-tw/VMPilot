@@ -66,6 +66,56 @@ private:
     std::array<std::uint8_t, 32> signing_public_key_{};
 };
 
+// ─── OuterEnvelope ───────────────────────────────────────────────────────
+//
+// Assembles full artifact byte stream: 16-byte magic + 4-byte
+// big-endian metadata length + canonical CBOR metadata + data
+// partitions (pbr bytes, inner metadata, payload). All three data
+// partitions are placed back-to-back after the envelope metadata.
+
+struct OuterEnvelopeArtifact {
+    std::vector<std::uint8_t> bytes;         // full on-disk stream
+    std::size_t metadata_offset;             // after fixed header
+    std::size_t metadata_length;
+    std::size_t pbr_offset;
+    std::size_t pbr_length;
+    std::size_t inner_offset;
+    std::size_t inner_length;
+    std::size_t payload_offset;
+    std::size_t payload_length;
+};
+
+class OuterEnvelopeBuilder {
+public:
+    OuterEnvelopeBuilder();  // installs happy-path defaults
+
+    OuterEnvelopeBuilder& outer_format_version(std::uint64_t v);
+    OuterEnvelopeBuilder& package_schema_version(std::string v);
+    OuterEnvelopeBuilder& canonical_encoding_id(std::string v);
+    OuterEnvelopeBuilder& section_table_shape_class(std::uint64_t v);
+
+    OuterEnvelopeBuilder& pbr_bytes(std::vector<std::uint8_t> v);
+    OuterEnvelopeBuilder& inner_partition_bytes(std::vector<std::uint8_t> v);
+    OuterEnvelopeBuilder& payload_bytes(std::vector<std::uint8_t> v);
+
+    // Negative-test escape hatch: let the caller inject an arbitrary text
+    // field into the metadata map so tests can exercise the skeleton-leak
+    // parser rule. Key id must not collide with a core envelope field.
+    OuterEnvelopeBuilder& extra_text_field(std::uint64_t key, std::string v);
+
+    OuterEnvelopeArtifact build() const;
+
+private:
+    std::uint64_t outer_format_version_{1};
+    std::string schema_version_;
+    std::string encoding_id_;
+    std::uint64_t shape_class_{0};
+    std::vector<std::uint8_t> pbr_bytes_;
+    std::vector<std::uint8_t> inner_bytes_;
+    std::vector<std::uint8_t> payload_bytes_;
+    std::vector<std::pair<std::uint64_t, std::string>> extra_fields_;
+};
+
 }  // namespace VMPilot::Fixtures
 
 #endif  // VMPILOT_RUNTIME_TEST_FIXTURES_FIXTURE_GENERATOR_HPP

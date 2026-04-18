@@ -60,6 +60,7 @@ add_library(VMPilot_Runtime STATIC
     src/program_builder.cpp
     src/handler_detail.cpp
     src/trust_root_embed.cpp
+    src/envelope/outer.cpp
     ${PLATFORM_ASM_SOURCES}
 )
 
@@ -198,6 +199,10 @@ if(ENABLE_TESTS)
 
     vmpilot_add_runtime_test(test_trust_root
         SOURCES test/fixtures/test_trust_root.cpp
+        WITH_FIXTURES)
+
+    vmpilot_add_runtime_test(test_outer_envelope
+        SOURCES test/fixtures/test_outer_envelope.cpp
         WITH_FIXTURES)
 
     # ── security/ — Doc 15-19 cryptographic invariants ──

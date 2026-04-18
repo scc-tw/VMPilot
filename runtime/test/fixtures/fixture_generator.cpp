@@ -105,6 +105,149 @@ PackageBindingRecordBuilder::signing_public_key(std::array<std::uint8_t, 32> v) 
     return *this;
 }
 
+// ─── OuterEnvelopeBuilder ───────────────────────────────────────────────
+
+namespace {
+
+constexpr std::array<std::uint8_t, 16> kOuterMagic = {
+    'V', 'M', 'P', 'I', 'L', 'O', 'T', '_',
+    'A', 'R', 'T', 'I', 'F', 'A', 'C', 'T',
+};
+
+void append_u32_be(std::vector<std::uint8_t>& out, std::uint32_t v) {
+    out.push_back(static_cast<std::uint8_t>((v >> 24) & 0xff));
+    out.push_back(static_cast<std::uint8_t>((v >> 16) & 0xff));
+    out.push_back(static_cast<std::uint8_t>((v >>  8) & 0xff));
+    out.push_back(static_cast<std::uint8_t>(v & 0xff));
+}
+
+std::vector<std::uint8_t> encode_locator_map(std::uint64_t offset, std::uint64_t length) {
+    VMPilot::Fixtures::Cbor::MapBuilder m;
+    m.put_uint(1, VMPilot::Fixtures::Cbor::encode_uint(offset));
+    m.put_uint(2, VMPilot::Fixtures::Cbor::encode_uint(length));
+    return m.build();
+}
+
+}  // namespace
+
+OuterEnvelopeBuilder::OuterEnvelopeBuilder()
+    : schema_version_{"package-schema-v1"},
+      encoding_id_{"canonical-metadata-bytes-v1"},
+      shape_class_{1},
+      pbr_bytes_{PackageBindingRecordBuilder{}.build().canonical_bytes},
+      // Inner partition and payload placeholders: arbitrary bytes sized
+      // enough that the locator fits-and-doesn't-overlap arithmetic has
+      // something meaningful to check.
+      inner_bytes_(std::vector<std::uint8_t>(64, 0xAB)),
+      payload_bytes_(std::vector<std::uint8_t>(96, 0xCD)) {}
+
+OuterEnvelopeBuilder& OuterEnvelopeBuilder::outer_format_version(std::uint64_t v) {
+    outer_format_version_ = v;
+    return *this;
+}
+OuterEnvelopeBuilder& OuterEnvelopeBuilder::package_schema_version(std::string v) {
+    schema_version_ = std::move(v);
+    return *this;
+}
+OuterEnvelopeBuilder& OuterEnvelopeBuilder::canonical_encoding_id(std::string v) {
+    encoding_id_ = std::move(v);
+    return *this;
+}
+OuterEnvelopeBuilder& OuterEnvelopeBuilder::section_table_shape_class(std::uint64_t v) {
+    shape_class_ = v;
+    return *this;
+}
+OuterEnvelopeBuilder& OuterEnvelopeBuilder::pbr_bytes(std::vector<std::uint8_t> v) {
+    pbr_bytes_ = std::move(v);
+    return *this;
+}
+OuterEnvelopeBuilder& OuterEnvelopeBuilder::inner_partition_bytes(std::vector<std::uint8_t> v) {
+    inner_bytes_ = std::move(v);
+    return *this;
+}
+OuterEnvelopeBuilder& OuterEnvelopeBuilder::payload_bytes(std::vector<std::uint8_t> v) {
+    payload_bytes_ = std::move(v);
+    return *this;
+}
+OuterEnvelopeBuilder& OuterEnvelopeBuilder::extra_text_field(std::uint64_t key, std::string v) {
+    extra_fields_.emplace_back(key, std::move(v));
+    return *this;
+}
+
+OuterEnvelopeArtifact OuterEnvelopeBuilder::build() const {
+    // Step 1: compute where each data partition will live so the metadata
+    // can carry correct offsets before we know the metadata length itself.
+    // We resolve this with a fixed-point: first assemble metadata with
+    // placeholder offsets to learn `metadata_length`, then rebuild with
+    // real offsets. Two passes is cheap and keeps the helper linear.
+
+    auto build_metadata = [&](std::uint64_t pbr_off, std::uint64_t pbr_len,
+                              std::uint64_t inner_off, std::uint64_t inner_len,
+                              std::uint64_t payload_off, std::uint64_t payload_len) {
+        MapBuilder m;
+        m.put_uint(1, encode_uint(outer_format_version_));
+        m.put_uint(2, encode_text(schema_version_));
+        m.put_uint(3, encode_text(encoding_id_));
+        m.put_uint(4, encode_uint(shape_class_));
+        m.put_uint(5, encode_locator_map(pbr_off, pbr_len));
+        m.put_uint(6, encode_locator_map(inner_off, inner_len));
+        m.put_uint(7, encode_locator_map(payload_off, payload_len));
+        for (const auto& [k, v] : extra_fields_) {
+            m.put_uint(k, encode_text(v));
+        }
+        return m.build();
+    };
+
+    // First pass: placeholder offsets just to learn encoded metadata length.
+    auto trial_meta = build_metadata(0, pbr_bytes_.size(),
+                                     0, inner_bytes_.size(),
+                                     0, payload_bytes_.size());
+    const std::size_t fixed_header_size = 20;
+    std::size_t meta_len_guess = trial_meta.size();
+
+    // Compute offsets given the guessed metadata length.
+    std::uint64_t pbr_off = fixed_header_size + meta_len_guess;
+    std::uint64_t inner_off = pbr_off + pbr_bytes_.size();
+    std::uint64_t payload_off = inner_off + inner_bytes_.size();
+
+    // Second pass: rebuild metadata with real offsets; length may change if
+    // the new integers encode to different widths (24..0xff bumps by one
+    // byte). Iterate until stable — converges in at most two passes for
+    // anything realistic.
+    for (int iter = 0; iter < 4; ++iter) {
+        auto meta = build_metadata(pbr_off, pbr_bytes_.size(),
+                                   inner_off, inner_bytes_.size(),
+                                   payload_off, payload_bytes_.size());
+        if (meta.size() == meta_len_guess) {
+            OuterEnvelopeArtifact out;
+            out.bytes.reserve(fixed_header_size + meta.size() + pbr_bytes_.size() +
+                              inner_bytes_.size() + payload_bytes_.size());
+            out.bytes.insert(out.bytes.end(), kOuterMagic.begin(), kOuterMagic.end());
+            append_u32_be(out.bytes, static_cast<std::uint32_t>(meta.size()));
+            out.bytes.insert(out.bytes.end(), meta.begin(), meta.end());
+            out.bytes.insert(out.bytes.end(), pbr_bytes_.begin(), pbr_bytes_.end());
+            out.bytes.insert(out.bytes.end(), inner_bytes_.begin(), inner_bytes_.end());
+            out.bytes.insert(out.bytes.end(), payload_bytes_.begin(), payload_bytes_.end());
+            out.metadata_offset = fixed_header_size;
+            out.metadata_length = meta.size();
+            out.pbr_offset = pbr_off;
+            out.pbr_length = pbr_bytes_.size();
+            out.inner_offset = inner_off;
+            out.inner_length = inner_bytes_.size();
+            out.payload_offset = payload_off;
+            out.payload_length = payload_bytes_.size();
+            return out;
+        }
+        meta_len_guess = meta.size();
+        pbr_off = fixed_header_size + meta_len_guess;
+        inner_off = pbr_off + pbr_bytes_.size();
+        payload_off = inner_off + inner_bytes_.size();
+    }
+    // Defensive fallback: should be unreachable since offsets monotonically
+    // grow and every CBOR width bump is bounded by a small constant.
+    throw std::runtime_error("OuterEnvelopeBuilder: metadata length failed to converge");
+}
+
 SignedArtifact PackageBindingRecordBuilder::build() const {
     // Field id assignment (small unsigned integer keys, RFC 8949 canonical
     // order follows encoded key bytes which for small unsigned ints is
