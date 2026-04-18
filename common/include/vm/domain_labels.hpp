@@ -39,6 +39,11 @@ namespace Hash {
     constexpr std::string_view PackageBindingRecord    = "package-binding-record-v1";
     constexpr std::string_view RuntimeSpecRegistry     = "runtime-specialization-registry-v1";
     constexpr std::string_view ArtifactLayout          = "artifact-layout-v1";
+    // Table-level hashes — cover the whole table byte range as a single
+    // opaque chunk. Table entry parsing, which will arrive with Stages
+    // 6/7, sharpens the semantics without changing the label.
+    constexpr std::string_view UnitBindingTable        = "unit-binding-table-v1";
+    constexpr std::string_view ResolvedProfileTable    = "resolved-profile-table-v1";
 }  // namespace Hash
 
 }  // namespace VMPilot::DomainLabels

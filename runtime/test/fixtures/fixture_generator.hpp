@@ -50,7 +50,17 @@ public:
     PackageBindingRecordBuilder& signing_seed(std::array<std::uint8_t, 32> v);
     PackageBindingRecordBuilder& signing_public_key(std::array<std::uint8_t, 32> v);
 
+    // Optional key_id to embed inside the PackageBindingAuth object. Defaults
+    // to "vmpilot-dev-rfc8032-test1" — matches the runtime's trust root.
+    PackageBindingRecordBuilder& auth_key_id(std::string v);
+
     SignedArtifact build() const;
+
+    // Wrap canonical PBR bytes + PackageBindingAuth map into the on-disk
+    // PBR partition format: a strict-CBOR array of exactly two elements
+    // ([bytes, map]). The shape is what Stage 5 acceptance expects to
+    // pull out of the artifact.
+    std::vector<std::uint8_t> build_partition_bytes() const;
 
 private:
     std::string id_;
@@ -64,6 +74,66 @@ private:
     std::uint64_t minimum_runtime_epoch_{0};
     std::array<std::uint8_t, 32> signing_seed_{};
     std::array<std::uint8_t, 32> signing_public_key_{};
+    std::string auth_key_id_;
+};
+
+// ─── PackageArtifact: full end-to-end artifact assembly ──────────────────
+//
+// Composes outer envelope, PBR partition (with correct hashes over inner
+// partition + envelope body + registry, signed under the fixture's test
+// key), inner partition placeholder, and payload placeholder into one
+// byte stream that `accept_package` can consume directly.
+
+struct PackageArtifactAssembly {
+    std::vector<std::uint8_t> bytes;             // full on-disk artifact
+    std::size_t metadata_offset;                 // outer envelope body start
+    std::size_t metadata_length;
+    std::size_t envelope_body_end;               // metadata_offset + metadata_length
+    std::size_t pbr_offset;
+    std::size_t pbr_length;
+    std::size_t inner_offset;
+    std::size_t inner_length;
+    std::size_t payload_offset;
+    std::size_t payload_length;
+
+    // Audit trail — the hashes that went into the PBR. Tests can mutate
+    // these and reassemble to build reject fixtures.
+    std::array<std::uint8_t, 32> unit_binding_table_hash;
+    std::array<std::uint8_t, 32> resolved_profile_table_hash;
+    std::array<std::uint8_t, 32> runtime_specialization_registry_hash;
+    std::array<std::uint8_t, 32> artifact_layout_hash;
+
+    std::array<std::uint8_t, 32> signer_public_key;
+};
+
+class PackageArtifactBuilder {
+public:
+    PackageArtifactBuilder();
+
+    PackageArtifactBuilder& package_binding_record_id(std::string v);
+    PackageArtifactBuilder& package_schema_version(std::string v);
+    PackageArtifactBuilder& canonical_encoding_id(std::string v);
+    PackageArtifactBuilder& anti_downgrade_epoch(std::uint64_t v);
+    PackageArtifactBuilder& minimum_runtime_epoch(std::uint64_t v);
+    PackageArtifactBuilder& inner_partition_bytes(std::vector<std::uint8_t> v);
+    PackageArtifactBuilder& payload_bytes(std::vector<std::uint8_t> v);
+    PackageArtifactBuilder& signing_seed(std::array<std::uint8_t, 32> v);
+    PackageArtifactBuilder& signing_public_key(std::array<std::uint8_t, 32> v);
+    PackageArtifactBuilder& auth_key_id(std::string v);
+
+    PackageArtifactAssembly build() const;
+
+private:
+    std::string id_;
+    std::string schema_version_;
+    std::string encoding_id_;
+    std::uint64_t anti_downgrade_epoch_;
+    std::uint64_t minimum_runtime_epoch_;
+    std::vector<std::uint8_t> inner_bytes_;
+    std::vector<std::uint8_t> payload_bytes_;
+    std::array<std::uint8_t, 32> signing_seed_;
+    std::array<std::uint8_t, 32> signing_public_key_;
+    std::string auth_key_id_;
 };
 
 // ─── OuterEnvelope ───────────────────────────────────────────────────────

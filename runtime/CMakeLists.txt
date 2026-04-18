@@ -61,6 +61,7 @@ add_library(VMPilot_Runtime STATIC
     src/handler_detail.cpp
     src/trust_root_embed.cpp
     src/envelope/outer.cpp
+    src/binding/package.cpp
     ${PLATFORM_ASM_SOURCES}
 )
 
@@ -72,6 +73,7 @@ target_include_directories(VMPilot_Runtime
             ${CMAKE_SOURCE_DIR}/common/include
             ${CMAKE_SOURCE_DIR}/common/include/vm
             ${CMAKE_SOURCE_DIR}/third_party/expected/include
+    PRIVATE ${CRYPTO_INCLUDE_DIR}
 )
 
 target_link_libraries(VMPilot_Runtime
@@ -203,6 +205,10 @@ if(ENABLE_TESTS)
 
     vmpilot_add_runtime_test(test_outer_envelope
         SOURCES test/fixtures/test_outer_envelope.cpp
+        WITH_FIXTURES)
+
+    vmpilot_add_runtime_test(test_accept_package
+        SOURCES test/fixtures/test_accept_package.cpp
         WITH_FIXTURES)
 
     # ── security/ — Doc 15-19 cryptographic invariants ──
