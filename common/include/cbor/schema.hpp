@@ -51,6 +51,14 @@ namespace VMPilot::Cbor::Schema {
 
 // Text field. `required_value` is optional: when non-empty, the parser
 // rejects with `unsupported_version` if the actual value differs.
+//
+// Why the copy (rather than a `string_view` into the parsed tree):
+// `Value::text_` is an owning `std::string` that dies when the parser's
+// tree goes out of scope at the end of `parse_schema`. A consumer that
+// persists a `PolicyRequirement` / record past that point must own its
+// strings too — the copy is a necessary ownership transfer, not a
+// regression of the require_text zero-copy path (which applies to
+// in-parser comparisons, preserved on line `f.required_value` above).
 template <typename T>
 struct TextField {
     std::uint64_t key;
@@ -58,6 +66,9 @@ struct TextField {
     std::string_view required_value = {};
 };
 
+// Reserved for consumers that hold the parsed `Value` tree alive for
+// the lifetime of `T`. Populates a non-owning view directly; unsafe to
+// use with any struct that outlives `parse_schema`'s return value.
 template <typename T>
 struct TextViewField {
     std::uint64_t key;
