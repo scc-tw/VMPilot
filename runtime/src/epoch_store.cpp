@@ -1,110 +1,40 @@
 #include "epoch_store.hpp"
 
 #include <array>
-#include <cstdio>
 #include <cstring>
-#include <filesystem>
-#include <fstream>
 #include <vector>
+
+#include "persistent_file.hpp"
 
 namespace VMPilot::Runtime::EpochStore {
 
 namespace {
 
-constexpr char kEpochMagic[]   = "VMPLEPOCH";
-constexpr std::size_t kEpochMagicLen = 10;  // includes trailing NUL
-constexpr char kNonceMagic[]   = "VMPLNONCE";
-constexpr std::size_t kNonceMagicLen = 10;
+namespace PF = VMPilot::Runtime::PersistentFile;
+
+constexpr char kEpochMagic[] = "VMPLEPOCH";  // 10 bytes incl. trailing NUL
+constexpr char kNonceMagic[] = "VMPLNONCE";
 constexpr std::uint32_t kVersion = 1;
 
-// Compact CRC-32/IEEE table-less polynomial 0xEDB88320. Fine for
-// the small payloads the store writes (dozens to thousands of bytes).
-std::uint32_t crc32(const std::uint8_t* data, std::size_t size) noexcept {
-    std::uint32_t crc = 0xFFFFFFFFu;
-    for (std::size_t i = 0; i < size; ++i) {
-        crc ^= data[i];
-        for (int b = 0; b < 8; ++b) {
-            crc = (crc >> 1) ^ (0xEDB88320u & -static_cast<std::uint32_t>(
-                                                  crc & 1));
-        }
+// Map the toolkit's IoError into the store's richer StoreError. The
+// one important distinction is OpenFailed → "missing file, fresh
+// install", which both callers treat as a success path (not
+// Corrupt).
+[[nodiscard]] inline StoreError map_io_error(PF::IoError e) noexcept {
+    switch (e) {
+        case PF::IoError::OpenFailed:
+        case PF::IoError::ReadFailed:
+        case PF::IoError::WriteFailed:
+        case PF::IoError::RenameFailed:
+        case PF::IoError::ShortRead:
+            return StoreError::IoError;
+        case PF::IoError::MagicMismatch:
+        case PF::IoError::VersionMismatch:
+        case PF::IoError::CrcMismatch:
+        case PF::IoError::TruncatedPayload:
+            return StoreError::Corrupt;
     }
-    return ~crc;
-}
-
-void put_u32_le(std::vector<std::uint8_t>& out, std::uint32_t v) {
-    for (int i = 0; i < 4; ++i) {
-        out.push_back(static_cast<std::uint8_t>((v >> (8 * i)) & 0xFFu));
-    }
-}
-void put_u64_le(std::vector<std::uint8_t>& out, std::uint64_t v) {
-    for (int i = 0; i < 8; ++i) {
-        out.push_back(static_cast<std::uint8_t>((v >> (8 * i)) & 0xFFu));
-    }
-}
-bool get_u32_le(const std::uint8_t*& p, const std::uint8_t* end,
-                std::uint32_t& out) noexcept {
-    if (end - p < 4) return false;
-    out = static_cast<std::uint32_t>(p[0]) |
-          (static_cast<std::uint32_t>(p[1]) << 8) |
-          (static_cast<std::uint32_t>(p[2]) << 16) |
-          (static_cast<std::uint32_t>(p[3]) << 24);
-    p += 4;
-    return true;
-}
-bool get_u64_le(const std::uint8_t*& p, const std::uint8_t* end,
-                std::uint64_t& out) noexcept {
-    if (end - p < 8) return false;
-    out = 0;
-    for (int i = 0; i < 8; ++i) {
-        out |= static_cast<std::uint64_t>(p[i]) << (8 * i);
-    }
-    p += 8;
-    return true;
-}
-
-// Atomic file swap: write to `path.tmp`, fsync, rename to `path`. On
-// Windows std::filesystem::rename is atomic for same-volume replace
-// provided the destination is not locked; for 1.0 that's acceptable.
-tl::expected<void, StoreError> atomic_write(
-    const std::string& path, const std::vector<std::uint8_t>& payload) noexcept {
-    try {
-        const std::string tmp = path + ".tmp";
-        {
-            std::ofstream os(tmp, std::ios::binary | std::ios::trunc);
-            if (!os.is_open()) return tl::make_unexpected(StoreError::IoError);
-            os.write(reinterpret_cast<const char*>(payload.data()),
-                     static_cast<std::streamsize>(payload.size()));
-            if (!os.good()) return tl::make_unexpected(StoreError::IoError);
-        }
-        std::error_code ec;
-        std::filesystem::rename(tmp, path, ec);
-        if (ec) return tl::make_unexpected(StoreError::IoError);
-        return {};
-    } catch (...) {
-        return tl::make_unexpected(StoreError::IoError);
-    }
-}
-
-tl::expected<std::vector<std::uint8_t>, StoreError>
-read_whole_file(const std::string& path) noexcept {
-    try {
-        std::ifstream is(path, std::ios::binary | std::ios::ate);
-        if (!is.is_open()) {
-            return tl::make_unexpected(StoreError::IoError);
-        }
-        const auto size = is.tellg();
-        if (size < 0) return tl::make_unexpected(StoreError::IoError);
-        is.seekg(0, std::ios::beg);
-        std::vector<std::uint8_t> buf(static_cast<std::size_t>(size));
-        if (size > 0) {
-            is.read(reinterpret_cast<char*>(buf.data()),
-                    static_cast<std::streamsize>(size));
-            if (!is.good()) return tl::make_unexpected(StoreError::IoError);
-        }
-        return buf;
-    } catch (...) {
-        return tl::make_unexpected(StoreError::IoError);
-    }
+    return StoreError::IoError;
 }
 
 }  // namespace
@@ -142,53 +72,34 @@ void FileBackedEpochStore::reset_for_testing(const EpochState& state) noexcept {
 
 tl::expected<void, StoreError>
 FileBackedEpochStore::save_locked() noexcept {
-    std::vector<std::uint8_t> payload;
-    payload.reserve(kEpochMagicLen + 4 + 8 + 8 + 4);
-    payload.insert(payload.end(), kEpochMagic,
-                   kEpochMagic + kEpochMagicLen);
-    put_u32_le(payload, kVersion);
-    put_u64_le(payload, state_.runtime_epoch);
-    put_u64_le(payload, state_.minimum_accepted_epoch);
-    const std::uint32_t checksum =
-        crc32(payload.data() + kEpochMagicLen,
-              payload.size() - kEpochMagicLen);
-    put_u32_le(payload, checksum);
-    return atomic_write(path_, payload);
+    // Body: u64 runtime_epoch + u64 minimum_accepted_epoch.
+    std::vector<std::uint8_t> body;
+    body.reserve(16);
+    PF::put_u64_le(body, state_.runtime_epoch);
+    PF::put_u64_le(body, state_.minimum_accepted_epoch);
+    auto r = PF::write_framed(path_, kEpochMagic, kVersion, body);
+    if (!r) return tl::make_unexpected(map_io_error(r.error()));
+    return {};
 }
 
 tl::expected<void, StoreError> FileBackedEpochStore::load() noexcept {
     std::lock_guard<std::mutex> g(mu_);
-    auto buf_or = read_whole_file(path_);
-    if (!buf_or) {
-        // Missing file: keep zeros and treat as fresh start.
-        state_ = EpochState{};
-        return {};
+    auto body_or = PF::read_framed(path_, kEpochMagic, kVersion);
+    if (!body_or) {
+        if (body_or.error() == PF::IoError::OpenFailed) {
+            // Missing file: keep zeros and treat as fresh start.
+            state_ = EpochState{};
+            return {};
+        }
+        return tl::make_unexpected(map_io_error(body_or.error()));
     }
-    const auto& buf = *buf_or;
-    if (buf.size() < kEpochMagicLen + 4 + 8 + 8 + 4) {
-        return tl::make_unexpected(StoreError::Corrupt);
-    }
-    if (std::memcmp(buf.data(), kEpochMagic, kEpochMagicLen) != 0) {
-        return tl::make_unexpected(StoreError::Corrupt);
-    }
-    const std::uint8_t* p = buf.data() + kEpochMagicLen;
-    const std::uint8_t* end = buf.data() + buf.size();
-    std::uint32_t version = 0;
-    if (!get_u32_le(p, end, version) || version != kVersion) {
-        return tl::make_unexpected(StoreError::Corrupt);
-    }
+    const auto& body = *body_or;
+    if (body.size() != 16) return tl::make_unexpected(StoreError::Corrupt);
+    const std::uint8_t* p = body.data();
+    const std::uint8_t* end = p + body.size();
     EpochState s{};
-    if (!get_u64_le(p, end, s.runtime_epoch) ||
-        !get_u64_le(p, end, s.minimum_accepted_epoch)) {
-        return tl::make_unexpected(StoreError::Corrupt);
-    }
-    std::uint32_t stored_crc = 0;
-    if (!get_u32_le(p, end, stored_crc)) {
-        return tl::make_unexpected(StoreError::Corrupt);
-    }
-    const std::uint32_t calc_crc = crc32(buf.data() + kEpochMagicLen,
-                                         4 + 8 + 8);
-    if (stored_crc != calc_crc) {
+    if (!PF::get_u64_le(p, end, s.runtime_epoch) ||
+        !PF::get_u64_le(p, end, s.minimum_accepted_epoch)) {
         return tl::make_unexpected(StoreError::Corrupt);
     }
     state_ = s;
@@ -233,49 +144,37 @@ std::size_t FileBackedNonceStore::size() const noexcept {
 
 tl::expected<void, StoreError> FileBackedNonceStore::persist() noexcept {
     std::lock_guard<std::mutex> g(mu_);
-    std::vector<std::uint8_t> payload;
-    payload.reserve(kNonceMagicLen + 4 + 4 + consumed_.size() * 32 + 4);
-    payload.insert(payload.end(), kNonceMagic,
-                   kNonceMagic + kNonceMagicLen);
-    put_u32_le(payload, kVersion);
-    put_u32_le(payload, static_cast<std::uint32_t>(consumed_.size()));
+    // Body: u32 count + count * 32-byte nonces.
+    std::vector<std::uint8_t> body;
+    body.reserve(4 + consumed_.size() * 32);
+    PF::put_u32_le(body, static_cast<std::uint32_t>(consumed_.size()));
     for (const auto& n : consumed_) {
-        payload.insert(payload.end(), n.begin(), n.end());
+        body.insert(body.end(), n.begin(), n.end());
     }
-    const std::uint32_t checksum =
-        crc32(payload.data() + kNonceMagicLen,
-              payload.size() - kNonceMagicLen);
-    put_u32_le(payload, checksum);
-    return atomic_write(path_, payload);
+    auto r = PF::write_framed(path_, kNonceMagic, kVersion, body);
+    if (!r) return tl::make_unexpected(map_io_error(r.error()));
+    return {};
 }
 
 tl::expected<void, StoreError> FileBackedNonceStore::load() noexcept {
     std::lock_guard<std::mutex> g(mu_);
-    auto buf_or = read_whole_file(path_);
-    if (!buf_or) {
-        consumed_.clear();
-        return {};
+    auto body_or = PF::read_framed(path_, kNonceMagic, kVersion);
+    if (!body_or) {
+        if (body_or.error() == PF::IoError::OpenFailed) {
+            consumed_.clear();
+            return {};
+        }
+        return tl::make_unexpected(map_io_error(body_or.error()));
     }
-    const auto& buf = *buf_or;
-    if (buf.size() < kNonceMagicLen + 4 + 4 + 4) {
-        return tl::make_unexpected(StoreError::Corrupt);
-    }
-    if (std::memcmp(buf.data(), kNonceMagic, kNonceMagicLen) != 0) {
-        return tl::make_unexpected(StoreError::Corrupt);
-    }
-    const std::uint8_t* p = buf.data() + kNonceMagicLen;
-    const std::uint8_t* end = buf.data() + buf.size();
-    std::uint32_t version = 0;
+    const auto& body = *body_or;
+    const std::uint8_t* p = body.data();
+    const std::uint8_t* end = p + body.size();
     std::uint32_t count = 0;
-    if (!get_u32_le(p, end, version) || version != kVersion) {
+    if (!PF::get_u32_le(p, end, count)) {
         return tl::make_unexpected(StoreError::Corrupt);
     }
-    if (!get_u32_le(p, end, count)) {
-        return tl::make_unexpected(StoreError::Corrupt);
-    }
-    const std::size_t needed_bytes =
-        static_cast<std::size_t>(count) * 32 + 4;  // entries + final CRC
-    if (static_cast<std::size_t>(end - p) < needed_bytes) {
+    const std::size_t needed = static_cast<std::size_t>(count) * 32;
+    if (static_cast<std::size_t>(end - p) != needed) {
         return tl::make_unexpected(StoreError::Corrupt);
     }
     std::unordered_set<std::array<std::uint8_t, 32>, ArrayHash> fresh;
@@ -285,17 +184,6 @@ tl::expected<void, StoreError> FileBackedNonceStore::load() noexcept {
         std::memcpy(n.data(), p, 32);
         p += 32;
         fresh.insert(n);
-    }
-    std::uint32_t stored_crc = 0;
-    if (!get_u32_le(p, end, stored_crc)) {
-        return tl::make_unexpected(StoreError::Corrupt);
-    }
-    const std::uint32_t payload_len_excluding_crc =
-        static_cast<std::uint32_t>(4 + 4 + count * 32);
-    const std::uint32_t calc_crc = crc32(buf.data() + kNonceMagicLen,
-                                         payload_len_excluding_crc);
-    if (stored_crc != calc_crc) {
-        return tl::make_unexpected(StoreError::Corrupt);
     }
     consumed_ = std::move(fresh);
     return {};
