@@ -199,7 +199,7 @@ TEST(Provider, AppraisalRejectsEvidenceBoundToWrongPackage_doc14_10_8) {
     const auto ctx = make_ctx(req);
 
     ProviderEvidence ev{};
-    ev.evidence_version = "evidence-v1";
+    ev.evidence_version = std::string(kProviderEvidenceVersionV2);
     ev.provider_class = ProviderClass::LocalEmbedded;
     ev.provider_instance_pseudonym = caps.provider_instance_pseudonym;
     ev.nonce = ctx.policy_requirement_hash;
@@ -218,7 +218,7 @@ TEST(Provider, AppraisalRejectsEvidenceClaimingDifferentProviderClass_doc14_10_3
     const auto ctx = make_ctx(req);
 
     ProviderEvidence ev{};
-    ev.evidence_version = "evidence-v1";
+    ev.evidence_version = std::string(kProviderEvidenceVersionV2);
     ev.provider_class = ProviderClass::LocalTpm;  // masquerade
     ev.provider_instance_pseudonym = caps.provider_instance_pseudonym;
     ev.nonce = ctx.policy_requirement_hash;
@@ -243,7 +243,7 @@ TEST(Provider, AppraisalRejectsEvidenceWithMismatchedRequirementHash) {
     const auto alt_hash = hash_of(alt_req);
 
     ProviderEvidence ev{};
-    ev.evidence_version = "evidence-v1";
+    ev.evidence_version = std::string(kProviderEvidenceVersionV2);
     ev.provider_class = ProviderClass::LocalEmbedded;
     ev.provider_instance_pseudonym = caps.provider_instance_pseudonym;
     ev.nonce = ctx.policy_requirement_hash;

@@ -119,6 +119,16 @@ struct CapabilityStatement {
     std::array<std::uint8_t, 32> provider_measurement_hash;  // zeros → absent
 };
 
+// Current wire-format tag for ProviderEvidence.
+//
+// v1 was the hand-rolled little-endian layout before Phase 10. v2 is
+// the strict-CBOR encoding in runtime/src/provider/local_embedded.cpp
+// (the `serialize_evidence_core` schema — doc 14 §5 with CBOR map
+// tags 1..10). The bytes-on-the-wire are not compatible; a consumer
+// that reads the version tag must refuse v1 bytes, and a producer
+// that emits v2 bytes must tag them accordingly.
+constexpr std::string_view kProviderEvidenceVersionV2 = "evidence-v2";
+
 // doc 14 §5. `attestation_payload` and `evidence_signature_or_mac` are
 // provider-specific opaque bytes; the runtime only verifies the field
 // bindings and hands the envelope to the appraiser.

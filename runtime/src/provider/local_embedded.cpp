@@ -369,7 +369,7 @@ LocalEmbeddedProvider::attest_runtime(
     const std::array<std::uint8_t, 32>& runtime_measurement,
     const std::array<std::uint8_t, 32>& profile_requirement_hash) noexcept {
     ProviderEvidence ev{};
-    ev.evidence_version = "evidence-v1";
+    ev.evidence_version = std::string(kProviderEvidenceVersionV2);
     ev.provider_class = ProviderClass::LocalEmbedded;
     ev.provider_instance_pseudonym = instance_pseudonym_;
     ev.nonce = nonce;
@@ -389,7 +389,7 @@ LocalEmbeddedProvider::bind_artifact(
     const std::array<std::uint8_t, 32>& nonce,
     const VerifiedArtifactContext& ctx) noexcept {
     ProviderEvidence ev{};
-    ev.evidence_version = "evidence-v1";
+    ev.evidence_version = std::string(kProviderEvidenceVersionV2);
     ev.provider_class = ProviderClass::LocalEmbedded;
     ev.provider_instance_pseudonym = instance_pseudonym_;
     ev.nonce = nonce;
