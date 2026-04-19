@@ -61,7 +61,7 @@ public:
 
     // Monotonic updates only. Both fields may move forward freely;
     // either moving backwards returns EpochRollbackDenied.
-    virtual tl::expected<void, StoreError>
+    [[nodiscard]] virtual tl::expected<void, StoreError>
     advance(const EpochState& proposed) noexcept = 0;
 
     // Force-install (tests only). Bypasses monotonic guard.
@@ -77,7 +77,7 @@ public:
 // fail-closed side of the ledger.
 class PersistentNonceStore : public VMPilot::Runtime::Tokens::NonceStore {
 public:
-    virtual tl::expected<void, StoreError> persist() noexcept = 0;
+    [[nodiscard]] virtual tl::expected<void, StoreError> persist() noexcept = 0;
 };
 
 // ─── File-backed implementation ─────────────────────────────────────────

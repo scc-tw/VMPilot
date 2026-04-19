@@ -146,7 +146,7 @@ enum class ContractVerifyError : std::uint8_t {
 parse_exception_unwind_contract(const std::uint8_t* data,
                                 std::size_t size) noexcept;
 
-inline tl::expected<ExceptionUnwindContract, ContractParseError>
+[[nodiscard]] inline tl::expected<ExceptionUnwindContract, ContractParseError>
 parse_exception_unwind_contract(
     const std::vector<std::uint8_t>& bytes) noexcept {
     return parse_exception_unwind_contract(bytes.data(), bytes.size());
@@ -158,7 +158,7 @@ verify_reserved_exception_unwind_contract(
     std::size_t size,
     VMPilot::DomainLabels::FamilyId expected_family) noexcept;
 
-inline tl::expected<ExceptionUnwindContract, ContractVerifyError>
+[[nodiscard]] inline tl::expected<ExceptionUnwindContract, ContractVerifyError>
 verify_reserved_exception_unwind_contract(
     const std::vector<std::uint8_t>& bytes,
     VMPilot::DomainLabels::FamilyId expected_family) noexcept {

@@ -123,7 +123,7 @@ enum class LookupError : std::uint8_t {
 [[nodiscard]] tl::expected<Registry, ParseError>
 parse(const std::uint8_t* data, std::size_t size) noexcept;
 
-inline tl::expected<Registry, ParseError>
+[[nodiscard]] inline tl::expected<Registry, ParseError>
 parse(const std::vector<std::uint8_t>& bytes) noexcept {
     return parse(bytes.data(), bytes.size());
 }
@@ -140,7 +140,7 @@ parse(const std::vector<std::uint8_t>& bytes) noexcept {
 parse_partition(const std::uint8_t* data, std::size_t size,
                 const VMPilot::Runtime::VendorTrustRoot& root) noexcept;
 
-inline tl::expected<Registry, ParseError>
+[[nodiscard]] inline tl::expected<Registry, ParseError>
 parse_partition(const std::vector<std::uint8_t>& bytes,
                 const VMPilot::Runtime::VendorTrustRoot& root) noexcept {
     return parse_partition(bytes.data(), bytes.size(), root);

@@ -89,7 +89,7 @@ parse_outer_envelope(const std::uint8_t* data, std::size_t size) noexcept;
 [[nodiscard]] tl::expected<OuterEnvelope, ParseError>
 parse_outer_envelope(std::string_view bytes) noexcept;
 
-inline tl::expected<OuterEnvelope, ParseError>
+[[nodiscard]] inline tl::expected<OuterEnvelope, ParseError>
 parse_outer_envelope(const std::vector<std::uint8_t>& bytes) noexcept {
     return parse_outer_envelope(bytes.data(), bytes.size());
 }

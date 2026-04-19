@@ -44,7 +44,7 @@ enum class ResolvedFamilyProfileParseError : std::uint8_t {
 [[nodiscard]] tl::expected<ResolvedFamilyProfileHeader, ResolvedFamilyProfileParseError>
 parse_resolved_family_profile_header(const std::uint8_t* data, std::size_t size) noexcept;
 
-inline tl::expected<ResolvedFamilyProfileHeader, ResolvedFamilyProfileParseError>
+[[nodiscard]] inline tl::expected<ResolvedFamilyProfileHeader, ResolvedFamilyProfileParseError>
 parse_resolved_family_profile_header(const std::vector<std::uint8_t>& bytes) noexcept {
     return parse_resolved_family_profile_header(bytes.data(), bytes.size());
 }

@@ -181,13 +181,13 @@ public:
 
     virtual CapabilityStatement get_capabilities() const noexcept = 0;
 
-    virtual tl::expected<ProviderEvidence, ProviderError>
+    [[nodiscard]] virtual tl::expected<ProviderEvidence, ProviderError>
     attest_runtime(const std::array<std::uint8_t, 32>& nonce,
                    const std::array<std::uint8_t, 32>& runtime_measurement,
                    const std::array<std::uint8_t, 32>&
                        profile_requirement_hash) noexcept = 0;
 
-    virtual tl::expected<ProviderEvidence, ProviderError>
+    [[nodiscard]] virtual tl::expected<ProviderEvidence, ProviderError>
     bind_artifact(const std::array<std::uint8_t, 32>& nonce,
                   const VerifiedArtifactContext& ctx) noexcept = 0;
 };
@@ -215,7 +215,7 @@ enum class PolicyRequirementParseError : std::uint8_t {
 parse_policy_requirement(const std::uint8_t* data,
                          std::size_t size) noexcept;
 
-inline tl::expected<PolicyRequirement, PolicyRequirementParseError>
+[[nodiscard]] inline tl::expected<PolicyRequirement, PolicyRequirementParseError>
 parse_policy_requirement(
     const std::vector<std::uint8_t>& bytes) noexcept {
     return parse_policy_requirement(bytes.data(), bytes.size());
