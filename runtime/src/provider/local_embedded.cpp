@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstring>
 
+#include "cbor/schema.hpp"
 #include "cbor/strict.hpp"
 #include "vm/domain_labels.hpp"
 
@@ -14,6 +15,20 @@ struct RequireErrors<VMPilot::Runtime::Provider::PolicyRequirementParseError> {
     static constexpr E missing_field    = E::MissingCoreField;
     static constexpr E wrong_field_type = E::WrongFieldType;
 };
+namespace Schema {
+template <>
+struct SchemaErrors<VMPilot::Runtime::Provider::PolicyRequirementParseError> {
+    using E = VMPilot::Runtime::Provider::PolicyRequirementParseError;
+    static constexpr E bad_cbor             = E::BadCbor;
+    static constexpr E not_a_map            = E::NotAMap;
+    static constexpr E missing_field        = E::MissingCoreField;
+    static constexpr E wrong_field_type     = E::WrongFieldType;
+    static constexpr E unknown_core_field   = E::UnknownCoreField;
+    static constexpr E unknown_enum_value   = E::UnknownEnumValue;
+    static constexpr E array_too_long       = E::ArrayTooLong;
+    static constexpr E unsupported_version  = E::UnsupportedRequirementVersion;
+};
+}  // namespace Schema
 }  // namespace VMPilot::Cbor
 
 namespace VMPilot::Runtime::Provider {
@@ -249,135 +264,56 @@ parse_policy_requirement(const std::uint8_t* data,
                          std::size_t size) noexcept {
     using VMPilot::Cbor::Value;
     using VMPilot::Cbor::parse_strict;
-    auto err = [](PolicyRequirementParseError e) {
-        return tl::make_unexpected(e);
-    };
+    using namespace VMPilot::Cbor::Schema;
 
     // parse_strict already rejects trailing bytes, duplicate map
     // keys, non-canonical integer encoding, indefinite length, and
     // floats; we only need to layer typed-field validation on top.
     auto root_or = parse_strict(data, size);
-    if (!root_or) return err(PolicyRequirementParseError::BadCbor);
+    if (!root_or) {
+        return tl::make_unexpected(PolicyRequirementParseError::BadCbor);
+    }
     const Value& root = *root_or;
-    if (root.kind() != Value::Kind::Map) {
-        return err(PolicyRequirementParseError::NotAMap);
-    }
 
-    // Unknown-key rejection (strict mode).
-    for (std::size_t i = 0; i < root.map_size(); ++i) {
-        const Value& key = root.map_key_at(i);
-        if (key.kind() != Value::Kind::Uint) {
-            return err(PolicyRequirementParseError::WrongFieldType);
-        }
-        if (!is_known_requirement_key(key.as_uint())) {
-            return err(PolicyRequirementParseError::UnknownCoreField);
-        }
-    }
+    auto unknown_or = reject_unknown_keys<PolicyRequirementParseError>(
+        root,
+        {kReq_RequirementVersion, kReq_RequiredPolicyFloor,
+         kReq_RequiredFamilySet, kReq_RequireHardwareBound,
+         kReq_RequireNonExportableKey, kReq_RequireOnlineFreshness,
+         kReq_RequireRemoteAttestation, kReq_RequireRecoveryModel,
+         kReq_AllowedProviderClasses, kReq_MinimumProviderEpoch});
+    if (!unknown_or) return tl::make_unexpected(unknown_or.error());
 
-    auto require_text = [&](std::uint64_t k) {
-        return VMPilot::Cbor::require_text_ref<PolicyRequirementParseError>(root, k);
-    };
-    auto require_uint = [&](std::uint64_t k) {
-        return VMPilot::Cbor::require_uint<PolicyRequirementParseError>(root, k);
-    };
+    const auto schema = std::make_tuple(
+        TextField<PolicyRequirement>{kReq_RequirementVersion,
+                                     &PolicyRequirement::requirement_version,
+                                     kRequirementVersionV1},
+        EnumUintField<PolicyRequirement, VMPilot::DomainLabels::PolicyId>{
+            kReq_RequiredPolicyFloor,
+            &PolicyRequirement::required_policy_floor},
+        EnumTextArrayField<PolicyRequirement, VMPilot::DomainLabels::FamilyId>{
+            kReq_RequiredFamilySet,
+            &PolicyRequirement::required_family_set,
+            /*min=*/1, /*max=*/kMaxFamilySetLength},
+        BoolField<PolicyRequirement>{kReq_RequireHardwareBound,
+                                     &PolicyRequirement::require_hardware_bound},
+        BoolField<PolicyRequirement>{kReq_RequireNonExportableKey,
+                                     &PolicyRequirement::require_non_exportable_key},
+        BoolField<PolicyRequirement>{kReq_RequireOnlineFreshness,
+                                     &PolicyRequirement::require_online_freshness},
+        BoolField<PolicyRequirement>{kReq_RequireRemoteAttestation,
+                                     &PolicyRequirement::require_remote_attestation},
+        EnumUintField<PolicyRequirement, RecoveryModel>{
+            kReq_RequireRecoveryModel,
+            &PolicyRequirement::require_recovery_model},
+        EnumTextArrayField<PolicyRequirement, ProviderClass>{
+            kReq_AllowedProviderClasses,
+            &PolicyRequirement::allowed_provider_classes,
+            /*min=*/1, /*max=*/kMaxAllowedProviderClassesLength},
+        UintField<PolicyRequirement>{kReq_MinimumProviderEpoch,
+                                     &PolicyRequirement::minimum_provider_epoch});
 
-    auto version_or = require_text(kReq_RequirementVersion);
-    if (!version_or) return err(version_or.error());
-    if (**version_or != kRequirementVersionV1) {
-        return err(PolicyRequirementParseError::UnsupportedRequirementVersion);
-    }
-
-    auto floor_v_or = require_uint(kReq_RequiredPolicyFloor);
-    if (!floor_v_or) return err(floor_v_or.error());
-    auto floor_or = parse_policy_floor_uint(*floor_v_or);
-    if (!floor_or) return err(floor_or.error());
-
-    // required_family_set: array<text>, 1..kMaxFamilySetLength.
-    std::vector<VMPilot::DomainLabels::FamilyId> families;
-    {
-        const Value* v = root.find_by_uint_key(kReq_RequiredFamilySet);
-        if (v == nullptr) return err(PolicyRequirementParseError::MissingCoreField);
-        if (v->kind() != Value::Kind::Array) {
-            return err(PolicyRequirementParseError::WrongFieldType);
-        }
-        const auto& items = v->as_array();
-        if (items.empty() || items.size() > kMaxFamilySetLength) {
-            return err(PolicyRequirementParseError::ArrayTooLong);
-        }
-        families.reserve(items.size());
-        for (const Value& item : items) {
-            if (item.kind() != Value::Kind::Text) {
-                return err(PolicyRequirementParseError::WrongFieldType);
-            }
-            auto fam = VMPilot::DomainLabels::parse_family_id(item.as_text());
-            if (!fam.has_value()) {
-                return err(PolicyRequirementParseError::UnknownEnumValue);
-            }
-            families.push_back(*fam);
-        }
-    }
-
-    auto hw_or = require_uint(kReq_RequireHardwareBound);
-    auto nek_or = require_uint(kReq_RequireNonExportableKey);
-    auto fresh_or = require_uint(kReq_RequireOnlineFreshness);
-    auto att_or = require_uint(kReq_RequireRemoteAttestation);
-    auto recov_v_or = require_uint(kReq_RequireRecoveryModel);
-    auto epoch_or = require_uint(kReq_MinimumProviderEpoch);
-
-    if (!hw_or)     return err(hw_or.error());
-    if (!nek_or)    return err(nek_or.error());
-    if (!fresh_or)  return err(fresh_or.error());
-    if (!att_or)    return err(att_or.error());
-    if (!recov_v_or) return err(recov_v_or.error());
-    if (!epoch_or)  return err(epoch_or.error());
-
-    auto hw_b    = parse_bool_uint(*hw_or);
-    auto nek_b   = parse_bool_uint(*nek_or);
-    auto fresh_b = parse_bool_uint(*fresh_or);
-    auto att_b   = parse_bool_uint(*att_or);
-    auto recov_or = parse_recovery_model_uint(*recov_v_or);
-
-    if (!hw_b)    return err(hw_b.error());
-    if (!nek_b)   return err(nek_b.error());
-    if (!fresh_b) return err(fresh_b.error());
-    if (!att_b)   return err(att_b.error());
-    if (!recov_or) return err(recov_or.error());
-
-    // allowed_provider_classes: array<text>, 1..kMaxAllowedProviderClassesLength.
-    std::vector<ProviderClass> classes;
-    {
-        const Value* v = root.find_by_uint_key(kReq_AllowedProviderClasses);
-        if (v == nullptr) return err(PolicyRequirementParseError::MissingCoreField);
-        if (v->kind() != Value::Kind::Array) {
-            return err(PolicyRequirementParseError::WrongFieldType);
-        }
-        const auto& items = v->as_array();
-        if (items.empty() || items.size() > kMaxAllowedProviderClassesLength) {
-            return err(PolicyRequirementParseError::ArrayTooLong);
-        }
-        classes.reserve(items.size());
-        for (const Value& item : items) {
-            if (item.kind() != Value::Kind::Text) {
-                return err(PolicyRequirementParseError::WrongFieldType);
-            }
-            auto cls = parse_provider_class_text(item.as_text());
-            if (!cls) return err(cls.error());
-            classes.push_back(*cls);
-        }
-    }
-
-    PolicyRequirement out;
-    out.requirement_version         = **version_or;
-    out.required_policy_floor       = *floor_or;
-    out.required_family_set         = std::move(families);
-    out.require_hardware_bound      = *hw_b;
-    out.require_non_exportable_key  = *nek_b;
-    out.require_online_freshness    = *fresh_b;
-    out.require_remote_attestation  = *att_b;
-    out.require_recovery_model      = *recov_or;
-    out.allowed_provider_classes    = std::move(classes);
-    out.minimum_provider_epoch      = *epoch_or;
-    return out;
+    return parse_schema<PolicyRequirement, PolicyRequirementParseError>(root, schema);
 }
 
 static std::array<std::uint8_t, 32>
