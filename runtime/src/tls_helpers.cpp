@@ -67,19 +67,22 @@ inline uint8_t* get_segment_base_fallback() noexcept {
     return reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(base));
 }
 
-#elif (defined(VMPILOT_OS_LINUX) || defined(VMPILOT_OS_DARWIN)) && defined(__aarch64__)
-// ARM64: TPIDR_EL0 is the thread pointer — readable via mrs instruction.
-// The "fallback" is the same instruction since there's no alternative.
+#elif defined(VMPILOT_OS_LINUX) && defined(__aarch64__)
+// Linux ARM64: TPIDR_EL0 is the thread pointer and offset 0 is the
+// TCB self-pointer (glibc/musl convention) so the mrs instruction
+// returns a user-readable base.
 inline uint8_t* get_segment_base_fallback() noexcept {
     uint64_t base;
     asm volatile("mrs %0, TPIDR_EL0" : "=r"(base));
     return reinterpret_cast<uint8_t*>(base);
 }
 
-#elif defined(VMPILOT_OS_DARWIN) && defined(__x86_64__)
-// macOS x86_64 (Intel, discontinued but may still run in CI).
-// macOS doesn't expose fs:/gs: for user TLS.  Use pthread_self()
-// which returns the thread struct base — TLS lives at negative offsets.
+#elif defined(VMPILOT_OS_DARWIN) && (defined(__aarch64__) || defined(__x86_64__))
+// macOS (Apple Silicon + Intel): TPIDR_EL0 on arm64 does NOT point at
+// user-accessible memory — Apple reserves it for kernel use and
+// exposes per-thread state via pthread_self() instead. pthread_self()
+// returns the `_opaque_pthread_t*` which IS user-readable, so we use
+// the same pointer for both arches.
 #include <pthread.h>
 inline uint8_t* get_segment_base_fallback() noexcept {
     return reinterpret_cast<uint8_t*>(pthread_self());
@@ -193,9 +196,15 @@ extern "C" void vmpilot_tls_write32(uint64_t offset, uint64_t value) noexcept {
 }
 
 // =========================================================================
-// Layer 1: Linux/macOS ARM64 — TLS via TPIDR_EL0
+// Layer 1: Linux ARM64 — TLS via TPIDR_EL0
+//
+// macOS ARM64 deliberately opts out: Apple reserves TPIDR_EL0 for
+// kernel use and a userland `mrs` read returns a value whose offset-0
+// dereference is not guaranteed to touch user-readable memory.
+// macOS ARM64 therefore falls through to the Layer-2 pthread_self()
+// fallback, which returns a real user-space `_opaque_pthread_t*`.
 // =========================================================================
-#elif (defined(VMPILOT_OS_LINUX) || defined(VMPILOT_OS_DARWIN)) && defined(__aarch64__) && !defined(VMPILOT_TLS_FORCE_FALLBACK)
+#elif defined(VMPILOT_OS_LINUX) && defined(__aarch64__) && !defined(VMPILOT_TLS_FORCE_FALLBACK)
 
 extern "C" uint64_t vmpilot_tls_read64(uint64_t offset) noexcept {
     uint64_t base;
