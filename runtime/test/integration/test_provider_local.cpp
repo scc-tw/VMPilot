@@ -47,6 +47,10 @@ using VMPilot::Runtime::Provider::ProviderError;
 using VMPilot::Runtime::Provider::ProviderEvidence;
 using VMPilot::Runtime::Provider::ProviderStatus;
 using VMPilot::Runtime::Provider::RecoveryModel;
+using VMPilot::Runtime::Provider::kProviderEvidenceVersionV2;
+using VMPilot::Runtime::Provider::runtime_provider;
+using VMPilot::Runtime::Provider::ScopedProviderOverride;
+using VMPilot::Runtime::Provider::TrustProvider;
 using VMPilot::Runtime::Provider::VerifiedArtifactContext;
 
 PolicyRequirement baseline_requirement() {
@@ -465,4 +469,75 @@ TEST(PolicyRequirementParse, WrongFieldTypeRejected) {
     auto parsed = parse_policy_requirement(bytes);
     ASSERT_FALSE(parsed.has_value());
     EXPECT_EQ(parsed.error(), PolicyRequirementParseError::WrongFieldType);
+}
+
+// ─── ScopedProviderOverride ─────────────────────────────────────────────
+//
+// The RAII guard is the preferred swap mechanism for tests; all four
+// properties the guard exists to preserve — type safety, nested
+// restoration, exception restoration, and correctness under a
+// no-override null — need coverage, or the guard becomes the silent
+// source of test-state bleed we wrote it to prevent.
+
+// Compile-time: the guard must not be copyable or movable, so a test
+// can't accidentally escape the intended scope.
+static_assert(!std::is_copy_constructible_v<ScopedProviderOverride>);
+static_assert(!std::is_copy_assignable_v<ScopedProviderOverride>);
+static_assert(!std::is_move_constructible_v<ScopedProviderOverride>);
+static_assert(!std::is_move_assignable_v<ScopedProviderOverride>);
+
+TEST(ScopedProviderOverride, InstallsAndRestores) {
+    TrustProvider* before = &runtime_provider();
+    LocalEmbeddedProvider stub;
+    ASSERT_NE(before, static_cast<TrustProvider*>(&stub));
+    {
+        ScopedProviderOverride guard(&stub);
+        EXPECT_EQ(&runtime_provider(), static_cast<TrustProvider*>(&stub));
+    }
+    EXPECT_EQ(&runtime_provider(), before);
+}
+
+TEST(ScopedProviderOverride, NestedScopesRestoreInLifoOrder) {
+    TrustProvider* baseline = &runtime_provider();
+    LocalEmbeddedProvider outer_stub;
+    LocalEmbeddedProvider inner_stub;
+    {
+        ScopedProviderOverride outer(&outer_stub);
+        EXPECT_EQ(&runtime_provider(), static_cast<TrustProvider*>(&outer_stub));
+        {
+            ScopedProviderOverride inner(&inner_stub);
+            EXPECT_EQ(&runtime_provider(),
+                      static_cast<TrustProvider*>(&inner_stub));
+        }
+        EXPECT_EQ(&runtime_provider(), static_cast<TrustProvider*>(&outer_stub));
+    }
+    EXPECT_EQ(&runtime_provider(), baseline);
+}
+
+TEST(ScopedProviderOverride, RestoresAfterException) {
+    TrustProvider* before = &runtime_provider();
+    LocalEmbeddedProvider stub;
+    try {
+        ScopedProviderOverride guard(&stub);
+        EXPECT_EQ(&runtime_provider(), static_cast<TrustProvider*>(&stub));
+        throw std::runtime_error("test-simulated failure");
+    } catch (const std::runtime_error&) {
+        // Guard's destructor ran during stack unwind; state must be restored.
+    }
+    EXPECT_EQ(&runtime_provider(), before);
+}
+
+TEST(ScopedProviderOverride, NullptrArgumentRestoresDefault) {
+    LocalEmbeddedProvider stub;
+    ScopedProviderOverride outer(&stub);
+    TrustProvider* custom = &runtime_provider();
+    ASSERT_EQ(custom, static_cast<TrustProvider*>(&stub));
+    {
+        // Passing nullptr inside an existing override means "revert to
+        // whatever the default is" — the destructor then puts the
+        // outer override back.
+        ScopedProviderOverride inner(nullptr);
+        EXPECT_NE(&runtime_provider(), static_cast<TrustProvider*>(&stub));
+    }
+    EXPECT_EQ(&runtime_provider(), static_cast<TrustProvider*>(&stub));
 }
