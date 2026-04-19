@@ -73,15 +73,6 @@ add_library(VMPilot_Runtime STATIC
     ${PLATFORM_ASM_SOURCES}
 )
 
-# eh_guard.cpp must catch structured exceptions raised by native code
-# (C++ throws, RaiseException, signals) that cross the platform_call
-# trampoline. MSVC /EHsc does not let catch(...) intercept SEH; /EHa
-# removes that restriction. Only eh_guard.cpp needs this — the rest of
-# the runtime keeps /EHsc for the smaller codegen.
-if(MSVC)
-    set_source_files_properties(src/eh_guard.cpp
-        PROPERTIES COMPILE_OPTIONS "/EHa")
-endif()
 
 include(${CMAKE_SOURCE_DIR}/cmake/TrustRoot.cmake)
 vmpilot_configure_trust_root(VMPilot_Runtime)

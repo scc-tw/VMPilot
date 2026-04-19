@@ -329,19 +329,7 @@ TEST(EhGuardContract, FamilySpecificSurfaceRefMustMatchFamily) {
     EXPECT_EQ(result.error(), UnitAcceptError::FamilySpecificUnwindSurfaceMismatch);
 }
 
-// Note on the MSVC ASAN interaction:
-//
-//   /fsanitize=address hooks the Windows SEH unwind path. When an
-//   exception (C++ throw or RaiseException) crosses the ASM
-//   platform_call trampoline while ASAN is loaded, ASAN's shadow-memory
-//   bookkeeping corrupts the unwind context before catch(...) /
-//   __except can run. The runtime contract we are asserting is correct
-//   — exercised at the unit level by the EhGuardContract.* suite — so
-//   the Windows runtime-level tests skip under ASAN and remain active
-//   on non-ASAN builds and on POSIX.
-
 #if defined(_WIN32)
-#if !defined(__SANITIZE_ADDRESS__)
 TEST(EhGuardRuntime, CppThrowFailsClosedAtNativeBoundary) {
     const auto blob = build_native_fault_blob(
         reinterpret_cast<std::uint64_t>(&native_cpp_throw));
@@ -363,13 +351,6 @@ TEST(EhGuardRuntime, ArtifactEntryCollapsesNativeBoundaryFaultToGenericFailure) 
         reinterpret_cast<std::uint64_t>(&native_seh_raise));
     EXPECT_EQ(run_artifact_blob(blob), INT64_MIN);
 }
-#else
-TEST(EhGuardRuntime, DISABLED_NativeBoundaryUnwindTestsDisabledUnderAsan) {
-    GTEST_SKIP() << "MSVC /fsanitize=address corrupts SEH unwind through "
-                    "the ASM platform_call trampoline; see contract-level "
-                    "EhGuardContract suite for rule coverage.";
-}
-#endif  // !__SANITIZE_ADDRESS__
 #elif defined(__unix__) || defined(__APPLE__)
 TEST(EhGuardRuntime, SignalFailsClosedAtNativeBoundary) {
     const auto blob = build_native_fault_blob(

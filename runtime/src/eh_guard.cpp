@@ -7,8 +7,8 @@
 #if defined(_WIN32)
 #include <windows.h>
 #elif defined(__unix__) || defined(__APPLE__)
-#include <csignal>
 #include <csetjmp>
+#include <csignal>
 #endif
 
 namespace VMPilot::Runtime::EH {
@@ -161,6 +161,83 @@ std::uint64_t dispatch_platform_call(const PlatformCallDesc* desc,
     }
     return platform_call(desc);
 }
+
+#if defined(_WIN32)
+// ── Vectored Exception Handler (Windows) ────────────────────────────────
+//
+// Why VEH rather than __try/__except:
+//   Frame-based structured handlers run LATE in the Windows exception
+//   pipeline, AFTER MSVC /fsanitize=address has had a chance to
+//   observe the fault through its own SEH shim. ASAN's shadow-memory
+//   bookkeeping corrupts the unwind context while walking through the
+//   ASM platform_call trampoline, so by the time __except at an
+//   outer frame could run, the stack walk is already broken.
+//
+//   AddVectoredExceptionHandler(/*FirstHandler=*/1, ...) registers
+//   BEFORE any frame-based handler and before ASAN's shim.
+//
+// Why CONTEXT restore rather than longjmp:
+//   On Windows x64, std::longjmp is not a plain register restore — it
+//   invokes RtlUnwindEx to unwind frames, which is the same path ASAN
+//   corrupts. Returning EXCEPTION_CONTINUE_EXECUTION with a rewritten
+//   CONTEXT bypasses the unwinder entirely; the CPU just jumps back
+//   to the saved Rip/Rsp and never touches unwind metadata.
+//
+// TODO: add SEH fallback support only when it is really needed
+//       (e.g. if we ever need to run C++ destructors during unwind;
+//       CONTEXT-restore skips every intermediate frame's destructors,
+//       at which point a frame-based __try/__except layer can be
+//       stacked on top of VEH).
+
+thread_local volatile LONG g_guard_active = 0;
+thread_local volatile LONG g_guard_trapped = 0;
+thread_local CONTEXT g_guard_resume_ctx{};
+
+LONG NTAPI native_boundary_veh(EXCEPTION_POINTERS* info) noexcept {
+    if (g_guard_active == 0) return EXCEPTION_CONTINUE_SEARCH;
+
+    // Debug exceptions keep flowing through normal dispatch so the
+    // runtime stays debuggable; everything else — access violation,
+    // illegal instruction, divide-by-zero, stack overflow, C++ throw
+    // (0xE06D7363), raw RaiseException — is treated as a native
+    // boundary trap and collapsed to fail-closed.
+    const DWORD code = info->ExceptionRecord->ExceptionCode;
+    switch (code) {
+        case EXCEPTION_BREAKPOINT:
+        case EXCEPTION_SINGLE_STEP:
+        case DBG_CONTROL_C:
+            return EXCEPTION_CONTINUE_SEARCH;
+        default:
+            break;
+    }
+
+    // Rewrite the fault frame's CPU state so it resumes at the saved
+    // resume point (captured by RtlCaptureContext inside
+    // guarded_platform_call) and flag the trap so the caller returns
+    // the fail-closed diagnostic.
+    g_guard_trapped = 1;
+    g_guard_active = 0;
+    *(info->ContextRecord) = g_guard_resume_ctx;
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+struct VehRegistration {
+    PVOID handle{nullptr};
+    VehRegistration() noexcept
+        : handle(AddVectoredExceptionHandler(/*FirstHandler=*/1,
+                                             &native_boundary_veh)) {}
+    ~VehRegistration() {
+        if (handle != nullptr) RemoveVectoredExceptionHandler(handle);
+    }
+    VehRegistration(const VehRegistration&) = delete;
+    VehRegistration& operator=(const VehRegistration&) = delete;
+};
+
+void ensure_veh_registered() noexcept {
+    static VehRegistration reg;
+    (void)reg;
+}
+#endif  // _WIN32
 
 #if defined(__unix__) || defined(__APPLE__)
 
@@ -375,16 +452,33 @@ guarded_platform_call(const PlatformCallDesc* desc,
                       bool returns_struct,
                       void* struct_return_ptr) noexcept {
 #if defined(_WIN32)
-    // This TU is compiled with /EHa (see runtime/CMakeLists.txt) so that
-    // catch(...) intercepts both C++ throws and Windows SEH crossing the
-    // platform_call trampoline. Either class becomes the fail-closed
-    // NativeBoundaryUnwindTrapped diagnostic.
-    try {
-        return dispatch_platform_call(desc, returns_struct, struct_return_ptr);
-    } catch (...) {
+    // Must run before the first call so the VEH is registered while the
+    // handler is still holding a live pointer to native_boundary_veh.
+    ensure_veh_registered();
+
+    g_guard_trapped = 0;
+    // RtlCaptureContext snapshots the current CPU state such that a
+    // later assignment into an EXCEPTION_POINTERS context record +
+    // EXCEPTION_CONTINUE_EXECUTION resumes execution at the return
+    // site of this very call. The VEH uses that property to "return"
+    // from a faulted frame without running the Windows unwinder.
+    RtlCaptureContext(&g_guard_resume_ctx);
+
+    // Both the first entry and the post-fault resume land here; the
+    // trap flag distinguishes the two paths. Volatile thread-locals
+    // guarantee the load is not hoisted above RtlCaptureContext.
+    if (g_guard_trapped != 0) {
+        g_guard_trapped = 0;
+        g_guard_active = 0;
         return tl::make_unexpected(
             VMPilot::Common::DiagnosticCode::NativeBoundaryUnwindTrapped);
     }
+
+    g_guard_active = 1;
+    const std::uint64_t result =
+        dispatch_platform_call(desc, returns_struct, struct_return_ptr);
+    g_guard_active = 0;
+    return result;
 #elif defined(__unix__) || defined(__APPLE__)
     struct sigaction old_segv;
     struct sigaction old_bus;
