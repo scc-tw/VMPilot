@@ -317,3 +317,93 @@ TEST(Registry, InnerPartitionUnitTableAndRegistryDistinctHashes) {
     EXPECT_NE(art.resolved_profile_table_hash,
               art.runtime_specialization_registry_hash);
 }
+
+// ─── Option 3 field-13 / field-9 consistency ─────────────────────────────
+
+namespace {
+
+// An entry that carries a concrete PolicyRequirement (bytes + matching
+// hash) so consistency-mismatch tests can perturb one side only.
+VMPilot::Fixtures::RegistryEntrySpec make_entry_with_requirement() {
+    VMPilot::Fixtures::RegistryEntrySpec e;
+    e.runtime_specialization_id = "f1-standard-v1";
+    e.family_id = "f1";
+    e.requested_policy_id = "standard";
+    e.profile_revision = "rev1";
+    e.policy_requirement = VMPilot::Fixtures::PolicyRequirementSpec{};
+    return e;
+}
+
+}  // namespace
+
+TEST(Registry, NonEmptyBytesWithZeroHashRejected) {
+    // Producer bug: PolicyRequirement bytes present, committed hash
+    // is all-zero. parser must reject before lookup can run.
+    auto entry = make_entry_with_requirement();
+    entry.provider_requirement_hash.fill(0);  // force zero while keeping bytes
+    // Prevent add_entry() from recomputing — we want the mismatch on disk.
+    entry.provider_requirement_canonical_bytes =
+        VMPilot::Fixtures::encode_policy_requirement(*entry.policy_requirement);
+    entry.policy_requirement.reset();  // add_entry() now preserves our raw fields
+
+    const auto bytes = VMPilot::Fixtures::RuntimeSpecializationRegistryBuilder{}
+                           .clear_entries()
+                           .add_entry(entry)
+                           .build_canonical_bytes();
+    auto reg = parse(bytes);
+    ASSERT_FALSE(reg.has_value());
+    EXPECT_EQ(reg.error(),
+              ParseError::InconsistentRequirementCommitment);
+}
+
+TEST(Registry, EmptyBytesWithNonZeroHashRejected) {
+    // Mirror: no canonical bytes supplied but a non-zero hash claims
+    // to commit to something. parser must reject.
+    VMPilot::Fixtures::RegistryEntrySpec entry;
+    entry.runtime_specialization_id = "f1-standard-v1";
+    entry.family_id = "f1";
+    entry.requested_policy_id = "standard";
+    entry.profile_revision = "rev1";
+    entry.provider_requirement_canonical_bytes.clear();
+    entry.provider_requirement_hash.fill(0xAB);
+
+    const auto bytes = VMPilot::Fixtures::RuntimeSpecializationRegistryBuilder{}
+                           .clear_entries()
+                           .add_entry(entry)
+                           .build_canonical_bytes();
+    auto reg = parse(bytes);
+    ASSERT_FALSE(reg.has_value());
+    EXPECT_EQ(reg.error(),
+              ParseError::InconsistentRequirementCommitment);
+}
+
+TEST(Registry, BytesAndHashBothPresentButHashStaleRejected) {
+    // Producer flipped one byte of either the canonical form or the
+    // hash after signing. Both fields are well-formed shapes but the
+    // recomputed hash doesn't match — parser must fail fail-closed.
+    auto entry = make_entry_with_requirement();
+    // Let add_entry auto-fill the matching pair, then corrupt the hash.
+    auto reg_builder = VMPilot::Fixtures::RuntimeSpecializationRegistryBuilder{}
+                          .clear_entries()
+                          .add_entry(entry);
+    // Rebuild with a deliberate mismatch: canonical bytes intact, hash
+    // flipped. Easiest path: construct the mismatch directly.
+    VMPilot::Fixtures::RegistryEntrySpec bad_entry;
+    bad_entry.runtime_specialization_id = "f1-standard-v1";
+    bad_entry.family_id = "f1";
+    bad_entry.requested_policy_id = "standard";
+    bad_entry.profile_revision = "rev1";
+    bad_entry.provider_requirement_canonical_bytes =
+        VMPilot::Fixtures::encode_policy_requirement(
+            VMPilot::Fixtures::PolicyRequirementSpec{});
+    bad_entry.provider_requirement_hash.fill(0xCC);  // not the real hash
+
+    const auto bytes = VMPilot::Fixtures::RuntimeSpecializationRegistryBuilder{}
+                           .clear_entries()
+                           .add_entry(bad_entry)
+                           .build_canonical_bytes();
+    auto reg = parse(bytes);
+    ASSERT_FALSE(reg.has_value());
+    EXPECT_EQ(reg.error(),
+              ParseError::InconsistentRequirementCommitment);
+}
