@@ -10,6 +10,7 @@
 
 #include <tl/expected.hpp>
 
+#include "state/persistent_state_provider.hpp"
 #include "trust_root.hpp"
 #include "vm/enum_text.hpp"
 #include "vm/family_policy.hpp"
@@ -29,9 +30,10 @@
 // Both are bytes-in-memory verify-only surfaces. The runtime parses
 // them, checks the vendor signature against VendorTrustRoot using the
 // label that matches the token class, cross-checks field bindings
-// (package hashes, policy floor, expiry), and asks a NonceStore if
-// the token's one-time nonce has been consumed before. Tokens are
-// never mutated or re-signed by the runtime.
+// (package hashes, policy floor, expiry), and atomically reserves the
+// token's one-time nonce against a `State::PersistentStateProvider`
+// (doc 17) as the final step. Tokens are never mutated or re-signed
+// by the runtime.
 
 namespace VMPilot::Runtime::Tokens {
 
@@ -123,18 +125,11 @@ enum class TokenError : std::uint8_t {
     OldEnrollmentNotRevoked,
     NewProviderEvidenceMismatch,
     AllowedFamilyMismatch,
-};
 
-// Persisted set of consumed one-time nonces. Stage 12 will extend this
-// with on-disk persistence; for now the runtime supplies an in-memory
-// implementation so acceptance logic is testable in isolation.
-class NonceStore {
-public:
-    virtual ~NonceStore() = default;
-    virtual bool is_consumed(
-        const std::array<std::uint8_t, 32>& nonce) const noexcept = 0;
-    virtual void mark_consumed(
-        const std::array<std::uint8_t, 32>& nonce) noexcept = 0;
+    // Persistent state.
+    PersistentStateUnavailable,  // provider returned IoError / Corrupt on
+                                 // reserve_nonce — fail-closed rather than
+                                 // silently skip replay protection
 };
 
 // Context the runtime binds incoming tokens to. All hashes here have
@@ -166,24 +161,25 @@ parse_migration_token(const std::uint8_t* data, std::size_t size,
                       const VendorTrustRoot& root) noexcept;
 
 // Full doc 10 §6.2 acceptance — parse, verify signature, check
-// expiry, check nonce not yet consumed, check bindings. On success
-// marks the nonce consumed in `store` as the final step so a later
-// replay fails closed (doc 10 §6.3).
+// expiry, check bindings, then atomically reserve the one-time nonce
+// through `state`. The reservation happens *last* so a token that
+// fails any earlier check does not burn its nonce; the atomic
+// check-and-mark is what closes the replay window (doc 10 §6.3).
 [[nodiscard]] tl::expected<ReprovisionToken, TokenError>
 accept_reprovision_token(const std::uint8_t* data, std::size_t size,
                          const VendorTrustRoot& root,
                          const ReprovisionContext& ctx,
-                         NonceStore& store) noexcept;
+                         State::PersistentStateProvider& state) noexcept;
 
 // Full doc 15 §7.3 acceptance — parse, verify signature, check
-// expiry, check nonce not yet consumed, check current+target package
-// bindings, enforce allowed_import_once==true + floor-satisfied.
-// Marks the nonce consumed on success.
+// expiry, check current+target package bindings, enforce
+// allowed_import_once==true + floor-satisfied, then atomically
+// reserve the one-time nonce through `state` as the final step.
 [[nodiscard]] tl::expected<MigrationToken, TokenError>
 accept_migration_token(const std::uint8_t* data, std::size_t size,
                        const VendorTrustRoot& root,
                        const MigrationContext& ctx,
-                       NonceStore& store) noexcept;
+                       State::PersistentStateProvider& state) noexcept;
 
 }  // namespace VMPilot::Runtime::Tokens
 

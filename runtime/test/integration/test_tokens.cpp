@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include "state/persistent_state_provider.hpp"
 #include "tokens.hpp"
 #include "trust_root.hpp"
 #include "vm/domain_labels.hpp"
@@ -29,27 +30,53 @@ namespace {
 using VMPilot::DomainLabels::FamilyId;
 using VMPilot::DomainLabels::PolicyId;
 using VMPilot::Runtime::trust_root;
+using VMPilot::Runtime::State::EpochState;
+using VMPilot::Runtime::State::PersistenceCapability;
+using VMPilot::Runtime::State::PersistentStateProvider;
+using VMPilot::Runtime::State::StoreError;
 using VMPilot::Runtime::Tokens::accept_migration_token;
 using VMPilot::Runtime::Tokens::accept_reprovision_token;
 using VMPilot::Runtime::Tokens::MigrationContext;
-using VMPilot::Runtime::Tokens::NonceStore;
 using VMPilot::Runtime::Tokens::ReasonCode;
 using VMPilot::Runtime::Tokens::ReprovisionContext;
 using VMPilot::Runtime::Tokens::TokenError;
 
-class InMemoryNonceStore final : public NonceStore {
+// Minimal test stand-in for PersistentStateProvider. In-process set +
+// in-memory epoch counters — enough to exercise token acceptance logic
+// without pulling in FileBackedStateProvider's filesystem dependencies.
+class InMemoryStateProvider final : public PersistentStateProvider {
 public:
-    bool is_consumed(
-        const std::array<std::uint8_t, 32>& nonce) const noexcept override {
-        return consumed_.count(nonce) != 0;
-    }
-    void mark_consumed(
+    tl::expected<void, StoreError> reserve_nonce(
         const std::array<std::uint8_t, 32>& nonce) noexcept override {
-        consumed_.insert(nonce);
+        if (!consumed_.insert(nonce).second) {
+            return tl::make_unexpected(StoreError::NonceAlreadyPresent);
+        }
+        return {};
+    }
+
+    tl::expected<EpochState, StoreError>
+    current_epoch_state() const noexcept override { return epoch_; }
+
+    tl::expected<void, StoreError>
+    advance_epoch_state(const EpochState& proposed) noexcept override {
+        if (proposed.runtime_epoch          < epoch_.runtime_epoch ||
+            proposed.minimum_accepted_epoch < epoch_.minimum_accepted_epoch) {
+            return tl::make_unexpected(StoreError::EpochRollbackDenied);
+        }
+        epoch_ = proposed;
+        return {};
+    }
+
+    PersistenceCapability capabilities() const noexcept override {
+        PersistenceCapability c{};
+        c.cross_process_atomic = true;
+        c.crash_consistent     = true;
+        return c;
     }
 
 private:
     std::set<std::array<std::uint8_t, 32>> consumed_;
+    EpochState                             epoch_{};
 };
 
 std::vector<std::uint8_t> encode_auth_wrapper(
@@ -180,7 +207,7 @@ TEST(ReprovisionToken, HappyPathAccepts_doc10_6_2) {
     auto canonical = build_reprovision_canonical(baseline_reprovision());
     auto bytes = wrap_signed_partition(
         canonical, VMPilot::DomainLabels::Auth::ReprovisionToken);
-    InMemoryNonceStore store;
+    InMemoryStateProvider store;
 
     auto result = accept_reprovision_token(
         bytes.data(), bytes.size(), trust_root(),
@@ -189,14 +216,19 @@ TEST(ReprovisionToken, HappyPathAccepts_doc10_6_2) {
         << "err=" << static_cast<int>(result.error());
     EXPECT_EQ(result->allowed_policy_floor, PolicyId::Standard);
     EXPECT_EQ(result->reason_code, ReasonCode::TpmClear);
-    EXPECT_TRUE(store.is_consumed(nonce_baseline()));
+    // Re-reserving the same nonce must now report it as already
+    // consumed — this is the post-condition replacing the legacy
+    // NonceStore::is_consumed(...) check.
+    auto replay = store.reserve_nonce(nonce_baseline());
+    ASSERT_FALSE(replay.has_value());
+    EXPECT_EQ(replay.error(), StoreError::NonceAlreadyPresent);
 }
 
 TEST(ReprovisionToken, ReplayRejectedOnSecondAttempt_doc10_6_3) {
     auto canonical = build_reprovision_canonical(baseline_reprovision());
     auto bytes = wrap_signed_partition(
         canonical, VMPilot::DomainLabels::Auth::ReprovisionToken);
-    InMemoryNonceStore store;
+    InMemoryStateProvider store;
 
     auto first = accept_reprovision_token(
         bytes.data(), bytes.size(), trust_root(),
@@ -214,7 +246,7 @@ TEST(ReprovisionToken, ExpiredTokenRejected) {
     auto canonical = build_reprovision_canonical(baseline_reprovision());
     auto bytes = wrap_signed_partition(
         canonical, VMPilot::DomainLabels::Auth::ReprovisionToken);
-    InMemoryNonceStore store;
+    InMemoryStateProvider store;
 
     auto ctx = baseline_reprovision_context();
     ctx.now_unix_seconds = 3'000'000'000;  // past expires_at
@@ -231,7 +263,7 @@ TEST(ReprovisionToken, TokenBoundToDifferentPackageRejected) {
     auto canonical = build_reprovision_canonical(spec);
     auto bytes = wrap_signed_partition(
         canonical, VMPilot::DomainLabels::Auth::ReprovisionToken);
-    InMemoryNonceStore store;
+    InMemoryStateProvider store;
 
     auto result = accept_reprovision_token(
         bytes.data(), bytes.size(), trust_root(),
@@ -244,7 +276,7 @@ TEST(ReprovisionToken, OldEnrollmentNotRevokedRejected) {
     auto canonical = build_reprovision_canonical(baseline_reprovision());
     auto bytes = wrap_signed_partition(
         canonical, VMPilot::DomainLabels::Auth::ReprovisionToken);
-    InMemoryNonceStore store;
+    InMemoryStateProvider store;
 
     auto ctx = baseline_reprovision_context();
     ctx.old_enrollment_is_revoked = false;
@@ -261,7 +293,7 @@ TEST(ReprovisionToken, PolicyFloorBelowRequiredRejected) {
     auto canonical = build_reprovision_canonical(spec);
     auto bytes = wrap_signed_partition(
         canonical, VMPilot::DomainLabels::Auth::ReprovisionToken);
-    InMemoryNonceStore store;
+    InMemoryStateProvider store;
 
     auto ctx = baseline_reprovision_context();
     ctx.required_policy_floor = PolicyId::Standard;
@@ -280,7 +312,7 @@ TEST(ReprovisionToken, TamperedCanonicalBytesRejected) {
     // the layout starts with a short CBOR array tag; skip past it.
     ASSERT_GT(bytes.size(), 10u);
     bytes[5] ^= 0x01;
-    InMemoryNonceStore store;
+    InMemoryStateProvider store;
 
     auto result = accept_reprovision_token(
         bytes.data(), bytes.size(), trust_root(),
@@ -297,7 +329,7 @@ TEST(ReprovisionToken, WrongCoveredDomainRejected) {
     auto canonical = build_reprovision_canonical(baseline_reprovision());
     auto bytes = wrap_signed_partition(
         canonical, VMPilot::DomainLabels::Auth::MigrationToken);
-    InMemoryNonceStore store;
+    InMemoryStateProvider store;
 
     auto result = accept_reprovision_token(
         bytes.data(), bytes.size(), trust_root(),
@@ -362,7 +394,7 @@ TEST(MigrationToken, HappyPathAccepts_doc15_7_3) {
     auto canonical = build_migration_canonical(baseline_migration());
     auto bytes = wrap_signed_partition(
         canonical, VMPilot::DomainLabels::Auth::MigrationToken);
-    InMemoryNonceStore store;
+    InMemoryStateProvider store;
 
     auto result = accept_migration_token(
         bytes.data(), bytes.size(), trust_root(),
@@ -370,14 +402,19 @@ TEST(MigrationToken, HappyPathAccepts_doc15_7_3) {
     ASSERT_TRUE(result.has_value())
         << "err=" << static_cast<int>(result.error());
     EXPECT_EQ(result->allowed_policy_floor, PolicyId::Standard);
-    EXPECT_TRUE(store.is_consumed(nonce_baseline()));
+    // Re-reserving the same nonce must now report it as already
+    // consumed — this is the post-condition replacing the legacy
+    // NonceStore::is_consumed(...) check.
+    auto replay = store.reserve_nonce(nonce_baseline());
+    ASSERT_FALSE(replay.has_value());
+    EXPECT_EQ(replay.error(), StoreError::NonceAlreadyPresent);
 }
 
 TEST(MigrationToken, ReplayRejectedOnSecondAttempt_doc15_9_9) {
     auto canonical = build_migration_canonical(baseline_migration());
     auto bytes = wrap_signed_partition(
         canonical, VMPilot::DomainLabels::Auth::MigrationToken);
-    InMemoryNonceStore store;
+    InMemoryStateProvider store;
 
     auto first = accept_migration_token(
         bytes.data(), bytes.size(), trust_root(),
@@ -395,7 +432,7 @@ TEST(MigrationToken, ExpiredTokenRejected) {
     auto canonical = build_migration_canonical(baseline_migration());
     auto bytes = wrap_signed_partition(
         canonical, VMPilot::DomainLabels::Auth::MigrationToken);
-    InMemoryNonceStore store;
+    InMemoryStateProvider store;
 
     auto ctx = baseline_migration_context();
     ctx.now_unix_seconds = 3'000'000'000;
@@ -412,7 +449,7 @@ TEST(MigrationToken, WrongSourcePackageRejected) {
     auto canonical = build_migration_canonical(spec);
     auto bytes = wrap_signed_partition(
         canonical, VMPilot::DomainLabels::Auth::MigrationToken);
-    InMemoryNonceStore store;
+    InMemoryStateProvider store;
 
     auto result = accept_migration_token(
         bytes.data(), bytes.size(), trust_root(),
@@ -427,7 +464,7 @@ TEST(MigrationToken, WrongTargetPackageRejected) {
     auto canonical = build_migration_canonical(spec);
     auto bytes = wrap_signed_partition(
         canonical, VMPilot::DomainLabels::Auth::MigrationToken);
-    InMemoryNonceStore store;
+    InMemoryStateProvider store;
 
     auto result = accept_migration_token(
         bytes.data(), bytes.size(), trust_root(),
@@ -442,7 +479,7 @@ TEST(MigrationToken, ImportOnceFalseRejected) {
     auto canonical = build_migration_canonical(spec);
     auto bytes = wrap_signed_partition(
         canonical, VMPilot::DomainLabels::Auth::MigrationToken);
-    InMemoryNonceStore store;
+    InMemoryStateProvider store;
 
     auto result = accept_migration_token(
         bytes.data(), bytes.size(), trust_root(),
@@ -457,7 +494,7 @@ TEST(MigrationToken, PolicyFloorBelowRequiredRejected) {
     auto canonical = build_migration_canonical(spec);
     auto bytes = wrap_signed_partition(
         canonical, VMPilot::DomainLabels::Auth::MigrationToken);
-    InMemoryNonceStore store;
+    InMemoryStateProvider store;
 
     auto ctx = baseline_migration_context();
     ctx.required_policy_floor = PolicyId::Standard;
@@ -475,7 +512,7 @@ TEST(MigrationToken, TokenSignedUnderReprovisionDomainRejected_doc10_9) {
     auto canonical = build_migration_canonical(baseline_migration());
     auto bytes = wrap_signed_partition(
         canonical, VMPilot::DomainLabels::Auth::ReprovisionToken);
-    InMemoryNonceStore store;
+    InMemoryStateProvider store;
 
     auto result = accept_migration_token(
         bytes.data(), bytes.size(), trust_root(),

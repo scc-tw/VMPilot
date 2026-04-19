@@ -69,7 +69,9 @@ add_library(VMPilot_Runtime STATIC
     src/registry/registry.cpp
     src/provider/local_embedded.cpp
     src/tokens.cpp
-    src/epoch_store.cpp
+    src/state/persistent_state_provider.cpp
+    src/state/platform_file_ops.cpp
+    src/state/file_backed_state_provider.cpp
     ${PLATFORM_ASM_SOURCES}
 )
 
@@ -167,6 +169,7 @@ if(ENABLE_TESTS)
         test_oram_strategies
         test_state_types
         test_pipeline_functions
+        test_file_backed_state_provider
     )
         vmpilot_add_runtime_test(${_t} SOURCES test/unit/${_t}.cpp)
     endforeach()
@@ -203,8 +206,45 @@ if(ENABLE_TESTS)
         SOURCES test/integration/test_tokens.cpp
         WITH_FIXTURES)
 
-    vmpilot_add_runtime_test(test_epoch_store
-        SOURCES test/integration/test_epoch_store.cpp)
+    # ── Cross-process concurrency for FileBackedStateProvider (doc 17 §10 A) ──
+    #
+    # `vmpilot_state_concurrent_helper` is a driver binary. The test
+    # spawns N copies of it against the same state file and inspects
+    # exit codes to verify same-nonce / distinct-nonce / advance-epoch
+    # race invariants. The helper path is baked into the test via a
+    # generated header — raw-string-literal form so Windows backslashes
+    # never collide with C escape sequences like `\U`.
+    add_executable(vmpilot_state_concurrent_helper
+        test/helpers/state_concurrent_helper.cpp)
+    target_link_libraries(vmpilot_state_concurrent_helper
+        PRIVATE VMPilot_Runtime
+                vmpilot_options
+                vmpilot_sanitizer)
+
+    # Per-config output — $<TARGET_FILE:> resolves differently per VS
+    # configuration (Debug/Release), so file(GENERATE) must write each
+    # config's header under its own directory to avoid the "different
+    # content at same path" diagnostic.
+    set(_state_helper_hdr_base "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    file(GENERATE
+        OUTPUT "${_state_helper_hdr_base}/$<CONFIG>/state_helper_path.hpp"
+        CONTENT "#pragma once\n#define VMPILOT_STATE_HELPER_PATH R\"($<TARGET_FILE:vmpilot_state_concurrent_helper>)\"\n"
+    )
+
+    add_executable(test_file_backed_state_concurrent
+        test/integration/test_file_backed_state_concurrent.cpp
+        test/helpers/subprocess_run.cpp)
+    target_include_directories(test_file_backed_state_concurrent
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test
+                "${_state_helper_hdr_base}/$<CONFIG>")
+    target_link_libraries(test_file_backed_state_concurrent
+        PRIVATE VMPilot_Runtime
+                GTest::gtest_main
+                vmpilot_options
+                vmpilot_sanitizer)
+    add_dependencies(test_file_backed_state_concurrent
+        vmpilot_state_concurrent_helper)
+    gtest_discover_tests(test_file_backed_state_concurrent)
 
     vmpilot_add_runtime_test(test_vm_runner
         SOURCES test/integration/test_vm_runner.cpp

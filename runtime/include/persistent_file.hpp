@@ -12,8 +12,8 @@
 
 #include <tl/expected.hpp>
 
-// Shared I/O toolkit for atomically-persisted, CRC-framed binary
-// files. FileBackedEpochStore and FileBackedNonceStore both:
+// Shared I/O toolkit for CRC-framed binary persistent-state files.
+// FileBackedStateProvider's on-disk schema reuses:
 //
 //   1. Prefix on-disk payload with a 10-byte magic + 4-byte version.
 //   2. Suffix with a CRC-32 over {version, inner payload}.

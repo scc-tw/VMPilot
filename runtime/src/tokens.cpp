@@ -176,17 +176,17 @@ tl::expected<ReprovisionToken, TokenError>
 accept_reprovision_token(const std::uint8_t* data, std::size_t size,
                          const VendorTrustRoot& root,
                          const ReprovisionContext& ctx,
-                         NonceStore& store) noexcept {
+                         State::PersistentStateProvider& state) noexcept {
     auto token_or = parse_reprovision_token(data, size, root);
     if (!token_or) return err(token_or.error());
 
     const ReprovisionToken& t = *token_or;
 
+    // All non-nonce acceptance checks first so a failed one does not
+    // burn this token's one-time nonce against a provider that only
+    // knows atomic check-and-mark.
     if (t.expires_at <= ctx.now_unix_seconds) {
         return err(TokenError::TokenExpired);
-    }
-    if (store.is_consumed(t.one_time_nonce)) {
-        return err(TokenError::NonceAlreadyConsumed);
     }
     if (!ctx.old_enrollment_is_revoked) {
         return err(TokenError::OldEnrollmentNotRevoked);
@@ -203,7 +203,14 @@ accept_reprovision_token(const std::uint8_t* data, std::size_t size,
         return err(TokenError::NewProviderEvidenceMismatch);
     }
 
-    store.mark_consumed(t.one_time_nonce);
+    // Final step: atomic reserve against the persistent state. Replay
+    // and concurrent duplicate both surface as NonceAlreadyPresent.
+    auto r = state.reserve_nonce(t.one_time_nonce);
+    if (!r) {
+        return err(r.error() == State::StoreError::NonceAlreadyPresent
+                       ? TokenError::NonceAlreadyConsumed
+                       : TokenError::PersistentStateUnavailable);
+    }
     return token_or;
 }
 
@@ -276,7 +283,7 @@ tl::expected<MigrationToken, TokenError>
 accept_migration_token(const std::uint8_t* data, std::size_t size,
                        const VendorTrustRoot& root,
                        const MigrationContext& ctx,
-                       NonceStore& store) noexcept {
+                       State::PersistentStateProvider& state) noexcept {
     auto token_or = parse_migration_token(data, size, root);
     if (!token_or) return err(token_or.error());
 
@@ -284,9 +291,6 @@ accept_migration_token(const std::uint8_t* data, std::size_t size,
 
     if (t.expires_at <= ctx.now_unix_seconds) {
         return err(TokenError::TokenExpired);
-    }
-    if (store.is_consumed(t.nonce)) {
-        return err(TokenError::NonceAlreadyConsumed);
     }
     if (t.old_package_binding_record_hash !=
         ctx.current_package_binding_record_hash) {
@@ -301,7 +305,12 @@ accept_migration_token(const std::uint8_t* data, std::size_t size,
         return err(TokenError::PolicyFloorBelowRequired);
     }
 
-    store.mark_consumed(t.nonce);
+    auto r = state.reserve_nonce(t.nonce);
+    if (!r) {
+        return err(r.error() == State::StoreError::NonceAlreadyPresent
+                       ? TokenError::NonceAlreadyConsumed
+                       : TokenError::PersistentStateUnavailable);
+    }
     return token_or;
 }
 
