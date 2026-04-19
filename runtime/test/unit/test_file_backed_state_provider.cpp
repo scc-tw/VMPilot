@@ -28,6 +28,8 @@ namespace {
 using VMPilot::Runtime::State::EpochState;
 using VMPilot::Runtime::State::FileBackedStateProvider;
 using VMPilot::Runtime::State::PersistenceCapability;
+using VMPilot::Runtime::State::ProviderOperationalState;
+using VMPilot::Runtime::State::satisfies_highsec;
 using VMPilot::Runtime::State::StoreError;
 
 // Build a deterministic 32-byte nonce from a single seed byte so tests
@@ -189,8 +191,96 @@ TEST_F(FileBackedStateProviderTest, CapabilitiesAreHonest) {
     EXPECT_FALSE(c.tamper_evident);
     EXPECT_FALSE(c.hardware_bound);
     EXPECT_FALSE(c.policy_bound);
-    EXPECT_FALSE(c.remote_authority);
     EXPECT_FALSE(c.signed_recovery_required);
+    EXPECT_EQ   (c.operational_state, ProviderOperationalState::Available);
+}
+
+TEST_F(FileBackedStateProviderTest, DoesNotSatisfyHighsec) {
+    // Doc 17 §3.1 / stage B plan §4 acceptance rule: the debug/standard
+    // provider MUST be rejected for highsec no matter how Available it
+    // is — its rollback / tamper claims are honestly false.
+    FileBackedStateProvider p(path_);
+    EXPECT_FALSE(satisfies_highsec(p.capabilities()));
+}
+
+// ─── Free-function acceptance rule ──────────────────────────────────────
+
+namespace {
+PersistenceCapability fully_capable_highsec() {
+    PersistenceCapability c{};
+    c.cross_process_atomic     = true;
+    c.crash_consistent         = true;
+    c.rollback_resistant       = true;
+    c.tamper_evident           = true;
+    c.hardware_bound           = true;
+    c.policy_bound             = true;
+    c.signed_recovery_required = true;
+    c.operational_state        = ProviderOperationalState::Available;
+    return c;
+}
+}  // namespace
+
+TEST(SatisfiesHighsec, FullyCapableAvailableAccepts) {
+    EXPECT_TRUE(satisfies_highsec(fully_capable_highsec()));
+}
+
+TEST(SatisfiesHighsec, EveryBoolIsRequired) {
+    // Flip each bool to false independently; the rule must reject each
+    // one. This prevents a future refactor from silently accepting a
+    // near-miss capability (e.g. forgetting one of the new claims in
+    // the highsec predicate after adding it to the struct).
+    {
+        auto c = fully_capable_highsec();
+        c.cross_process_atomic = false;
+        EXPECT_FALSE(satisfies_highsec(c));
+    }
+    {
+        auto c = fully_capable_highsec();
+        c.crash_consistent = false;
+        EXPECT_FALSE(satisfies_highsec(c));
+    }
+    {
+        auto c = fully_capable_highsec();
+        c.rollback_resistant = false;
+        EXPECT_FALSE(satisfies_highsec(c));
+    }
+    {
+        auto c = fully_capable_highsec();
+        c.tamper_evident = false;
+        EXPECT_FALSE(satisfies_highsec(c));
+    }
+    {
+        auto c = fully_capable_highsec();
+        c.hardware_bound = false;
+        EXPECT_FALSE(satisfies_highsec(c));
+    }
+    {
+        auto c = fully_capable_highsec();
+        c.policy_bound = false;
+        EXPECT_FALSE(satisfies_highsec(c));
+    }
+    {
+        auto c = fully_capable_highsec();
+        c.signed_recovery_required = false;
+        EXPECT_FALSE(satisfies_highsec(c));
+    }
+}
+
+TEST(SatisfiesHighsec, NonAvailableOperationalStateRejects) {
+    // This is the core PR-B0 invariant: a provider that *claims* every
+    // structural property but whose runtime is not Available (e.g. a
+    // TpmBackedStateProvider compiled without a TPM attached) must be
+    // rejected. Otherwise capability honesty collapses.
+    for (auto bad : {ProviderOperationalState::Unavailable,
+                     ProviderOperationalState::ProvisioningRequired,
+                     ProviderOperationalState::RecoveryRequired,
+                     ProviderOperationalState::PolicyUnavailable}) {
+        auto c = fully_capable_highsec();
+        c.operational_state = bad;
+        EXPECT_FALSE(satisfies_highsec(c))
+            << "operational_state = " << static_cast<int>(bad)
+            << " must reject highsec";
+    }
 }
 
 }  // namespace

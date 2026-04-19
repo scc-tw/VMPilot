@@ -71,6 +71,8 @@ public:
         PersistenceCapability c{};
         c.cross_process_atomic = true;
         c.crash_consistent     = true;
+        c.operational_state    =
+            VMPilot::Runtime::State::ProviderOperationalState::Available;
         return c;
     }
 

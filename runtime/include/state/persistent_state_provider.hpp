@@ -29,11 +29,30 @@
 
 namespace VMPilot::Runtime::State {
 
+// Current runtime-observable operational state of a provider. Separate
+// from the static capability claims below: a TPM-backed provider might
+// legitimately claim rollback_resistant as a static property of its
+// design, yet be `Unavailable` on a host without a TPM. Without this
+// split a placeholder provider could pass the highsec acceptance rule
+// while all its operations fail closed — which is exactly the claim-
+// dishonesty stage B PR-B0 exists to close.
+//
+// Doc 17 §3.1 + stage B plan §4 require that only `Available` passes
+// highsec; every other value is a fail-closed reason, surfaced through
+// the corresponding `StoreError` on operation calls.
+enum class ProviderOperationalState : std::uint8_t {
+    Available            = 1,  // ready to serve reserve_nonce / epoch ops
+    Unavailable          = 2,  // no backend (no TPM, no TCTI, no disk, ...)
+    ProvisioningRequired = 3,  // backend present but state domain not enrolled
+    RecoveryRequired     = 4,  // doc 17 §6.5 trigger fired — signed reprovision
+    PolicyUnavailable    = 5,  // signed PCR policy missing / expired
+};
+
 // Capability claims the provider makes at provisioning time. Every
 // field is an honest boolean — a provider MUST NOT report a claim it
-// cannot back. Doc 17 §3.1 turns these into a fail-closed gate so
-// misreporting is detectable by the acceptance rule rather than by
-// silent security downgrade.
+// cannot back. Doc 17 §3.1 + stage B §4 turn these into a fail-closed
+// gate so misreporting is detectable by the acceptance rule rather
+// than by silent security downgrade.
 struct PersistenceCapability {
     // `reserve_nonce` and `advance_epoch_state` are atomic across every
     // cooperating process sharing this provider's backing store.
@@ -56,9 +75,11 @@ struct PersistenceCapability {
     // mismatch, ...), not silent acceptance of mutated state.
     bool tamper_evident;
 
-    // Freshness is rooted in hardware local to this machine (TPM, TEE,
-    // HSM with hardware custody). Required or `remote_authority` for
-    // highsec (§3.1).
+    // Freshness is rooted in hardware somewhere in the trust chain.
+    // For `TpmBackedStateProvider` that's the local TPM; for Stage C
+    // `CloudAttestedStateProvider` that's the remote attested enclave.
+    // Either way a highsec provider must back its rollback / tamper
+    // claims on real hardware rather than on software-only bookkeeping.
     bool hardware_bound;
 
     // Unseal / access is conditioned on a signed PCR / boot policy
@@ -66,16 +87,17 @@ struct PersistenceCapability {
     // when `hardware_bound == true`.
     bool policy_bound;
 
-    // Freshness is rooted in a remote attestation-gated monotonic
-    // authority (Nitro/KMS-style, Azure Attestation, bespoke remote
-    // state service). Required or `hardware_bound` for highsec (§3.1).
-    bool remote_authority;
-
     // TPM clear, hardware migration, VM migration, NV Name mismatch,
     // sealed-parent loss, and the other §6.5 triggers must be resolved
     // by `ReprovisionToken` (doc 10 §6). No support-override unsigned
     // recovery path.
     bool signed_recovery_required;
+
+    // Runtime-observable availability. Stage B plan §4: the acceptance
+    // rule MUST reject any non-Available value — this is what keeps a
+    // compile-time-only TpmBackedStateProvider stub from satisfying
+    // highsec on a host without a TPM.
+    ProviderOperationalState operational_state;
 };
 
 // Persistent epoch state — the runtime's advertised current epoch and
@@ -87,15 +109,28 @@ struct EpochState {
     std::uint64_t minimum_accepted_epoch{0};
 };
 
-// Failure modes surfaced by the provider. Stage B / C providers may
-// grow this enum (e.g. `RecoveryRequired` for TPM Name mismatch), which
-// is why `noexcept` + tl::expected is used rather than a fixed set of
-// boolean returns.
+// Failure modes surfaced by the provider. Stage B / C providers grow
+// this enum in their own sections rather than renumbering — each PR
+// claims a contiguous block so callers can switch on error bands
+// (`< 10` is platform-agnostic, `20..29` is NV-specific, etc).
 enum class StoreError : std::uint8_t {
-    IoError             = 1,  // backing store unreachable / write failed
-    Corrupt             = 2,  // magic / version / crc / schema mismatch
-    EpochRollbackDenied = 3,  // proposed epoch strictly less than disk value
-    NonceAlreadyPresent = 4,  // reserve_nonce saw the nonce already consumed
+    // Stage A — platform-neutral core.
+    IoError              = 1,  // backing store unreachable / write failed
+    Corrupt              = 2,  // magic / version / crc / schema mismatch
+    EpochRollbackDenied  = 3,  // proposed epoch strictly less than disk value
+    NonceAlreadyPresent  = 4,  // reserve_nonce saw the nonce already consumed
+
+    // Stage B PR-B0 — provider availability. These are returned by an
+    // operation call on a provider whose capabilities().operational_state
+    // is not Available; callers translate them to their own error
+    // surfaces (see TokenError::PersistentStateUnavailable).
+    InvalidArgument      = 5,  // caller-side programming error
+    ProviderUnavailable  = 6,  // operational_state == Unavailable
+    ProvisioningRequired = 7,  // operational_state == ProvisioningRequired
+    RecoveryRequired     = 8,  // operational_state == RecoveryRequired
+
+    // Stage B PR-B2+ reserve 10..52 for TPM/NV/seal/policy/commit/
+    // reprovision-specific codes per doc 17a §6.
 };
 
 // Tier-mapped runtime persistent state provider.
@@ -136,6 +171,19 @@ public:
 
     virtual PersistenceCapability capabilities() const noexcept = 0;
 };
+
+// Highsec acceptance predicate — doc 17 §3.1 + stage B plan §4.
+//
+// Free function rather than a method so the rule can be tested with a
+// constructed `PersistenceCapability` without instantiating a concrete
+// provider. A provider may structurally support highsec (rollback-
+// resistant, tamper-evident, hardware-bound, policy-bound,
+// signed-recovery-required, atomic, crash-consistent) yet still be
+// rejected because its runtime is not currently Available — that's
+// what prevents a compiled-but-TPM-less TpmBackedStateProvider stub
+// from passing this check.
+[[nodiscard]] bool
+satisfies_highsec(const PersistenceCapability& c) noexcept;
 
 }  // namespace VMPilot::Runtime::State
 

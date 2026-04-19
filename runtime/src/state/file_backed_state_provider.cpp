@@ -271,8 +271,11 @@ FileBackedStateProvider::capabilities() const noexcept {
     c.tamper_evident           = false;
     c.hardware_bound           = false;
     c.policy_bound             = false;
-    c.remote_authority         = false;
     c.signed_recovery_required = false;
+    // File-backed is always Available the moment it is constructed;
+    // a missing state file is a fresh-install path (see load_from_disk
+    // above), not a provisioning / recovery condition.
+    c.operational_state        = ProviderOperationalState::Available;
     return c;
 }
 
