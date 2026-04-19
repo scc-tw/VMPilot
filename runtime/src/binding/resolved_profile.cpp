@@ -25,6 +25,13 @@ constexpr std::uint64_t kField_FamilyId                   = 2;
 constexpr std::uint64_t kField_RequestedPolicyId          = 3;
 constexpr std::uint64_t kField_ProfileRevision            = 4;
 constexpr std::uint64_t kField_RuntimeSpecializationId    = 5;
+// Non-header core fields this parser deliberately skips but MUST still
+// whitelist so reject_unknown_keys doesn't reject a full, well-formed
+// profile. The header parser is a *view* over the canonical profile
+// bytes — strict unknown-core-field rejection on the full record
+// belongs here, not a refusal to let the header parser see keys it
+// does not itself consume.
+constexpr std::uint64_t kField_CorrectnessLegalityContract = 6;
 
 }  // namespace
 
@@ -39,7 +46,8 @@ parse_resolved_family_profile_header(const std::uint8_t* data, std::size_t size)
         auto unknown_or = reject_unknown_keys<E>(
             *tree_or,
             {kField_ProfileId, kField_FamilyId, kField_RequestedPolicyId,
-             kField_ProfileRevision, kField_RuntimeSpecializationId});
+             kField_ProfileRevision, kField_RuntimeSpecializationId,
+             kField_CorrectnessLegalityContract});
         if (!unknown_or) return tl::make_unexpected(unknown_or.error());
     }
 
