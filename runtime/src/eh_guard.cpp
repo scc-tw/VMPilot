@@ -2,6 +2,7 @@
 
 #include <cstring>
 
+#include "cbor/schema.hpp"
 #include "cbor/strict.hpp"
 
 namespace VMPilot::Cbor {
@@ -10,6 +11,9 @@ struct CborConsumerTraits<VMPilot::Runtime::EH::ContractParseError> {
     using E = VMPilot::Runtime::EH::ContractParseError;
     static constexpr E missing_field    = E::MissingField;
     static constexpr E wrong_field_type = E::WrongFieldType;
+    static constexpr E bad_cbor         = E::BadCbor;
+    static constexpr E not_a_map        = E::NotAMap;
+    static constexpr E unknown_enum_value = E::UnknownEnumValue;
 };
 }  // namespace VMPilot::Cbor
 
@@ -69,50 +73,6 @@ require_map_field(const Value& map,
         return parse_err(ContractParseError::WrongFieldType);
     }
     return value;
-}
-
-tl::expected<ExecutableEhStatus, ContractParseError>
-parse_executable_eh_status(std::string_view text) noexcept {
-    if (text == "reserved_disabled_v1") {
-        return ExecutableEhStatus::ReservedDisabledV1;
-    }
-    if (text == "executable_v1_1") {
-        return ExecutableEhStatus::ExecutableV1_1;
-    }
-    return parse_err(ContractParseError::UnknownEnumValue);
-}
-
-tl::expected<CrossProtectedFrameUnwind, ContractParseError>
-parse_cross_protected_frame_unwind(std::string_view text) noexcept {
-    if (text == "forbidden") {
-        return CrossProtectedFrameUnwind::Forbidden;
-    }
-    if (text == "permitted_by_profile") {
-        return CrossProtectedFrameUnwind::PermittedByProfile;
-    }
-    return parse_err(ContractParseError::UnknownEnumValue);
-}
-
-tl::expected<NativeBoundaryUnwindBehavior, ContractParseError>
-parse_native_boundary_unwind_behavior(std::string_view text) noexcept {
-    if (text == "translate_to_trap_or_fail_closed") {
-        return NativeBoundaryUnwindBehavior::TranslateToTrapOrFailClosed;
-    }
-    if (text == "profile-upgraded") {
-        return NativeBoundaryUnwindBehavior::ProfileUpgraded;
-    }
-    return parse_err(ContractParseError::UnknownEnumValue);
-}
-
-tl::expected<ReservedTableStatus, ContractParseError>
-parse_reserved_table_status(std::string_view text) noexcept {
-    if (text == "reserved_empty") {
-        return ReservedTableStatus::ReservedEmpty;
-    }
-    if (text == "profile-specific") {
-        return ReservedTableStatus::ProfileSpecific;
-    }
-    return parse_err(ContractParseError::UnknownEnumValue);
 }
 
 bool contract_has_unknown_extension(const Value& map) noexcept {
@@ -324,91 +284,60 @@ parse_exception_unwind_contract(const std::uint8_t* data,
         return parse_err(ContractParseError::UnknownCriticalExtension);
     }
 
-    auto eh_contract_version = require_text(contract, kEh_EhContractVersion);
-    auto executable_eh_status_text =
-        require_text(contract, kEh_ExecutableEhStatus);
-    auto planned_executable_eh_epoch =
-        require_text(contract, kEh_PlannedExecutableEhEpoch);
-    auto cross_protected_frame_unwind_text =
-        require_text(contract, kEh_CrossProtectedFrameUnwind);
-    auto native_boundary_unwind_behavior_text =
-        require_text(contract, kEh_NativeBoundaryUnwindBehavior);
-    auto handler_table_status_text =
-        require_text(contract, kEh_HandlerTableStatus);
-    auto cleanup_table_status_text =
-        require_text(contract, kEh_CleanupTableStatus);
-    auto frame_contract_ref = require_text(contract, kEh_FrameContractRef);
-    auto stackmap_contract_ref = require_text(contract, kEh_StackmapContractRef);
-    auto resume_contract_ref = require_text(contract, kEh_ResumeContractRef);
-    auto verifier_rules_ref = require_text(contract, kEh_VerifierRulesRef);
-    auto family_specific_unwind_surface_ref =
-        require_text(contract, kEh_FamilySpecificUnwindSurfaceRef);
-
-    if (!eh_contract_version) return parse_err(eh_contract_version.error());
-    if (!executable_eh_status_text) {
-        return parse_err(executable_eh_status_text.error());
-    }
-    if (!planned_executable_eh_epoch) {
-        return parse_err(planned_executable_eh_epoch.error());
-    }
-    if (!cross_protected_frame_unwind_text) {
-        return parse_err(cross_protected_frame_unwind_text.error());
-    }
-    if (!native_boundary_unwind_behavior_text) {
-        return parse_err(native_boundary_unwind_behavior_text.error());
-    }
-    if (!handler_table_status_text) {
-        return parse_err(handler_table_status_text.error());
-    }
-    if (!cleanup_table_status_text) {
-        return parse_err(cleanup_table_status_text.error());
-    }
-    if (!frame_contract_ref) return parse_err(frame_contract_ref.error());
-    if (!stackmap_contract_ref) return parse_err(stackmap_contract_ref.error());
-    if (!resume_contract_ref) return parse_err(resume_contract_ref.error());
-    if (!verifier_rules_ref) return parse_err(verifier_rules_ref.error());
-    if (!family_specific_unwind_surface_ref) {
-        return parse_err(family_specific_unwind_surface_ref.error());
-    }
-
-    auto executable_eh_status =
-        parse_executable_eh_status(*executable_eh_status_text);
-    auto cross_protected_frame_unwind =
-        parse_cross_protected_frame_unwind(*cross_protected_frame_unwind_text);
-    auto native_boundary_unwind_behavior =
-        parse_native_boundary_unwind_behavior(
-            *native_boundary_unwind_behavior_text);
-    auto handler_table_status =
-        parse_reserved_table_status(*handler_table_status_text);
-    auto cleanup_table_status =
-        parse_reserved_table_status(*cleanup_table_status_text);
-
-    if (!executable_eh_status) return parse_err(executable_eh_status.error());
-    if (!cross_protected_frame_unwind) {
-        return parse_err(cross_protected_frame_unwind.error());
-    }
-    if (!native_boundary_unwind_behavior) {
-        return parse_err(native_boundary_unwind_behavior.error());
-    }
-    if (!handler_table_status) return parse_err(handler_table_status.error());
-    if (!cleanup_table_status) return parse_err(cleanup_table_status.error());
-
-    ExceptionUnwindContract out;
-    out.semantic_contract_version = std::move(*semantic_contract_version);
-    out.eh_contract_version = std::move(*eh_contract_version);
-    out.executable_eh_status = *executable_eh_status;
-    out.planned_executable_eh_epoch = std::move(*planned_executable_eh_epoch);
-    out.cross_protected_frame_unwind = *cross_protected_frame_unwind;
-    out.native_boundary_unwind_behavior = *native_boundary_unwind_behavior;
-    out.handler_table_status = *handler_table_status;
-    out.cleanup_table_status = *cleanup_table_status;
-    out.frame_contract_ref = std::move(*frame_contract_ref);
-    out.stackmap_contract_ref = std::move(*stackmap_contract_ref);
-    out.resume_contract_ref = std::move(*resume_contract_ref);
-    out.verifier_rules_ref = std::move(*verifier_rules_ref);
-    out.family_specific_unwind_surface_ref =
-        std::move(*family_specific_unwind_surface_ref);
-    return out;
+    using namespace VMPilot::Cbor::Schema;
+    const auto schema = std::make_tuple(
+        TextField<ExceptionUnwindContract>{
+            kEh_EhContractVersion,
+            &ExceptionUnwindContract::eh_contract_version},
+        EnumTextField<ExceptionUnwindContract, ExecutableEhStatus,
+                      ContractParseError>{
+            kEh_ExecutableEhStatus,
+            &ExceptionUnwindContract::executable_eh_status,
+            ContractParseError::UnknownEnumValue},
+        TextField<ExceptionUnwindContract>{
+            kEh_PlannedExecutableEhEpoch,
+            &ExceptionUnwindContract::planned_executable_eh_epoch},
+        EnumTextField<ExceptionUnwindContract, CrossProtectedFrameUnwind,
+                      ContractParseError>{
+            kEh_CrossProtectedFrameUnwind,
+            &ExceptionUnwindContract::cross_protected_frame_unwind,
+            ContractParseError::UnknownEnumValue},
+        EnumTextField<ExceptionUnwindContract, NativeBoundaryUnwindBehavior,
+                      ContractParseError>{
+            kEh_NativeBoundaryUnwindBehavior,
+            &ExceptionUnwindContract::native_boundary_unwind_behavior,
+            ContractParseError::UnknownEnumValue},
+        EnumTextField<ExceptionUnwindContract, ReservedTableStatus,
+                      ContractParseError>{
+            kEh_HandlerTableStatus,
+            &ExceptionUnwindContract::handler_table_status,
+            ContractParseError::UnknownEnumValue},
+        EnumTextField<ExceptionUnwindContract, ReservedTableStatus,
+                      ContractParseError>{
+            kEh_CleanupTableStatus,
+            &ExceptionUnwindContract::cleanup_table_status,
+            ContractParseError::UnknownEnumValue},
+        TextField<ExceptionUnwindContract>{
+            kEh_FrameContractRef,
+            &ExceptionUnwindContract::frame_contract_ref},
+        TextField<ExceptionUnwindContract>{
+            kEh_StackmapContractRef,
+            &ExceptionUnwindContract::stackmap_contract_ref},
+        TextField<ExceptionUnwindContract>{
+            kEh_ResumeContractRef,
+            &ExceptionUnwindContract::resume_contract_ref},
+        TextField<ExceptionUnwindContract>{
+            kEh_VerifierRulesRef,
+            &ExceptionUnwindContract::verifier_rules_ref},
+        TextField<ExceptionUnwindContract>{
+            kEh_FamilySpecificUnwindSurfaceRef,
+            &ExceptionUnwindContract::family_specific_unwind_surface_ref}
+    );
+    auto parsed =
+        parse_schema<ExceptionUnwindContract, ContractParseError>(contract, schema);
+    if (!parsed) return parse_err(parsed.error());
+    parsed->semantic_contract_version = std::move(*semantic_contract_version);
+    return parsed;
 }
 
 tl::expected<ExceptionUnwindContract, ContractVerifyError>
