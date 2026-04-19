@@ -72,6 +72,7 @@ add_library(VMPilot_Runtime STATIC
     src/state/persistent_state_provider.cpp
     src/state/platform_file_ops.cpp
     src/state/file_backed_state_provider.cpp
+    src/state/tpm_backed_state_provider.cpp
     ${PLATFORM_ASM_SOURCES}
 )
 
@@ -170,6 +171,7 @@ if(ENABLE_TESTS)
         test_state_types
         test_pipeline_functions
         test_file_backed_state_provider
+        test_tpm_backed_state_provider
     )
         vmpilot_add_runtime_test(${_t} SOURCES test/unit/${_t}.cpp)
     endforeach()
