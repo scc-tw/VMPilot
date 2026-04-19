@@ -88,9 +88,11 @@ struct ReprovisionSpec {
     std::array<std::uint8_t, 32> new_attested_key_hash{};
     std::array<std::uint8_t, 32> new_provider_evidence_hash{};
     std::array<std::uint8_t, 32> allowed_package_binding_record_hash{};
-    std::string allowed_policy_floor{"standard"};
-    std::vector<std::string> allowed_family_set{"f1"};
-    std::string reason_code{"tpm_clear"};
+    VMPilot::DomainLabels::PolicyId allowed_policy_floor{
+        VMPilot::DomainLabels::PolicyId::Standard};
+    std::vector<VMPilot::DomainLabels::FamilyId> allowed_family_set{
+        VMPilot::DomainLabels::FamilyId::F1};
+    ReasonCode reason_code{ReasonCode::TpmClear};
     std::string support_case_id{"case-001"};
     std::array<std::uint8_t, 32> approval_chain_hash{};
     std::uint64_t issued_at{1'000'000'000};
@@ -104,8 +106,9 @@ std::vector<std::uint8_t> build_reprovision_canonical(
 
     std::vector<std::vector<std::uint8_t>> family_items;
     family_items.reserve(s.allowed_family_set.size());
-    for (const auto& f : s.allowed_family_set) {
-        family_items.push_back(encode_text(f));
+    for (auto f : s.allowed_family_set) {
+        family_items.push_back(
+            encode_text(VMPilot::DomainLabels::to_text(f)));
     }
 
     MapBuilder m;
@@ -122,9 +125,9 @@ std::vector<std::uint8_t> build_reprovision_canonical(
                                  s.new_provider_evidence_hash.end()}));
     m.put_uint(8,  encode_bytes({s.allowed_package_binding_record_hash.begin(),
                                  s.allowed_package_binding_record_hash.end()}));
-    m.put_uint(9,  encode_text(s.allowed_policy_floor));
+    m.put_uint(9,  encode_text(VMPilot::DomainLabels::to_text(s.allowed_policy_floor)));
     m.put_uint(10, encode_array(family_items));
-    m.put_uint(11, encode_text(s.reason_code));
+    m.put_uint(11, encode_text(VMPilot::enum_to_text(s.reason_code)));
     m.put_uint(12, encode_text(s.support_case_id));
     m.put_uint(13, encode_bytes({s.approval_chain_hash.begin(),
                                  s.approval_chain_hash.end()}));
@@ -254,7 +257,7 @@ TEST(ReprovisionToken, OldEnrollmentNotRevokedRejected) {
 
 TEST(ReprovisionToken, PolicyFloorBelowRequiredRejected) {
     auto spec = baseline_reprovision();
-    spec.allowed_policy_floor = "debug";
+    spec.allowed_policy_floor = VMPilot::DomainLabels::PolicyId::Debug;
     auto canonical = build_reprovision_canonical(spec);
     auto bytes = wrap_signed_partition(
         canonical, VMPilot::DomainLabels::Auth::ReprovisionToken);
@@ -312,7 +315,8 @@ struct MigrationSpec {
     std::array<std::uint8_t, 32> new_package_hash{};
     std::array<std::uint8_t, 32> customer_account_id_hash{};
     bool allowed_import_once{true};
-    std::string allowed_policy_floor{"standard"};
+    VMPilot::DomainLabels::PolicyId allowed_policy_floor{
+        VMPilot::DomainLabels::PolicyId::Standard};
     std::uint64_t expires_at{2'000'000'000};
     std::array<std::uint8_t, 32> nonce{};
 };
@@ -327,7 +331,7 @@ std::vector<std::uint8_t> build_migration_canonical(const MigrationSpec& s) {
     m.put_uint(4, encode_bytes({s.customer_account_id_hash.begin(),
                                 s.customer_account_id_hash.end()}));
     m.put_uint(5, encode_uint(s.allowed_import_once ? 1u : 0u));
-    m.put_uint(6, encode_text(s.allowed_policy_floor));
+    m.put_uint(6, encode_text(VMPilot::DomainLabels::to_text(s.allowed_policy_floor)));
     m.put_uint(7, encode_uint(s.expires_at));
     m.put_uint(8, encode_bytes({s.nonce.begin(), s.nonce.end()}));
     return m.build();
@@ -449,7 +453,7 @@ TEST(MigrationToken, ImportOnceFalseRejected) {
 
 TEST(MigrationToken, PolicyFloorBelowRequiredRejected) {
     auto spec = baseline_migration();
-    spec.allowed_policy_floor = "debug";
+    spec.allowed_policy_floor = VMPilot::DomainLabels::PolicyId::Debug;
     auto canonical = build_migration_canonical(spec);
     auto bytes = wrap_signed_partition(
         canonical, VMPilot::DomainLabels::Auth::MigrationToken);

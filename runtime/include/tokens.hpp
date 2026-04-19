@@ -4,11 +4,14 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include <tl/expected.hpp>
 
 #include "trust_root.hpp"
+#include "vm/enum_text.hpp"
 #include "vm/family_policy.hpp"
 
 // Stage 11 — signed lifecycle tokens.
@@ -39,6 +42,26 @@ enum class ReasonCode : std::uint8_t {
     VmMigration,
     Other,
 };
+
+}  // namespace VMPilot::Runtime::Tokens
+
+// EnumTextTraits specialization — canonical on-wire text per doc 10 §6.1.
+namespace VMPilot {
+template <>
+struct EnumTextTraits<VMPilot::Runtime::Tokens::ReasonCode> {
+    using E = VMPilot::Runtime::Tokens::ReasonCode;
+    static constexpr std::array<std::pair<E, std::string_view>, 5>
+        entries{{
+            {E::TpmClear,        "tpm_clear"},
+            {E::MotherboardSwap, "motherboard_swap"},
+            {E::OsReinstall,     "os_reinstall"},
+            {E::VmMigration,     "vm_migration"},
+            {E::Other,           "other"},
+        }};
+};
+}  // namespace VMPilot
+
+namespace VMPilot::Runtime::Tokens {
 
 // doc 10 §6.1 — on-wire shape of the signed reprovision token.
 struct ReprovisionToken {

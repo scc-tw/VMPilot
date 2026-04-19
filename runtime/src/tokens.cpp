@@ -118,12 +118,9 @@ tl::expected<VMPilot::DomainLabels::FamilyId, TokenError> parse_family_id(
 
 tl::expected<ReasonCode, TokenError> parse_reason_code(
     std::string_view text) noexcept {
-    if (text == "tpm_clear")        return ReasonCode::TpmClear;
-    if (text == "motherboard_swap") return ReasonCode::MotherboardSwap;
-    if (text == "os_reinstall")     return ReasonCode::OsReinstall;
-    if (text == "vm_migration")     return ReasonCode::VmMigration;
-    if (text == "other")            return ReasonCode::Other;
-    return err(TokenError::UnknownEnumValue);
+    auto parsed = VMPilot::enum_from_text<ReasonCode>(text);
+    if (!parsed.has_value()) return err(TokenError::UnknownEnumValue);
+    return *parsed;
 }
 
 }  // namespace
