@@ -182,6 +182,25 @@ template <typename E>
 
 }  // namespace detail
 
+// Zero-copy: returns a string_view bound to the Value inside the
+// parsed tree. The view is valid as long as the parent Value is; all
+// current callers keep the tree on the stack for the parse span, so
+// this is safe. Previous require_text returned std::string and every
+// caller immediately compared it against a string literal — the copy
+// was pure overhead.
+template <typename E>
+[[nodiscard]] inline tl::expected<std::string_view, E>
+require_text(const Value& m, std::uint64_t key) noexcept {
+    const Value* v = m.find_by_uint_key(key);
+    if (v == nullptr) return tl::make_unexpected(detail::missing_field_code<E>());
+    if (v->kind() != Value::Kind::Text) {
+        return tl::make_unexpected(detail::wrong_field_type_code<E>());
+    }
+    return std::string_view(v->as_text());
+}
+
+// Keep a ref-returning overload for the rare site that needs to store
+// a pointer into the tree (currently only used by local_embedded).
 template <typename E>
 [[nodiscard]] inline tl::expected<const std::string*, E>
 require_text_ref(const Value& m, std::uint64_t key) noexcept {
@@ -191,14 +210,6 @@ require_text_ref(const Value& m, std::uint64_t key) noexcept {
         return tl::make_unexpected(detail::wrong_field_type_code<E>());
     }
     return &v->as_text();
-}
-
-template <typename E>
-[[nodiscard]] inline tl::expected<std::string, E>
-require_text(const Value& m, std::uint64_t key) noexcept {
-    auto ref = require_text_ref<E>(m, key);
-    if (!ref) return tl::make_unexpected(ref.error());
-    return **ref;
 }
 
 template <typename E>

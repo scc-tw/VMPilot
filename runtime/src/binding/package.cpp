@@ -63,7 +63,7 @@ inline tl::unexpected<AcceptError> err(AcceptError e) noexcept {
     return tl::make_unexpected(e);
 }
 
-bool is_in_list(const std::vector<std::string>& list, const std::string& v) noexcept {
+bool is_in_list(const std::vector<std::string>& list, std::string_view v) noexcept {
     for (const auto& x : list) if (x == v) return true;
     return false;
 }
