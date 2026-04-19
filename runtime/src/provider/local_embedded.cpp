@@ -79,65 +79,11 @@ constexpr std::size_t kMaxAllowedProviderClassesLength = 8;
 
 constexpr std::string_view kRequirementVersionV1 = "policy-requirement-v1";
 
-tl::expected<ProviderClass, PolicyRequirementParseError>
-parse_provider_class_text(std::string_view s) noexcept {
-    if (s == "local_embedded")      return ProviderClass::LocalEmbedded;
-    if (s == "local_tpm")           return ProviderClass::LocalTpm;
-    if (s == "local_tee")           return ProviderClass::LocalTee;
-    if (s == "cloud_attested_vm")   return ProviderClass::CloudAttestedVm;
-    if (s == "cloud_hsm")           return ProviderClass::CloudHsm;
-    if (s == "external_kms")        return ProviderClass::ExternalKms;
-    return tl::make_unexpected(PolicyRequirementParseError::UnknownEnumValue);
-}
-
-tl::expected<VMPilot::DomainLabels::PolicyId, PolicyRequirementParseError>
-parse_policy_floor_uint(std::uint64_t v) noexcept {
-    using VMPilot::DomainLabels::PolicyId;
-    switch (v) {
-        case static_cast<std::uint64_t>(PolicyId::Debug):    return PolicyId::Debug;
-        case static_cast<std::uint64_t>(PolicyId::Standard): return PolicyId::Standard;
-        case static_cast<std::uint64_t>(PolicyId::HighSec):  return PolicyId::HighSec;
-    }
-    return tl::make_unexpected(PolicyRequirementParseError::UnknownEnumValue);
-}
-
-tl::expected<RecoveryModel, PolicyRequirementParseError>
-parse_recovery_model_uint(std::uint64_t v) noexcept {
-    switch (v) {
-        case static_cast<std::uint64_t>(RecoveryModel::SelfService):
-            return RecoveryModel::SelfService;
-        case static_cast<std::uint64_t>(RecoveryModel::SignedReprovision):
-            return RecoveryModel::SignedReprovision;
-        case static_cast<std::uint64_t>(RecoveryModel::Quorum):
-            return RecoveryModel::Quorum;
-    }
-    return tl::make_unexpected(PolicyRequirementParseError::UnknownEnumValue);
-}
-
-tl::expected<bool, PolicyRequirementParseError>
-parse_bool_uint(std::uint64_t v) noexcept {
-    if (v == 0) return false;
-    if (v == 1) return true;
-    return tl::make_unexpected(PolicyRequirementParseError::UnknownEnumValue);
-}
-
-bool is_known_requirement_key(std::uint64_t k) noexcept {
-    switch (k) {
-        case kReq_RequirementVersion:
-        case kReq_RequiredPolicyFloor:
-        case kReq_RequiredFamilySet:
-        case kReq_RequireHardwareBound:
-        case kReq_RequireNonExportableKey:
-        case kReq_RequireOnlineFreshness:
-        case kReq_RequireRemoteAttestation:
-        case kReq_RequireRecoveryModel:
-        case kReq_AllowedProviderClasses:
-        case kReq_MinimumProviderEpoch:
-            return true;
-        default:
-            return false;
-    }
-}
+// Phase 9 replaced the hand-rolled helpers (parse_provider_class_text,
+// parse_policy_floor_uint, parse_recovery_model_uint, parse_bool_uint,
+// is_known_requirement_key) with the schema-driven parser. The schema
+// descriptors (EnumUintField / EnumTextArrayField / BoolField /
+// reject_unknown_keys) cover every validation the helpers used to do.
 
 // ProviderEvidence canonical schema (strict CBOR map, uint keys):
 //

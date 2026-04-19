@@ -86,9 +86,6 @@ inline tl::unexpected<TokenError> err(TokenError code) noexcept {
 inline auto require_text(const Value& m, std::uint64_t k) noexcept {
     return VMPilot::Cbor::require_text<TokenError>(m, k);
 }
-inline auto require_bytes(const Value& m, std::uint64_t k) noexcept {
-    return VMPilot::Cbor::require_bytes<TokenError>(m, k);
-}
 inline auto require_hash32(const Value& m, std::uint64_t k) noexcept {
     return VMPilot::Cbor::require_hash<TokenError, 32>(m, k);
 }
