@@ -73,12 +73,16 @@ add_library(VMPilot_Runtime STATIC
     src/state/platform_file_ops.cpp
     src/state/file_backed_state_provider.cpp
     src/state/tpm_backed_state_provider.cpp
+    src/state/tpm_session.cpp
     ${PLATFORM_ASM_SOURCES}
 )
 
 
 include(${CMAKE_SOURCE_DIR}/cmake/TrustRoot.cmake)
 vmpilot_configure_trust_root(VMPilot_Runtime)
+
+include(${CMAKE_SOURCE_DIR}/cmake/Tpm2Tss.cmake)
+vmpilot_configure_tpm2_tss(VMPilot_Runtime)
 
 target_include_directories(VMPilot_Runtime
     PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -251,6 +255,13 @@ if(ENABLE_TESTS)
     vmpilot_add_runtime_test(test_vm_runner
         SOURCES test/integration/test_vm_runner.cpp
         EXTRA_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+    # Stage B PR-B2 — tpm2-tss smoke test. Always compiles; when
+    # VMPILOT_ENABLE_TPM=OFF (default on Windows / macOS) it reports
+    # a single SKIP at runtime. The VMPILOT_HAS_TPM2_TSS compile
+    # define propagates from VMPilot_Runtime's PUBLIC interface.
+    vmpilot_add_runtime_test(test_tpm_session
+        SOURCES test/integration/test_tpm_session.cpp)
 
     # ── fixtures/ — Stage 0 infrastructure smoke test ──
 
