@@ -181,11 +181,46 @@ public:
                   const VerifiedArtifactContext& ctx) noexcept = 0;
 };
 
-// Canonical domain-separated hash of a PolicyRequirement. Used to
-// verify that the requirement derived at runtime matches what the
-// registry entry committed to (doc 14 §7 + doc 08 §4 rule 4).
+// Parse producer-supplied canonical bytes into an in-memory
+// PolicyRequirement. The producer emits strict-CBOR per the schema
+// documented in runtime/src/provider/local_embedded.cpp; the runtime
+// never serializes the struct itself, so there is no second
+// implementation to keep in sync. Strict canonical encoding is
+// enforced by the parser: unknown keys, duplicate keys,
+// non-canonical integer encoding, trailing bytes, unknown enum
+// values, and oversized arrays all reject.
+enum class PolicyRequirementParseError : std::uint8_t {
+    BadCbor = 1,
+    NotAMap,
+    MissingCoreField,
+    WrongFieldType,
+    UnknownCoreField,
+    UnknownEnumValue,
+    ArrayTooLong,
+    UnsupportedRequirementVersion,
+};
+
+tl::expected<PolicyRequirement, PolicyRequirementParseError>
+parse_policy_requirement(const std::uint8_t* data,
+                         std::size_t size) noexcept;
+
+inline tl::expected<PolicyRequirement, PolicyRequirementParseError>
+parse_policy_requirement(
+    const std::vector<std::uint8_t>& bytes) noexcept {
+    return parse_policy_requirement(bytes.data(), bytes.size());
+}
+
+// Domain-separated hash of producer-supplied canonical bytes. The
+// runtime compares this against the registry entry's committed
+// provider_requirement_hash; mismatch = reject the entry outright.
 std::array<std::uint8_t, 32>
-policy_requirement_hash(const PolicyRequirement& req) noexcept;
+policy_requirement_hash(const std::uint8_t* canonical_bytes,
+                        std::size_t size) noexcept;
+
+inline std::array<std::uint8_t, 32>
+policy_requirement_hash(const std::vector<std::uint8_t>& bytes) noexcept {
+    return policy_requirement_hash(bytes.data(), bytes.size());
+}
 
 // Core appraisal: checks evidence bindings and maps capability vs
 // requirement into a ProviderResult. Does NOT replace vendor signature

@@ -339,36 +339,38 @@ int64_t vm_stub_entry_artifact(const VmStubArtifactArgs* args) noexcept {
         return fail_closed();
     }
 
-    // provider_satisfies gate (doc 08 §4 rule 4, doc 14 §7). An
-    // all-zero hash encodes the "no provider requirement" convention;
-    // anything else names a signed PolicyRequirement that the
-    // installed TrustProvider must satisfy. The runtime derives a
-    // minimal PolicyRequirement from the UBR-committed policy floor
-    // and family; the hash of that requirement must match what the
-    // registry entry commits to, otherwise the producer shipped a
-    // registry entry pointing at a requirement the verifier cannot
-    // reconstruct — fail-closed.
+    // provider_satisfies gate (doc 08 §4 rule 4, doc 14 §7). Option 3:
+    // the producer ships the PolicyRequirement's canonical bytes in
+    // the registry entry alongside its domain-hash. The runtime
+    // never serializes PolicyRequirement itself — it only parses the
+    // bytes, recomputes the hash, compares against the committed
+    // hash, and hands the parsed struct to the provider gate.
+    //
+    // An empty canonical byte string + all-zero hash encodes
+    // "no provider requirement" and short-circuits acceptance.
     constexpr std::array<std::uint8_t, 32> kNoProviderRequirement{};
-    if (entry->provider_requirement_hash != kNoProviderRequirement) {
-        VMPilot::Runtime::Provider::PolicyRequirement req{};
-        req.requirement_version = "requirement-v1";
-        req.required_policy_floor = unit_or->ubr.requested_policy_id;
-        req.required_family_set = {unit_or->ubr.family_id};
-        req.require_hardware_bound = false;
-        req.require_non_exportable_key = false;
-        req.require_online_freshness = false;
-        req.require_remote_attestation = false;
-        req.require_recovery_model =
-            VMPilot::Runtime::Provider::RecoveryModel::SelfService;
-        req.allowed_provider_classes = {
-            VMPilot::Runtime::Provider::ProviderClass::LocalEmbedded};
-        req.minimum_provider_epoch = 0;
-
-        const auto derived_hash =
-            VMPilot::Runtime::Provider::policy_requirement_hash(req);
-        if (derived_hash != entry->provider_requirement_hash) {
+    if (!entry->provider_requirement_canonical_bytes.empty() ||
+        entry->provider_requirement_hash != kNoProviderRequirement) {
+        // Consistency: non-zero hash requires non-empty bytes and
+        // vice versa. The registry parser already enforces this, so
+        // hitting either here means the fixture / producer produced
+        // something registry accepted but local state disagrees —
+        // fail-closed either way.
+        if (entry->provider_requirement_canonical_bytes.empty() ||
+            entry->provider_requirement_hash == kNoProviderRequirement) {
             return fail_closed();
         }
+
+        const auto recomputed_hash =
+            VMPilot::Runtime::Provider::policy_requirement_hash(
+                entry->provider_requirement_canonical_bytes);
+        if (recomputed_hash != entry->provider_requirement_hash) {
+            return fail_closed();
+        }
+
+        auto req_or = VMPilot::Runtime::Provider::parse_policy_requirement(
+            entry->provider_requirement_canonical_bytes);
+        if (!req_or) return fail_closed();
 
         VMPilot::Runtime::Provider::VerifiedArtifactContext ctx{};
         ctx.package_binding_record_hash = VMPilot::Cbor::domain_hash_sha256(
@@ -376,11 +378,11 @@ int64_t vm_stub_entry_artifact(const VmStubArtifactArgs* args) noexcept {
             pkg_or->pbr_canonical_bytes);
         ctx.resolved_profile_table_hash =
             pkg_or->resolved_profile_table_hash;
-        ctx.policy_requirement_hash = derived_hash;
+        ctx.policy_requirement_hash = recomputed_hash;
 
         auto eval = VMPilot::Runtime::Provider::evaluate_policy_requirement(
-            VMPilot::Runtime::Provider::runtime_provider(), req, ctx,
-            derived_hash);
+            VMPilot::Runtime::Provider::runtime_provider(), *req_or, ctx,
+            recomputed_hash);
         if (!eval) return fail_closed();
         if (eval->status !=
             VMPilot::Runtime::Provider::ProviderStatus::Satisfied) {

@@ -30,18 +30,26 @@ namespace VMPilot::Runtime::Registry {
 
 // ─── On-disk entry — canonical CBOR map keyed by small unsigned ints ────
 //
-//     { 1: runtime_specialization_id        text
-//       2: family_id                         text ("f1" / "f2" / "f3")
-//       3: requested_policy_id               text ("debug" / "standard" / "highsec")
-//       4: profile_revision                  text
-//       5: semantic_contract_version         text
-//       6: execution_contract_ref            text
-//       7: required_runtime_primitives_hash  bytes(32)
-//       8: required_runtime_helpers_hash     bytes(32)
-//       9: provider_requirement_hash         bytes(32)
-//      10: accepted_profile_content_hash     bytes(32)
-//      11: diagnostic_visibility_class       uint
-//      12: enabled_in_this_runtime           uint (0 = false, 1 = true) }
+//     {  1: runtime_specialization_id           text
+//        2: family_id                            text ("f1" / "f2" / "f3")
+//        3: requested_policy_id                  text ("debug" / "standard" / "highsec")
+//        4: profile_revision                     text
+//        5: semantic_contract_version            text
+//        6: execution_contract_ref               text
+//        7: required_runtime_primitives_hash     bytes(32)
+//        8: required_runtime_helpers_hash        bytes(32)
+//        9: provider_requirement_hash            bytes(32)
+//       10: accepted_profile_content_hash        bytes(32)
+//       11: diagnostic_visibility_class          uint
+//       12: enabled_in_this_runtime              uint (0 = false, 1 = true)
+//       13: provider_requirement_canonical_bytes bytes (may be empty) }
+//
+// Field 13 carries the producer-supplied canonical CBOR bytes for
+// the PolicyRequirement that field 9's hash commits to. The runtime
+// parses field 13, recomputes the hash, compares to field 9, and
+// rejects any mismatch. When a unit has no provider requirement the
+// producer emits empty bytes + all-zero hash; any other combination
+// is invalid.
 
 struct SpecializationEntry {
     std::string runtime_specialization_id;
@@ -56,6 +64,7 @@ struct SpecializationEntry {
     std::array<std::uint8_t, 32> accepted_profile_content_hash;
     std::uint64_t diagnostic_visibility_class;
     bool enabled_in_this_runtime;
+    std::vector<std::uint8_t> provider_requirement_canonical_bytes;
 };
 
 // ─── Registry header — the top-level map wrapping the entry list ────────
@@ -93,6 +102,13 @@ enum class ParseError : std::uint8_t {
     AuthCoveredDomainMismatch,
     SignatureWrongSize,
     SignatureInvalid,
+
+    // provider_requirement field-13/field-9 consistency.
+    InconsistentRequirementCommitment,   // bytes ↔ hash disagree
+                                         // (empty bytes with non-zero
+                                         // hash, non-empty bytes with
+                                         // zero hash, or recomputed
+                                         // hash over bytes != field 9)
 };
 
 enum class LookupError : std::uint8_t {
@@ -119,7 +135,7 @@ parse(const std::vector<std::uint8_t>& bytes) noexcept {
 // "runtime-specialization-registry-v1", verified against the supplied
 // VendorTrustRoot.
 //
-// Contract source: docs/research/zh-tw/family-redesign/08-runtime-specialization-registry.md §3.1
+// Contract source: internal research doc 08 §3.1.
 tl::expected<Registry, ParseError>
 parse_partition(const std::uint8_t* data, std::size_t size,
                 const VMPilot::Runtime::VendorTrustRoot& root) noexcept;

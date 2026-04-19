@@ -190,10 +190,13 @@ if(ENABLE_TESTS)
         test_native_call
         test_policy_matrix
         test_tls_intrinsic
-        test_provider_local
     )
         vmpilot_add_runtime_test(${_t} SOURCES test/integration/${_t}.cpp)
     endforeach()
+
+    vmpilot_add_runtime_test(test_provider_local
+        SOURCES test/integration/test_provider_local.cpp
+        WITH_FIXTURES)
 
     vmpilot_add_runtime_test(test_tokens
         SOURCES test/integration/test_tokens.cpp

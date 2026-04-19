@@ -16,9 +16,14 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "provider.hpp"
+
+#include "fixtures/cbor_test_encoder.hpp"
+#include "fixtures/fixture_generator.hpp"
 
 namespace {
 
@@ -32,7 +37,9 @@ using VMPilot::Runtime::Provider::evaluate_policy_requirement;
 using VMPilot::Runtime::Provider::FreshnessClass;
 using VMPilot::Runtime::Provider::KeyCustodyClass;
 using VMPilot::Runtime::Provider::LocalEmbeddedProvider;
+using VMPilot::Runtime::Provider::parse_policy_requirement;
 using VMPilot::Runtime::Provider::PolicyRequirement;
+using VMPilot::Runtime::Provider::PolicyRequirementParseError;
 using VMPilot::Runtime::Provider::policy_requirement_hash;
 using VMPilot::Runtime::Provider::PrivacyModel;
 using VMPilot::Runtime::Provider::ProviderClass;
@@ -57,11 +64,82 @@ PolicyRequirement baseline_requirement() {
     return req;
 }
 
+// The runtime does not serialize PolicyRequirement; the producer
+// does. For tests that build a struct and then want its canonical
+// hash, round-trip the struct through the fixture encoder's
+// PolicyRequirementSpec so the bytes are the same ones a producer
+// would ship.
+VMPilot::Fixtures::PolicyRequirementSpec req_to_spec(
+    const PolicyRequirement& r) {
+    auto policy_text = [](VMPilot::DomainLabels::PolicyId p) {
+        switch (p) {
+            case VMPilot::DomainLabels::PolicyId::Debug:    return "debug";
+            case VMPilot::DomainLabels::PolicyId::Standard: return "standard";
+            case VMPilot::DomainLabels::PolicyId::HighSec:  return "highsec";
+        }
+        return "standard";
+    };
+    auto family_text = [](VMPilot::DomainLabels::FamilyId f) {
+        switch (f) {
+            case VMPilot::DomainLabels::FamilyId::F1: return "f1";
+            case VMPilot::DomainLabels::FamilyId::F2: return "f2";
+            case VMPilot::DomainLabels::FamilyId::F3: return "f3";
+        }
+        return "f1";
+    };
+    auto recovery_text = [](ProviderClass) { return std::string{}; };
+    (void)recovery_text;
+    auto recovery_model_text = [](RecoveryModel m) {
+        switch (m) {
+            case RecoveryModel::SelfService:       return "self_service";
+            case RecoveryModel::SignedReprovision: return "signed_reprovision";
+            case RecoveryModel::Quorum:            return "quorum";
+        }
+        return "self_service";
+    };
+    auto class_text = [](ProviderClass c) {
+        switch (c) {
+            case ProviderClass::LocalEmbedded:   return "local_embedded";
+            case ProviderClass::LocalTpm:        return "local_tpm";
+            case ProviderClass::LocalTee:        return "local_tee";
+            case ProviderClass::CloudAttestedVm: return "cloud_attested_vm";
+            case ProviderClass::CloudHsm:        return "cloud_hsm";
+            case ProviderClass::ExternalKms:     return "external_kms";
+        }
+        return "local_embedded";
+    };
+
+    VMPilot::Fixtures::PolicyRequirementSpec s;
+    s.requirement_version       = r.requirement_version;
+    s.required_policy_floor     = policy_text(r.required_policy_floor);
+    s.required_family_set.clear();
+    for (auto f : r.required_family_set) {
+        s.required_family_set.emplace_back(family_text(f));
+    }
+    s.require_hardware_bound     = r.require_hardware_bound;
+    s.require_non_exportable_key = r.require_non_exportable_key;
+    s.require_online_freshness   = r.require_online_freshness;
+    s.require_remote_attestation = r.require_remote_attestation;
+    s.require_recovery_model     = recovery_model_text(r.require_recovery_model);
+    s.allowed_provider_classes.clear();
+    for (auto c : r.allowed_provider_classes) {
+        s.allowed_provider_classes.emplace_back(class_text(c));
+    }
+    s.minimum_provider_epoch = r.minimum_provider_epoch;
+    return s;
+}
+
+std::array<std::uint8_t, 32> hash_of(const PolicyRequirement& r) {
+    const auto bytes =
+        VMPilot::Fixtures::encode_policy_requirement(req_to_spec(r));
+    return policy_requirement_hash(bytes);
+}
+
 VerifiedArtifactContext make_ctx(const PolicyRequirement& req) {
     VerifiedArtifactContext ctx{};
     ctx.package_binding_record_hash = {0xA0, 0xA1, 0xA2, 0xA3};
     ctx.resolved_profile_table_hash = {0xB0, 0xB1, 0xB2, 0xB3};
-    ctx.policy_requirement_hash = policy_requirement_hash(req);
+    ctx.policy_requirement_hash = hash_of(req);
     return ctx;
 }
 
@@ -206,7 +284,7 @@ TEST(Provider, AppraisalRejectsEvidenceWithMismatchedRequirementHash) {
     // policy_requirement_hash no longer matches what the ctx commits to.
     auto alt_req = req;
     alt_req.minimum_provider_epoch = 99;
-    const auto alt_hash = policy_requirement_hash(alt_req);
+    const auto alt_hash = hash_of(alt_req);
 
     ProviderEvidence ev{};
     ev.evidence_version = "evidence-v1";
@@ -224,22 +302,22 @@ TEST(Provider, AppraisalRejectsEvidenceWithMismatchedRequirementHash) {
 TEST(Provider, PolicyRequirementHashIsDeterministicAndDomainSeparated) {
     auto req1 = baseline_requirement();
     auto req2 = baseline_requirement();
-    EXPECT_EQ(policy_requirement_hash(req1), policy_requirement_hash(req2));
+    EXPECT_EQ(hash_of(req1), hash_of(req2));
 
     req2.required_policy_floor = PolicyId::HighSec;
-    EXPECT_NE(policy_requirement_hash(req1), policy_requirement_hash(req2));
+    EXPECT_NE(hash_of(req1), hash_of(req2));
 
     req2 = baseline_requirement();
     req2.minimum_provider_epoch = 1;
-    EXPECT_NE(policy_requirement_hash(req1), policy_requirement_hash(req2));
+    EXPECT_NE(hash_of(req1), hash_of(req2));
 
     req2 = baseline_requirement();
     req2.required_family_set = {FamilyId::F2};
-    EXPECT_NE(policy_requirement_hash(req1), policy_requirement_hash(req2));
+    EXPECT_NE(hash_of(req1), hash_of(req2));
 
     req2 = baseline_requirement();
     req2.allowed_provider_classes = {ProviderClass::LocalTpm};
-    EXPECT_NE(policy_requirement_hash(req1), policy_requirement_hash(req2));
+    EXPECT_NE(hash_of(req1), hash_of(req2));
 }
 
 TEST(Provider, ProviderSwitchDoesNotChangeUnitBindingVerification_doc14_10_5) {
@@ -253,8 +331,8 @@ TEST(Provider, ProviderSwitchDoesNotChangeUnitBindingVerification_doc14_10_5) {
     LocalEmbeddedProvider provider_b("instance-b");
 
     const auto req = baseline_requirement();
-    const auto hash_a = policy_requirement_hash(req);
-    const auto hash_b = policy_requirement_hash(req);
+    const auto hash_a = hash_of(req);
+    const auto hash_b = hash_of(req);
     EXPECT_EQ(hash_a, hash_b);
 
     const auto caps_a = provider_a.get_capabilities();
@@ -262,4 +340,141 @@ TEST(Provider, ProviderSwitchDoesNotChangeUnitBindingVerification_doc14_10_5) {
     EXPECT_NE(caps_a.provider_instance_pseudonym,
               caps_b.provider_instance_pseudonym);
     EXPECT_EQ(caps_a.provider_class, caps_b.provider_class);
+}
+
+// ── Parser negative tests (strict CBOR schema enforcement) ────────────────
+
+namespace {
+
+std::vector<std::uint8_t> baseline_requirement_bytes() {
+    return VMPilot::Fixtures::encode_policy_requirement(
+        VMPilot::Fixtures::PolicyRequirementSpec{});
+}
+
+}  // namespace
+
+TEST(PolicyRequirementParse, HappyPathRoundTrips) {
+    const auto bytes = baseline_requirement_bytes();
+    auto parsed = parse_policy_requirement(bytes);
+    ASSERT_TRUE(parsed.has_value())
+        << "err=" << static_cast<int>(parsed.error());
+    EXPECT_EQ(parsed->requirement_version, "policy-requirement-v1");
+    EXPECT_EQ(parsed->required_policy_floor, PolicyId::Standard);
+    EXPECT_EQ(parsed->required_family_set,
+              (std::vector<FamilyId>{FamilyId::F1}));
+    EXPECT_EQ(parsed->allowed_provider_classes,
+              (std::vector<ProviderClass>{ProviderClass::LocalEmbedded}));
+    EXPECT_EQ(parsed->minimum_provider_epoch, 0u);
+}
+
+TEST(PolicyRequirementParse, UnknownRequirementVersionRejected) {
+    VMPilot::Fixtures::PolicyRequirementSpec s;
+    s.requirement_version = "policy-requirement-v99";
+    const auto bytes = VMPilot::Fixtures::encode_policy_requirement(s);
+    auto parsed = parse_policy_requirement(bytes);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_EQ(parsed.error(),
+              PolicyRequirementParseError::UnsupportedRequirementVersion);
+}
+
+TEST(PolicyRequirementParse, TrailingBytesRejected) {
+    auto bytes = baseline_requirement_bytes();
+    bytes.push_back(0x00);  // trailing garbage
+    auto parsed = parse_policy_requirement(bytes);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_EQ(parsed.error(), PolicyRequirementParseError::BadCbor);
+}
+
+TEST(PolicyRequirementParse, OversizedFamilySetRejected) {
+    VMPilot::Fixtures::PolicyRequirementSpec s;
+    s.required_family_set = {"f1", "f2", "f3", "f1"};  // len 4 > 3
+    const auto bytes = VMPilot::Fixtures::encode_policy_requirement(s);
+    auto parsed = parse_policy_requirement(bytes);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_EQ(parsed.error(), PolicyRequirementParseError::ArrayTooLong);
+}
+
+TEST(PolicyRequirementParse, OversizedAllowedProviderClassesRejected) {
+    VMPilot::Fixtures::PolicyRequirementSpec s;
+    s.allowed_provider_classes = {
+        "local_embedded", "local_tpm", "local_tee", "cloud_attested_vm",
+        "cloud_hsm", "external_kms", "local_embedded", "local_tpm",
+        "local_tee"};  // len 9 > 8
+    const auto bytes = VMPilot::Fixtures::encode_policy_requirement(s);
+    auto parsed = parse_policy_requirement(bytes);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_EQ(parsed.error(), PolicyRequirementParseError::ArrayTooLong);
+}
+
+TEST(PolicyRequirementParse, UnknownFamilyIdRejected) {
+    VMPilot::Fixtures::PolicyRequirementSpec s;
+    s.required_family_set = {"f7"};  // unknown
+    const auto bytes = VMPilot::Fixtures::encode_policy_requirement(s);
+    auto parsed = parse_policy_requirement(bytes);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_EQ(parsed.error(), PolicyRequirementParseError::UnknownEnumValue);
+}
+
+TEST(PolicyRequirementParse, UnknownProviderClassRejected) {
+    VMPilot::Fixtures::PolicyRequirementSpec s;
+    s.allowed_provider_classes = {"chewy_hardware_dongle"};  // unknown
+    const auto bytes = VMPilot::Fixtures::encode_policy_requirement(s);
+    auto parsed = parse_policy_requirement(bytes);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_EQ(parsed.error(), PolicyRequirementParseError::UnknownEnumValue);
+}
+
+TEST(PolicyRequirementParse, UnknownCoreFieldRejected) {
+    // Re-encode baseline with an extra key-value pair that's not in
+    // the schema. MapBuilder preserves insertion order; we insert a
+    // key > all known keys to keep canonical order valid.
+    using namespace VMPilot::Fixtures::Cbor;
+    auto baseline = baseline_requirement_bytes();
+    auto parsed_baseline = parse_policy_requirement(baseline);
+    ASSERT_TRUE(parsed_baseline.has_value());
+
+    VMPilot::Fixtures::PolicyRequirementSpec s;
+    // Build a map with a stray key 99.
+    std::vector<std::vector<std::uint8_t>> family_items{encode_text("f1")};
+    std::vector<std::vector<std::uint8_t>> class_items{
+        encode_text("local_embedded")};
+    MapBuilder m;
+    m.put_uint(1,  encode_text("policy-requirement-v1"));
+    m.put_uint(2,  encode_uint(2));
+    m.put_uint(3,  encode_array(family_items));
+    m.put_uint(4,  encode_uint(0));
+    m.put_uint(5,  encode_uint(0));
+    m.put_uint(6,  encode_uint(0));
+    m.put_uint(7,  encode_uint(0));
+    m.put_uint(8,  encode_uint(1));
+    m.put_uint(9,  encode_array(class_items));
+    m.put_uint(10, encode_uint(0));
+    m.put_uint(99, encode_uint(0));  // unknown key
+    const auto bytes = m.build();
+    auto parsed = parse_policy_requirement(bytes);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_EQ(parsed.error(), PolicyRequirementParseError::UnknownCoreField);
+}
+
+TEST(PolicyRequirementParse, WrongFieldTypeRejected) {
+    using namespace VMPilot::Fixtures::Cbor;
+    // required_policy_floor (key 2) must be uint; pass text.
+    std::vector<std::vector<std::uint8_t>> family_items{encode_text("f1")};
+    std::vector<std::vector<std::uint8_t>> class_items{
+        encode_text("local_embedded")};
+    MapBuilder m;
+    m.put_uint(1,  encode_text("policy-requirement-v1"));
+    m.put_uint(2,  encode_text("standard"));  // WRONG: schema wants uint
+    m.put_uint(3,  encode_array(family_items));
+    m.put_uint(4,  encode_uint(0));
+    m.put_uint(5,  encode_uint(0));
+    m.put_uint(6,  encode_uint(0));
+    m.put_uint(7,  encode_uint(0));
+    m.put_uint(8,  encode_uint(1));
+    m.put_uint(9,  encode_array(class_items));
+    m.put_uint(10, encode_uint(0));
+    const auto bytes = m.build();
+    auto parsed = parse_policy_requirement(bytes);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_EQ(parsed.error(), PolicyRequirementParseError::WrongFieldType);
 }

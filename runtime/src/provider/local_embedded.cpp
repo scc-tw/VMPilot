@@ -10,68 +10,121 @@ namespace VMPilot::Runtime::Provider {
 
 namespace {
 
-// Hand-rolled canonical serializer for PolicyRequirement — a closed
-// struct, so a bespoke, deterministic byte layout is cheaper than
-// threading the full CBOR encoder into the runtime. Layout:
+// PolicyRequirement canonical schema (strict CBOR map, keys are uint):
 //
-//   u8  tag=0x01
-//   u16 requirement_version.length | ... bytes
-//   u8  required_policy_floor      (PolicyId enum value, 1..3)
-//   u16 required_family_set.length | FamilyId byte per entry
-//   u8  require_hardware_bound     (0/1)
-//   u8  require_non_exportable_key (0/1)
-//   u8  require_online_freshness   (0/1)
-//   u8  require_remote_attestation (0/1)
-//   u8  require_recovery_model     (RecoveryModel enum value, 1..3)
-//   u16 allowed_provider_classes.length | ProviderClass byte per entry
-//   u64 minimum_provider_epoch     (little-endian)
+//   1:  text     requirement_version, must equal "policy-requirement-v1"
+//   2:  uint     required_policy_floor       (PolicyId: 1=Debug, 2=Standard, 3=HighSec)
+//   3:  array<text>  required_family_set     (length 1..3; items in {"f1","f2","f3"})
+//   4:  uint     require_hardware_bound      (0 or 1)
+//   5:  uint     require_non_exportable_key  (0 or 1)
+//   6:  uint     require_online_freshness    (0 or 1)
+//   7:  uint     require_remote_attestation  (0 or 1)
+//   8:  uint     require_recovery_model      (RecoveryModel: 1..3)
+//   9:  array<text>  allowed_provider_classes (length 1..8;
+//                                              items in {"local_embedded",
+//                                              "local_tpm","local_tee",
+//                                              "cloud_attested_vm",
+//                                              "cloud_hsm","external_kms"})
+//   10: uint     minimum_provider_epoch       (u64)
 //
-// All integers are little-endian. Enum values are fixed at the
-// header. The label prefix is added by domain_hash_sha256.
+// Unknown map keys / duplicate keys / non-canonical integer encoding /
+// trailing bytes / unknown enum values / arrays beyond the length
+// bound all reject. The runtime never constructs these bytes — the
+// producer ships them inside the signed registry and the runtime only
+// parses + re-hashes + compares.
+//
+// TODO: migrate requirement_version / enum text values to typed
+// enum class constants (with canonical string mapping helpers) so
+// stringly-typed comparisons against literal values disappear.
 
+constexpr std::uint64_t kReq_RequirementVersion         = 1;
+constexpr std::uint64_t kReq_RequiredPolicyFloor        = 2;
+constexpr std::uint64_t kReq_RequiredFamilySet          = 3;
+constexpr std::uint64_t kReq_RequireHardwareBound       = 4;
+constexpr std::uint64_t kReq_RequireNonExportableKey    = 5;
+constexpr std::uint64_t kReq_RequireOnlineFreshness     = 6;
+constexpr std::uint64_t kReq_RequireRemoteAttestation   = 7;
+constexpr std::uint64_t kReq_RequireRecoveryModel       = 8;
+constexpr std::uint64_t kReq_AllowedProviderClasses     = 9;
+constexpr std::uint64_t kReq_MinimumProviderEpoch       = 10;
+
+constexpr std::size_t kMaxFamilySetLength             = 3;
+constexpr std::size_t kMaxAllowedProviderClassesLength = 8;
+
+constexpr std::string_view kRequirementVersionV1 = "policy-requirement-v1";
+
+tl::expected<ProviderClass, PolicyRequirementParseError>
+parse_provider_class_text(std::string_view s) noexcept {
+    if (s == "local_embedded")      return ProviderClass::LocalEmbedded;
+    if (s == "local_tpm")           return ProviderClass::LocalTpm;
+    if (s == "local_tee")           return ProviderClass::LocalTee;
+    if (s == "cloud_attested_vm")   return ProviderClass::CloudAttestedVm;
+    if (s == "cloud_hsm")           return ProviderClass::CloudHsm;
+    if (s == "external_kms")        return ProviderClass::ExternalKms;
+    return tl::make_unexpected(PolicyRequirementParseError::UnknownEnumValue);
+}
+
+tl::expected<VMPilot::DomainLabels::PolicyId, PolicyRequirementParseError>
+parse_policy_floor_uint(std::uint64_t v) noexcept {
+    using VMPilot::DomainLabels::PolicyId;
+    switch (v) {
+        case static_cast<std::uint64_t>(PolicyId::Debug):    return PolicyId::Debug;
+        case static_cast<std::uint64_t>(PolicyId::Standard): return PolicyId::Standard;
+        case static_cast<std::uint64_t>(PolicyId::HighSec):  return PolicyId::HighSec;
+    }
+    return tl::make_unexpected(PolicyRequirementParseError::UnknownEnumValue);
+}
+
+tl::expected<RecoveryModel, PolicyRequirementParseError>
+parse_recovery_model_uint(std::uint64_t v) noexcept {
+    switch (v) {
+        case static_cast<std::uint64_t>(RecoveryModel::SelfService):
+            return RecoveryModel::SelfService;
+        case static_cast<std::uint64_t>(RecoveryModel::SignedReprovision):
+            return RecoveryModel::SignedReprovision;
+        case static_cast<std::uint64_t>(RecoveryModel::Quorum):
+            return RecoveryModel::Quorum;
+    }
+    return tl::make_unexpected(PolicyRequirementParseError::UnknownEnumValue);
+}
+
+tl::expected<bool, PolicyRequirementParseError>
+parse_bool_uint(std::uint64_t v) noexcept {
+    if (v == 0) return false;
+    if (v == 1) return true;
+    return tl::make_unexpected(PolicyRequirementParseError::UnknownEnumValue);
+}
+
+bool is_known_requirement_key(std::uint64_t k) noexcept {
+    switch (k) {
+        case kReq_RequirementVersion:
+        case kReq_RequiredPolicyFloor:
+        case kReq_RequiredFamilySet:
+        case kReq_RequireHardwareBound:
+        case kReq_RequireNonExportableKey:
+        case kReq_RequireOnlineFreshness:
+        case kReq_RequireRemoteAttestation:
+        case kReq_RequireRecoveryModel:
+        case kReq_AllowedProviderClasses:
+        case kReq_MinimumProviderEpoch:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// Helpers used by the evidence serializer only — PolicyRequirement's
+// serializer is gone (producer-carried bytes path).
 void append_u8(std::vector<std::uint8_t>& out, std::uint8_t v) {
     out.push_back(v);
 }
-
 void append_u16(std::vector<std::uint8_t>& out, std::uint16_t v) {
     out.push_back(static_cast<std::uint8_t>(v & 0xFFu));
     out.push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFu));
 }
-
-void append_u64(std::vector<std::uint8_t>& out, std::uint64_t v) {
-    for (int i = 0; i < 8; ++i) {
-        out.push_back(static_cast<std::uint8_t>((v >> (i * 8)) & 0xFFu));
-    }
-}
-
 void append_str(std::vector<std::uint8_t>& out, std::string_view s) {
     append_u16(out, static_cast<std::uint16_t>(s.size()));
     out.insert(out.end(), s.begin(), s.end());
-}
-
-std::vector<std::uint8_t> serialize_policy_requirement(
-    const PolicyRequirement& req) {
-    std::vector<std::uint8_t> out;
-    out.reserve(128);
-    append_u8(out, 0x01);  // tag
-    append_str(out, req.requirement_version);
-    append_u8(out, static_cast<std::uint8_t>(req.required_policy_floor));
-    append_u16(out, static_cast<std::uint16_t>(req.required_family_set.size()));
-    for (auto f : req.required_family_set) {
-        append_u8(out, static_cast<std::uint8_t>(f));
-    }
-    append_u8(out, req.require_hardware_bound ? 1 : 0);
-    append_u8(out, req.require_non_exportable_key ? 1 : 0);
-    append_u8(out, req.require_online_freshness ? 1 : 0);
-    append_u8(out, req.require_remote_attestation ? 1 : 0);
-    append_u8(out, static_cast<std::uint8_t>(req.require_recovery_model));
-    append_u16(out, static_cast<std::uint16_t>(
-                        req.allowed_provider_classes.size()));
-    for (auto c : req.allowed_provider_classes) {
-        append_u8(out, static_cast<std::uint8_t>(c));
-    }
-    append_u64(out, req.minimum_provider_epoch);
-    return out;
 }
 
 std::vector<std::uint8_t> serialize_evidence_core(
@@ -171,10 +224,159 @@ LocalEmbeddedProvider& default_provider() noexcept {
 }  // namespace
 
 std::array<std::uint8_t, 32>
-policy_requirement_hash(const PolicyRequirement& req) noexcept {
-    const auto bytes = serialize_policy_requirement(req);
+policy_requirement_hash(const std::uint8_t* canonical_bytes,
+                        std::size_t size) noexcept {
     return VMPilot::Cbor::domain_hash_sha256(
-        VMPilot::DomainLabels::Hash::PolicyRequirement, bytes);
+        VMPilot::DomainLabels::Hash::PolicyRequirement,
+        canonical_bytes, size);
+}
+
+tl::expected<PolicyRequirement, PolicyRequirementParseError>
+parse_policy_requirement(const std::uint8_t* data,
+                         std::size_t size) noexcept {
+    using VMPilot::Cbor::Value;
+    using VMPilot::Cbor::parse_strict;
+    auto err = [](PolicyRequirementParseError e) {
+        return tl::make_unexpected(e);
+    };
+
+    // parse_strict already rejects trailing bytes, duplicate map
+    // keys, non-canonical integer encoding, indefinite length, and
+    // floats; we only need to layer typed-field validation on top.
+    auto root_or = parse_strict(data, size);
+    if (!root_or) return err(PolicyRequirementParseError::BadCbor);
+    const Value& root = *root_or;
+    if (root.kind() != Value::Kind::Map) {
+        return err(PolicyRequirementParseError::NotAMap);
+    }
+
+    // Unknown-key rejection (strict mode).
+    for (std::size_t i = 0; i < root.map_size(); ++i) {
+        const Value& key = root.map_key_at(i);
+        if (key.kind() != Value::Kind::Uint) {
+            return err(PolicyRequirementParseError::WrongFieldType);
+        }
+        if (!is_known_requirement_key(key.as_uint())) {
+            return err(PolicyRequirementParseError::UnknownCoreField);
+        }
+    }
+
+    auto require_text = [&](std::uint64_t k)
+        -> tl::expected<std::string_view, PolicyRequirementParseError> {
+        const Value* v = root.find_by_uint_key(k);
+        if (v == nullptr) return err(PolicyRequirementParseError::MissingCoreField);
+        if (v->kind() != Value::Kind::Text) {
+            return err(PolicyRequirementParseError::WrongFieldType);
+        }
+        return std::string_view(v->as_text());
+    };
+    auto require_uint = [&](std::uint64_t k)
+        -> tl::expected<std::uint64_t, PolicyRequirementParseError> {
+        const Value* v = root.find_by_uint_key(k);
+        if (v == nullptr) return err(PolicyRequirementParseError::MissingCoreField);
+        if (v->kind() != Value::Kind::Uint) {
+            return err(PolicyRequirementParseError::WrongFieldType);
+        }
+        return v->as_uint();
+    };
+
+    auto version_or = require_text(kReq_RequirementVersion);
+    if (!version_or) return err(version_or.error());
+    if (*version_or != kRequirementVersionV1) {
+        return err(PolicyRequirementParseError::UnsupportedRequirementVersion);
+    }
+
+    auto floor_v_or = require_uint(kReq_RequiredPolicyFloor);
+    if (!floor_v_or) return err(floor_v_or.error());
+    auto floor_or = parse_policy_floor_uint(*floor_v_or);
+    if (!floor_or) return err(floor_or.error());
+
+    // required_family_set: array<text>, 1..kMaxFamilySetLength.
+    std::vector<VMPilot::DomainLabels::FamilyId> families;
+    {
+        const Value* v = root.find_by_uint_key(kReq_RequiredFamilySet);
+        if (v == nullptr) return err(PolicyRequirementParseError::MissingCoreField);
+        if (v->kind() != Value::Kind::Array) {
+            return err(PolicyRequirementParseError::WrongFieldType);
+        }
+        const auto& items = v->as_array();
+        if (items.empty() || items.size() > kMaxFamilySetLength) {
+            return err(PolicyRequirementParseError::ArrayTooLong);
+        }
+        families.reserve(items.size());
+        for (const Value& item : items) {
+            if (item.kind() != Value::Kind::Text) {
+                return err(PolicyRequirementParseError::WrongFieldType);
+            }
+            auto fam = VMPilot::DomainLabels::parse_family_id(item.as_text());
+            if (!fam.has_value()) {
+                return err(PolicyRequirementParseError::UnknownEnumValue);
+            }
+            families.push_back(*fam);
+        }
+    }
+
+    auto hw_or = require_uint(kReq_RequireHardwareBound);
+    auto nek_or = require_uint(kReq_RequireNonExportableKey);
+    auto fresh_or = require_uint(kReq_RequireOnlineFreshness);
+    auto att_or = require_uint(kReq_RequireRemoteAttestation);
+    auto recov_v_or = require_uint(kReq_RequireRecoveryModel);
+    auto epoch_or = require_uint(kReq_MinimumProviderEpoch);
+
+    if (!hw_or)     return err(hw_or.error());
+    if (!nek_or)    return err(nek_or.error());
+    if (!fresh_or)  return err(fresh_or.error());
+    if (!att_or)    return err(att_or.error());
+    if (!recov_v_or) return err(recov_v_or.error());
+    if (!epoch_or)  return err(epoch_or.error());
+
+    auto hw_b    = parse_bool_uint(*hw_or);
+    auto nek_b   = parse_bool_uint(*nek_or);
+    auto fresh_b = parse_bool_uint(*fresh_or);
+    auto att_b   = parse_bool_uint(*att_or);
+    auto recov_or = parse_recovery_model_uint(*recov_v_or);
+
+    if (!hw_b)    return err(hw_b.error());
+    if (!nek_b)   return err(nek_b.error());
+    if (!fresh_b) return err(fresh_b.error());
+    if (!att_b)   return err(att_b.error());
+    if (!recov_or) return err(recov_or.error());
+
+    // allowed_provider_classes: array<text>, 1..kMaxAllowedProviderClassesLength.
+    std::vector<ProviderClass> classes;
+    {
+        const Value* v = root.find_by_uint_key(kReq_AllowedProviderClasses);
+        if (v == nullptr) return err(PolicyRequirementParseError::MissingCoreField);
+        if (v->kind() != Value::Kind::Array) {
+            return err(PolicyRequirementParseError::WrongFieldType);
+        }
+        const auto& items = v->as_array();
+        if (items.empty() || items.size() > kMaxAllowedProviderClassesLength) {
+            return err(PolicyRequirementParseError::ArrayTooLong);
+        }
+        classes.reserve(items.size());
+        for (const Value& item : items) {
+            if (item.kind() != Value::Kind::Text) {
+                return err(PolicyRequirementParseError::WrongFieldType);
+            }
+            auto cls = parse_provider_class_text(item.as_text());
+            if (!cls) return err(cls.error());
+            classes.push_back(*cls);
+        }
+    }
+
+    PolicyRequirement out;
+    out.requirement_version         = std::string(*version_or);
+    out.required_policy_floor       = *floor_or;
+    out.required_family_set         = std::move(families);
+    out.require_hardware_bound      = *hw_b;
+    out.require_non_exportable_key  = *nek_b;
+    out.require_online_freshness    = *fresh_b;
+    out.require_remote_attestation  = *att_b;
+    out.require_recovery_model      = *recov_or;
+    out.allowed_provider_classes    = std::move(classes);
+    out.minimum_provider_epoch      = *epoch_or;
+    return out;
 }
 
 static std::array<std::uint8_t, 32>
@@ -239,11 +441,11 @@ evaluate_policy_requirement(TrustProvider& provider,
             ProviderError::ProviderRequirementNotSatisfied);
     }
 
-    // 2. Evidence. Use the requirement hash as the nonce seed so the
-    //    binding is deterministic for unit tests; production would
-    //    sample a random nonce and persist it to defeat replay.
-    const auto req_hash = policy_requirement_hash(requirement);
-    std::array<std::uint8_t, 32> nonce = req_hash;
+    // 2. Evidence. Use the requirement hash from the caller-provided
+    //    ctx as the nonce seed so the binding is deterministic for
+    //    unit tests; production would sample a random nonce and
+    //    persist it to defeat replay.
+    std::array<std::uint8_t, 32> nonce = ctx.policy_requirement_hash;
     auto evidence_or = provider.bind_artifact(nonce, ctx);
     if (!evidence_or) return tl::make_unexpected(evidence_or.error());
 

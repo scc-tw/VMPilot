@@ -33,9 +33,10 @@ constexpr std::uint64_t kEnt_ExecutionContractRef         = 6;
 constexpr std::uint64_t kEnt_RequiredPrimitivesHash       = 7;
 constexpr std::uint64_t kEnt_RequiredHelpersHash          = 8;
 constexpr std::uint64_t kEnt_ProviderRequirementHash      = 9;
-constexpr std::uint64_t kEnt_AcceptedProfileContentHash   = 10;
-constexpr std::uint64_t kEnt_DiagnosticVisibilityClass    = 11;
-constexpr std::uint64_t kEnt_EnabledInThisRuntime         = 12;
+constexpr std::uint64_t kEnt_AcceptedProfileContentHash        = 10;
+constexpr std::uint64_t kEnt_DiagnosticVisibilityClass         = 11;
+constexpr std::uint64_t kEnt_EnabledInThisRuntime              = 12;
+constexpr std::uint64_t kEnt_ProviderRequirementCanonicalBytes = 13;
 
 inline tl::unexpected<ParseError> err(ParseError e) noexcept {
     return tl::make_unexpected(e);
@@ -105,19 +106,46 @@ parse_entry(const Value& entry_v) noexcept {
     if (!enabled_u) return err(enabled_u.error());
     if (*enabled_u > 1) return err(ParseError::EnabledFlagOutOfRange);
 
+    // Field 13 is required in v1 but may carry zero-length bytes to
+    // represent "no provider requirement" (paired with an all-zero
+    // field 9). Any other bytes↔hash combination is a producer bug
+    // and rejected here before lookup runs.
+    const Value* req_bytes_v =
+        entry_v.find_by_uint_key(kEnt_ProviderRequirementCanonicalBytes);
+    if (req_bytes_v == nullptr) return err(ParseError::MissingField);
+    if (req_bytes_v->kind() != Value::Kind::Bytes) {
+        return err(ParseError::WrongFieldType);
+    }
+    const auto& req_bytes = req_bytes_v->as_bytes();
+
+    constexpr std::array<std::uint8_t, 32> kZeroHash{};
+    const bool bytes_empty = req_bytes.empty();
+    const bool hash_zero = (*prov_hash == kZeroHash);
+    if (bytes_empty != hash_zero) {
+        return err(ParseError::InconsistentRequirementCommitment);
+    }
+    if (!bytes_empty) {
+        const auto recomputed = VMPilot::Cbor::domain_hash_sha256(
+            VMPilot::DomainLabels::Hash::PolicyRequirement, req_bytes);
+        if (recomputed != *prov_hash) {
+            return err(ParseError::InconsistentRequirementCommitment);
+        }
+    }
+
     SpecializationEntry out;
-    out.runtime_specialization_id           = std::move(*spec_id);
-    out.family_id                           = *fam_enum;
-    out.requested_policy_id                 = *pol_enum;
-    out.profile_revision                    = std::move(*revision);
-    out.semantic_contract_version           = std::move(*semantic);
-    out.execution_contract_ref              = std::move(*exec_ref);
-    out.required_runtime_primitives_hash    = *prim_hash;
-    out.required_runtime_helpers_hash       = *help_hash;
-    out.provider_requirement_hash           = *prov_hash;
-    out.accepted_profile_content_hash       = *prof_hash;
-    out.diagnostic_visibility_class         = *diag_cls;
-    out.enabled_in_this_runtime             = (*enabled_u == 1);
+    out.runtime_specialization_id              = std::move(*spec_id);
+    out.family_id                              = *fam_enum;
+    out.requested_policy_id                    = *pol_enum;
+    out.profile_revision                       = std::move(*revision);
+    out.semantic_contract_version              = std::move(*semantic);
+    out.execution_contract_ref                 = std::move(*exec_ref);
+    out.required_runtime_primitives_hash       = *prim_hash;
+    out.required_runtime_helpers_hash          = *help_hash;
+    out.provider_requirement_hash              = *prov_hash;
+    out.accepted_profile_content_hash          = *prof_hash;
+    out.diagnostic_visibility_class            = *diag_cls;
+    out.enabled_in_this_runtime                = (*enabled_u == 1);
+    out.provider_requirement_canonical_bytes   = req_bytes;
     return out;
 }
 
