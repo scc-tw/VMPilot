@@ -148,8 +148,10 @@ VMPilot::Fixtures::PackageArtifactAssembly build_vm_payload_artifact(
 
     RegistryEntrySpec e;
     e.runtime_specialization_id = runtime_spec_id;
-    e.family_id = family_id_s;
-    e.requested_policy_id = policy_id_s;
+    e.family_id =
+        VMPilot::DomainLabels::parse_family_id(family_id_s).value();
+    e.requested_policy_id =
+        VMPilot::DomainLabels::parse_policy_id(policy_id_s).value();
     e.profile_revision = "rev1";
     e.provider_requirement_hash = provider_requirement_hash;
     e.accepted_profile_content_hash = prof_hash;
@@ -273,8 +275,8 @@ VMPilot::Fixtures::PackageArtifactAssembly build_aligned_artifact(
     // Registry entry matching the profile's content.
     RegistryEntrySpec e;
     e.runtime_specialization_id = "f1-" + std::string(policy_text) + "-v1";
-    e.family_id = "f1";
-    e.requested_policy_id = std::string(policy_text);
+    e.family_id = VMPilot::DomainLabels::FamilyId::F1;
+    e.requested_policy_id = policy_enum;
     e.profile_revision = "rev1";
     e.accepted_profile_content_hash = prof_hash;
     const auto registry = RuntimeSpecializationRegistryBuilder{}

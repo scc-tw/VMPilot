@@ -8,6 +8,7 @@
 #include <string_view>
 #include <vector>
 
+#include "eh_guard.hpp"
 #include "provider.hpp"
 #include "vm/family_policy.hpp"
 
@@ -124,15 +125,32 @@ private:
 // Stage 9 additionally requires the Layer-1 exception_unwind_contract
 // reserved surface to be present in canonical profile bytes.
 
+// Enum-typed for the five closed-set fields the runtime verifier
+// inspects (executable_eh_status, cross_protected_frame_unwind,
+// native_boundary_unwind_behavior, handler_table_status,
+// cleanup_table_status). The remaining fields are open-set version
+// strings or arbitrary references, kept as std::string.
+//
+// family_specific_unwind_surface_ref stays string because the
+// runtime compares it against a family-derived text produced by
+// expected_family_specific_unwind_surface_ref; tests inject
+// arbitrary wrong-family refs there ("f2-unwind-surface-v1") and
+// that flexibility would be lost behind an enum.
 struct ExceptionUnwindContractSpec {
     std::string eh_contract_version{"eh-contract-v1"};
-    std::string executable_eh_status{"reserved_disabled_v1"};
+    VMPilot::Runtime::EH::ExecutableEhStatus executable_eh_status{
+        VMPilot::Runtime::EH::ExecutableEhStatus::ReservedDisabledV1};
     std::string planned_executable_eh_epoch{"v1_1"};
-    std::string cross_protected_frame_unwind{"forbidden"};
-    std::string native_boundary_unwind_behavior{
-        "translate_to_trap_or_fail_closed"};
-    std::string handler_table_status{"reserved_empty"};
-    std::string cleanup_table_status{"reserved_empty"};
+    VMPilot::Runtime::EH::CrossProtectedFrameUnwind cross_protected_frame_unwind{
+        VMPilot::Runtime::EH::CrossProtectedFrameUnwind::Forbidden};
+    VMPilot::Runtime::EH::NativeBoundaryUnwindBehavior
+        native_boundary_unwind_behavior{
+            VMPilot::Runtime::EH::NativeBoundaryUnwindBehavior::
+                TranslateToTrapOrFailClosed};
+    VMPilot::Runtime::EH::ReservedTableStatus handler_table_status{
+        VMPilot::Runtime::EH::ReservedTableStatus::ReservedEmpty};
+    VMPilot::Runtime::EH::ReservedTableStatus cleanup_table_status{
+        VMPilot::Runtime::EH::ReservedTableStatus::ReservedEmpty};
     std::string frame_contract_ref{"frame-contract-v1"};
     std::string stackmap_contract_ref{"stackmap-contract-v1"};
     std::string resume_contract_ref{"resume-contract-v1"};
@@ -287,8 +305,10 @@ encode_policy_requirement(const PolicyRequirementSpec& spec);
 
 struct RegistryEntrySpec {
     std::string runtime_specialization_id;
-    std::string family_id;
-    std::string requested_policy_id;
+    VMPilot::DomainLabels::FamilyId family_id{
+        VMPilot::DomainLabels::FamilyId::F1};
+    VMPilot::DomainLabels::PolicyId requested_policy_id{
+        VMPilot::DomainLabels::PolicyId::Standard};
     std::string profile_revision;
     std::string semantic_contract_version{"semantic-contract-v1"};
     std::string execution_contract_ref{"execution-contract-ref-v1"};

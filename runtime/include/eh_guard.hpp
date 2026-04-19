@@ -35,6 +35,42 @@ enum class ReservedTableStatus : std::uint8_t {
     ProfileSpecific,
 };
 
+// Canonical on-wire text for each enum. Matches the strings the
+// strict-CBOR parser in eh_guard.cpp accepts. Kept here alongside
+// the enum definitions so fixtures and runtime share one source of
+// truth — adding a new enumerator in one place without updating the
+// other is now a compile-time visible gap.
+constexpr std::string_view to_text(ExecutableEhStatus s) noexcept {
+    switch (s) {
+        case ExecutableEhStatus::ReservedDisabledV1: return "reserved_disabled_v1";
+        case ExecutableEhStatus::ExecutableV1_1:     return "executable_v1_1";
+    }
+    return {};
+}
+constexpr std::string_view to_text(CrossProtectedFrameUnwind u) noexcept {
+    switch (u) {
+        case CrossProtectedFrameUnwind::Forbidden:           return "forbidden";
+        case CrossProtectedFrameUnwind::PermittedByProfile:  return "permitted_by_profile";
+    }
+    return {};
+}
+constexpr std::string_view to_text(NativeBoundaryUnwindBehavior b) noexcept {
+    switch (b) {
+        case NativeBoundaryUnwindBehavior::TranslateToTrapOrFailClosed:
+            return "translate_to_trap_or_fail_closed";
+        case NativeBoundaryUnwindBehavior::ProfileUpgraded:
+            return "profile-upgraded";
+    }
+    return {};
+}
+constexpr std::string_view to_text(ReservedTableStatus s) noexcept {
+    switch (s) {
+        case ReservedTableStatus::ReservedEmpty:    return "reserved_empty";
+        case ReservedTableStatus::ProfileSpecific:  return "profile-specific";
+    }
+    return {};
+}
+
 struct ExceptionUnwindContract {
     std::string semantic_contract_version;
     std::string eh_contract_version;

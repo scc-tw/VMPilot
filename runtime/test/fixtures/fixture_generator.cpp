@@ -52,12 +52,17 @@ std::vector<std::uint8_t> encode_exception_unwind_contract(
 
     MapBuilder eh;
     eh.put_uint(1, encode_text(spec.eh_contract_version));
-    eh.put_uint(2, encode_text(spec.executable_eh_status));
+    eh.put_uint(2, encode_text(
+        VMPilot::Runtime::EH::to_text(spec.executable_eh_status)));
     eh.put_uint(3, encode_text(spec.planned_executable_eh_epoch));
-    eh.put_uint(4, encode_text(spec.cross_protected_frame_unwind));
-    eh.put_uint(5, encode_text(spec.native_boundary_unwind_behavior));
-    eh.put_uint(6, encode_text(spec.handler_table_status));
-    eh.put_uint(7, encode_text(spec.cleanup_table_status));
+    eh.put_uint(4, encode_text(
+        VMPilot::Runtime::EH::to_text(spec.cross_protected_frame_unwind)));
+    eh.put_uint(5, encode_text(
+        VMPilot::Runtime::EH::to_text(spec.native_boundary_unwind_behavior)));
+    eh.put_uint(6, encode_text(
+        VMPilot::Runtime::EH::to_text(spec.handler_table_status)));
+    eh.put_uint(7, encode_text(
+        VMPilot::Runtime::EH::to_text(spec.cleanup_table_status)));
     eh.put_uint(8, encode_text(spec.frame_contract_ref));
     eh.put_uint(9, encode_text(spec.stackmap_contract_ref));
     eh.put_uint(10, encode_text(spec.resume_contract_ref));
@@ -666,8 +671,8 @@ RuntimeSpecializationRegistryBuilder::RuntimeSpecializationRegistryBuilder()
     // clear_entries() first.
     RegistryEntrySpec e;
     e.runtime_specialization_id = "f1-standard-v1";
-    e.family_id = "f1";
-    e.requested_policy_id = "standard";
+    e.family_id = VMPilot::DomainLabels::FamilyId::F1;
+    e.requested_policy_id = VMPilot::DomainLabels::PolicyId::Standard;
     e.profile_revision = "rev1";
     entries_.push_back(std::move(e));
 }
@@ -724,8 +729,9 @@ RuntimeSpecializationRegistryBuilder::build_canonical_bytes() const {
     for (const auto& e : entries_) {
         MapBuilder m;
         m.put_uint(1,  encode_text(e.runtime_specialization_id));
-        m.put_uint(2,  encode_text(e.family_id));
-        m.put_uint(3,  encode_text(e.requested_policy_id));
+        m.put_uint(2,  encode_text(VMPilot::DomainLabels::to_text(e.family_id)));
+        m.put_uint(3,  encode_text(
+            VMPilot::DomainLabels::to_text(e.requested_policy_id)));
         m.put_uint(4,  encode_text(e.profile_revision));
         m.put_uint(5,  encode_text(e.semantic_contract_version));
         m.put_uint(6,  encode_text(e.execution_contract_ref));
@@ -1011,8 +1017,12 @@ PackageArtifactAssembly PackageArtifactBuilder::build() const {
         reg.clear_entries();
         RegistryEntrySpec e;
         e.runtime_specialization_id = "f1-standard-v1";
-        e.family_id                 = default_family_id_;
-        e.requested_policy_id       = default_policy_id_;
+        e.family_id                 =
+            VMPilot::DomainLabels::parse_family_id(default_family_id_)
+                .value_or(VMPilot::DomainLabels::FamilyId::F1);
+        e.requested_policy_id       =
+            VMPilot::DomainLabels::parse_policy_id(default_policy_id_)
+                .value_or(VMPilot::DomainLabels::PolicyId::Standard);
         e.profile_revision          = "rev1";
         e.accepted_profile_content_hash = computed_profile_hash;
         reg.add_entry(e);

@@ -140,8 +140,8 @@ TEST(Registry, LookupWrongSpecIdReturnsNotFound) {
 TEST(Registry, DisabledEntrySurfacesDistinctError) {
     VMPilot::Fixtures::RegistryEntrySpec e;
     e.runtime_specialization_id = "f3-experimental";
-    e.family_id = "f3";
-    e.requested_policy_id = "debug";
+    e.family_id = VMPilot::DomainLabels::FamilyId::F3;
+    e.requested_policy_id = VMPilot::DomainLabels::PolicyId::Debug;
     e.profile_revision = "rev1";
     e.enabled_in_this_runtime = false;
 
@@ -168,8 +168,8 @@ TEST(Registry, EnabledOverridesDisabledWhenBothMatch) {
     // different profile revisions so the parse check does not fire.)
     VMPilot::Fixtures::RegistryEntrySpec enabled;
     enabled.runtime_specialization_id = "shared";
-    enabled.family_id = "f1";
-    enabled.requested_policy_id = "standard";
+    enabled.family_id = VMPilot::DomainLabels::FamilyId::F1;
+    enabled.requested_policy_id = VMPilot::DomainLabels::PolicyId::Standard;
     enabled.profile_revision = "rev1";
     enabled.enabled_in_this_runtime = true;
 
@@ -196,8 +196,8 @@ TEST(Registry, EnabledOverridesDisabledWhenBothMatch) {
 TEST(Registry, DuplicateLookupTupleRejected) {
     VMPilot::Fixtures::RegistryEntrySpec a;
     a.runtime_specialization_id = "dup";
-    a.family_id = "f1";
-    a.requested_policy_id = "standard";
+    a.family_id = VMPilot::DomainLabels::FamilyId::F1;
+    a.requested_policy_id = VMPilot::DomainLabels::PolicyId::Standard;
     a.profile_revision = "rev1";
 
     VMPilot::Fixtures::RegistryEntrySpec b = a;
@@ -327,8 +327,8 @@ namespace {
 VMPilot::Fixtures::RegistryEntrySpec make_entry_with_requirement() {
     VMPilot::Fixtures::RegistryEntrySpec e;
     e.runtime_specialization_id = "f1-standard-v1";
-    e.family_id = "f1";
-    e.requested_policy_id = "standard";
+    e.family_id = VMPilot::DomainLabels::FamilyId::F1;
+    e.requested_policy_id = VMPilot::DomainLabels::PolicyId::Standard;
     e.profile_revision = "rev1";
     e.policy_requirement = VMPilot::Fixtures::PolicyRequirementSpec{};
     return e;
@@ -361,8 +361,8 @@ TEST(Registry, EmptyBytesWithNonZeroHashRejected) {
     // to commit to something. parser must reject.
     VMPilot::Fixtures::RegistryEntrySpec entry;
     entry.runtime_specialization_id = "f1-standard-v1";
-    entry.family_id = "f1";
-    entry.requested_policy_id = "standard";
+    entry.family_id = VMPilot::DomainLabels::FamilyId::F1;
+    entry.requested_policy_id = VMPilot::DomainLabels::PolicyId::Standard;
     entry.profile_revision = "rev1";
     entry.provider_requirement_canonical_bytes.clear();
     entry.provider_requirement_hash.fill(0xAB);
@@ -390,8 +390,8 @@ TEST(Registry, BytesAndHashBothPresentButHashStaleRejected) {
     // flipped. Easiest path: construct the mismatch directly.
     VMPilot::Fixtures::RegistryEntrySpec bad_entry;
     bad_entry.runtime_specialization_id = "f1-standard-v1";
-    bad_entry.family_id = "f1";
-    bad_entry.requested_policy_id = "standard";
+    bad_entry.family_id = VMPilot::DomainLabels::FamilyId::F1;
+    bad_entry.requested_policy_id = VMPilot::DomainLabels::PolicyId::Standard;
     bad_entry.profile_revision = "rev1";
     bad_entry.provider_requirement_canonical_bytes =
         VMPilot::Fixtures::encode_policy_requirement(

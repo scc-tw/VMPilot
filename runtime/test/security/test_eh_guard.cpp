@@ -148,8 +148,10 @@ VMPilot::Fixtures::PackageArtifactAssembly build_artifact_with_contract(
 
     RegistryEntrySpec entry;
     entry.runtime_specialization_id = runtime_specialization_id;
-    entry.family_id = family_id_s;
-    entry.requested_policy_id = policy_id_s;
+    entry.family_id =
+        VMPilot::DomainLabels::parse_family_id(family_id_s).value();
+    entry.requested_policy_id =
+        VMPilot::DomainLabels::parse_policy_id(policy_id_s).value();
     entry.profile_revision = "rev1";
     entry.accepted_profile_content_hash = profile_hash;
     const auto registry = RuntimeSpecializationRegistryBuilder{}
@@ -252,7 +254,8 @@ TEST(EhGuardContract, ReservedDefaultContractAccepted) {
 
 TEST(EhGuardContract, ExecutableEhUpgradeRejected) {
     VMPilot::Fixtures::ExceptionUnwindContractSpec contract;
-    contract.executable_eh_status = "executable_v1_1";
+    contract.executable_eh_status =
+        VMPilot::Runtime::EH::ExecutableEhStatus::ExecutableV1_1;
     auto b = accept_bundle(build_artifact_with_contract(contract));
     auto result = accept_unit_entry(
         b.art.bytes.data(), b.art.bytes.size(), b.env, b.pkg,
@@ -264,7 +267,8 @@ TEST(EhGuardContract, ExecutableEhUpgradeRejected) {
 
 TEST(EhGuardContract, HandlerTableMustRemainReservedEmpty) {
     VMPilot::Fixtures::ExceptionUnwindContractSpec contract;
-    contract.handler_table_status = "profile-specific";
+    contract.handler_table_status =
+        VMPilot::Runtime::EH::ReservedTableStatus::ProfileSpecific;
     auto b = accept_bundle(build_artifact_with_contract(contract));
     auto result = accept_unit_entry(
         b.art.bytes.data(), b.art.bytes.size(), b.env, b.pkg,
@@ -275,7 +279,8 @@ TEST(EhGuardContract, HandlerTableMustRemainReservedEmpty) {
 
 TEST(EhGuardContract, CleanupTableMustRemainReservedEmpty) {
     VMPilot::Fixtures::ExceptionUnwindContractSpec contract;
-    contract.cleanup_table_status = "profile-specific";
+    contract.cleanup_table_status =
+        VMPilot::Runtime::EH::ReservedTableStatus::ProfileSpecific;
     auto b = accept_bundle(build_artifact_with_contract(contract));
     auto result = accept_unit_entry(
         b.art.bytes.data(), b.art.bytes.size(), b.env, b.pkg,
@@ -286,7 +291,8 @@ TEST(EhGuardContract, CleanupTableMustRemainReservedEmpty) {
 
 TEST(EhGuardContract, CrossProtectedFrameUnwindRejected) {
     VMPilot::Fixtures::ExceptionUnwindContractSpec contract;
-    contract.cross_protected_frame_unwind = "permitted_by_profile";
+    contract.cross_protected_frame_unwind =
+        VMPilot::Runtime::EH::CrossProtectedFrameUnwind::PermittedByProfile;
     auto b = accept_bundle(build_artifact_with_contract(contract));
     auto result = accept_unit_entry(
         b.art.bytes.data(), b.art.bytes.size(), b.env, b.pkg,
@@ -297,7 +303,8 @@ TEST(EhGuardContract, CrossProtectedFrameUnwindRejected) {
 
 TEST(EhGuardContract, NativeBoundaryBehaviorMustStayFailClosed) {
     VMPilot::Fixtures::ExceptionUnwindContractSpec contract;
-    contract.native_boundary_unwind_behavior = "profile-upgraded";
+    contract.native_boundary_unwind_behavior =
+        VMPilot::Runtime::EH::NativeBoundaryUnwindBehavior::ProfileUpgraded;
     auto b = accept_bundle(build_artifact_with_contract(contract));
     auto result = accept_unit_entry(
         b.art.bytes.data(), b.art.bytes.size(), b.env, b.pkg,
