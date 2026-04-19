@@ -54,12 +54,11 @@ template<typename Policy, typename Oram>
 tl::expected<VmExecResult, DiagnosticCode> VmRunner<Policy, Oram>::run() {
     auto blob = build_blob_internal();
 
-    auto engine = VmEngine<Policy, Oram>::create(
+    VMPILOT_TRY_ASSIGN(engine, VmEngine<Policy, Oram>::create(
         blob.data(), blob.size(), seed_,
-        load_base_delta_, init_regs_, num_init_regs_);
-    if (!engine) return tl::make_unexpected(engine.error());
+        load_base_delta_, init_regs_, num_init_regs_));
 
-    return engine->execute();
+    return engine.execute();
 }
 
 template<typename Policy, typename Oram>

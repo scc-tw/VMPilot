@@ -41,9 +41,8 @@ VmEngine<Policy, Oram>::create(
     m->blob_storage.assign(blob_data, blob_data + blob_size);
 
     // Validate blob via BlobView (pointing into owned storage)
-    auto blob_or = BlobView::create(m->blob_storage.data(), m->blob_storage.size());
-    if (!blob_or) return tl::make_unexpected(blob_or.error());
-    m->blob = *blob_or;
+    VMPILOT_TRY_ASSIGN(blob, BlobView::create(m->blob_storage.data(), m->blob_storage.size()));
+    m->blob = blob;
 
     // 2. Key derivation (doc 16 §6: all via BLAKE3_KEYED, not blake3_kdf)
     //
@@ -371,9 +370,7 @@ execute_one_instruction(VmExecution& exec, VmEpoch& epoch,
                         VmOramState& oram, const VmImmutable& imm) noexcept
 {
     // ── Phases A-C: FETCH + DECRYPT + DECODE ────────────────────────────
-    auto insn_or = pipeline::fetch_decrypt_decode(imm, exec, epoch);
-    if (!insn_or) return tl::make_unexpected(insn_or.error());
-    auto insn = *insn_or;
+    VMPILOT_TRY_ASSIGN(insn, pipeline::fetch_decrypt_decode(imm, exec, epoch));
 
     // ── Phase C': RESOLVE operands + FPE decode ─────────────────────────
     pipeline::resolve_operands(imm, exec, epoch, insn);
@@ -645,14 +642,12 @@ VmEngine<Policy, Oram>::dispatch_unit() noexcept
                         | (exec_.current_bb_id & m_id);
 
         // ── L.3: Always verify BB MAC ───────────────────────────────
-        auto mac_r = pipeline::verify_bb_mac(*imm_, exec_, *epoch_);
-        if (!mac_r) return tl::make_unexpected(mac_r.error());
+        VMPILOT_TRY(pipeline::verify_bb_mac(*imm_, exec_, *epoch_));
 
         // ── L.4: Always enter_basic_block ───────────────────────────
         exec_.branch_taken = false;
-        auto enter_r = pipeline::enter_basic_block(
-            exec_, *epoch_, *imm_, target);
-        if (!enter_r) return tl::make_unexpected(enter_r.error());
+        VMPILOT_TRY(pipeline::enter_basic_block(
+            exec_, *epoch_, *imm_, target));
 
         // ── L.5: RET_VM resume — branchless apply via MUX ───────────
         {
@@ -687,9 +682,8 @@ tl::expected<VmExecResult, DiagnosticCode>
 VmEngine<Policy, Oram>::execute() noexcept
 {
     while (true) {
-        auto r = dispatch_unit();
-        if (!r) return tl::make_unexpected(r.error());
-        if (*r == VmResult::Halted) {
+        VMPILOT_TRY_ASSIGN(r, dispatch_unit());
+        if (r == VmResult::Halted) {
             // Decode return value from register 0 using current FPE key.
             // After the last instruction's ratchet, regs[0] is encoded
             // under exec_.insn_fpe_key.  Convenience one-shot FPE_Decode.
