@@ -49,8 +49,7 @@ namespace VMPilot::Cbor::Schema {
 
 // ─── Field descriptors ──────────────────────────────────────────────────
 
-// Text field. `required_value` is optional: when non-empty, the parser
-// rejects with `unsupported_version` if the actual value differs.
+// Text field.
 //
 // Why the copy (rather than a `string_view` into the parsed tree):
 // `Value::text_` is an owning `std::string` that dies when the parser's
@@ -58,12 +57,17 @@ namespace VMPilot::Cbor::Schema {
 // persists a `PolicyRequirement` / record past that point must own its
 // strings too — the copy is a necessary ownership transfer, not a
 // regression of the require_text zero-copy path (which applies to
-// in-parser comparisons, preserved on line `f.required_value` above).
+// in-parser comparisons).
+//
+// Version-literal validation (was `required_value` on this descriptor)
+// is handled as a post-parse check in the caller; keeping it out of
+// the descriptor means schema.hpp doesn't force every consumer's
+// CborConsumerTraits to declare `unsupported_version` just to allow
+// TextField to instantiate.
 template <typename T>
 struct TextField {
     std::uint64_t key;
     std::string T::*member;
-    std::string_view required_value = {};
 };
 
 // Reserved for consumers that hold the parsed `Value` tree alive for
@@ -149,7 +153,6 @@ struct EnumTextArrayField {
 //   static constexpr E unknown_core_field;
 //   static constexpr E unknown_enum_value;
 //   static constexpr E array_too_long;
-//   static constexpr E unsupported_version;
 
 template <typename E>
 using SchemaErrors = VMPilot::Cbor::CborConsumerTraits<E>;
@@ -172,9 +175,6 @@ template <typename T, typename E>
 extract_one(const Value& m, T& out, const TextField<T>& f) noexcept {
     auto v_or = require_text<E>(m, f.key);
     if (!v_or) return unexpected(v_or.error());
-    if (!f.required_value.empty() && *v_or != f.required_value) {
-        return unexpected(SchemaErrors<E>::unsupported_version);
-    }
     out.*(f.member) = std::string(*v_or);
     return {};
 }

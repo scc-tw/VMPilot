@@ -224,8 +224,7 @@ parse_policy_requirement(const std::uint8_t* data,
 
     const auto schema = std::make_tuple(
         TextField<PolicyRequirement>{kReq_RequirementVersion,
-                                     &PolicyRequirement::requirement_version,
-                                     kRequirementVersionV1},
+                                     &PolicyRequirement::requirement_version},
         EnumUintField<PolicyRequirement, VMPilot::DomainLabels::PolicyId>{
             kReq_RequiredPolicyFloor,
             &PolicyRequirement::required_policy_floor},
@@ -251,7 +250,13 @@ parse_policy_requirement(const std::uint8_t* data,
         UintField<PolicyRequirement>{kReq_MinimumProviderEpoch,
                                      &PolicyRequirement::minimum_provider_epoch});
 
-    return parse_schema<PolicyRequirement, PolicyRequirementParseError>(root, schema);
+    auto parsed = parse_schema<PolicyRequirement, PolicyRequirementParseError>(root, schema);
+    if (!parsed) return tl::make_unexpected(parsed.error());
+    if (parsed->requirement_version != kRequirementVersionV1) {
+        return tl::make_unexpected(
+            PolicyRequirementParseError::UnsupportedRequirementVersion);
+    }
+    return parsed;
 }
 
 static std::array<std::uint8_t, 32>

@@ -9,6 +9,8 @@
 #include "vm_engine.hpp"
 #include "vm_intrinsics.hpp"
 
+#include "cbor/strict.hpp"  // for VMPILOT_TRY / VMPILOT_TRY_ASSIGN
+
 #include <vm/vm_encoding.hpp>
 #include <vm/hardware_rng.hpp>
 #include <vm/secure_zero.hpp>

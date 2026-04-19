@@ -6,6 +6,8 @@
 
 #include "vm_runner.hpp"
 
+#include "cbor/strict.hpp"  // for VMPILOT_TRY_ASSIGN
+
 namespace VMPilot::Runtime {
 
 // ═════════════════════════════════════════════════════════════════════════════
