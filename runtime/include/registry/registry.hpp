@@ -120,7 +120,7 @@ enum class LookupError : std::uint8_t {
 // the partition wrapper's element [0]). Callers that already unwrapped
 // the partition or assembled the registry bytes themselves use this
 // entry point; runtime dispatch should prefer `parse_partition` below.
-tl::expected<Registry, ParseError>
+[[nodiscard]] tl::expected<Registry, ParseError>
 parse(const std::uint8_t* data, std::size_t size) noexcept;
 
 inline tl::expected<Registry, ParseError>
@@ -136,7 +136,7 @@ parse(const std::vector<std::uint8_t>& bytes) noexcept {
 // VendorTrustRoot.
 //
 // Contract source: internal research doc 08 §3.1.
-tl::expected<Registry, ParseError>
+[[nodiscard]] tl::expected<Registry, ParseError>
 parse_partition(const std::uint8_t* data, std::size_t size,
                 const VMPilot::Runtime::VendorTrustRoot& root) noexcept;
 
@@ -154,7 +154,7 @@ parse_partition(const std::vector<std::uint8_t>& bytes,
 // because their `enabled_in_this_runtime` flag is false. Surfacing the
 // distinction lets callers (and tests) reject loudly rather than silently
 // fall through to a different entry.
-tl::expected<const SpecializationEntry*, LookupError>
+[[nodiscard]] tl::expected<const SpecializationEntry*, LookupError>
 lookup(const Registry& reg,
        std::string_view spec_id,
        VMPilot::DomainLabels::FamilyId family_id,

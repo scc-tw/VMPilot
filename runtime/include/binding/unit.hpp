@@ -132,7 +132,7 @@ enum class UnitAcceptError : std::uint8_t {
     FamilySpecificUnwindSurfaceMismatch,
 };
 
-tl::expected<AcceptedUnit, UnitAcceptError>
+[[nodiscard]] tl::expected<AcceptedUnit, UnitAcceptError>
 accept_unit_entry(const std::uint8_t* artifact_data,
                   std::size_t artifact_size,
                   const Envelope::OuterEnvelope& env,

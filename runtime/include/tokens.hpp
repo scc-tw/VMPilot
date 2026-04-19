@@ -133,11 +133,11 @@ struct MigrationContext {
 // Decode + signature verify the reprovision token. Does NOT mark the
 // nonce consumed — that is the caller's responsibility after the
 // downstream import/activation step succeeds.
-tl::expected<ReprovisionToken, TokenError>
+[[nodiscard]] tl::expected<ReprovisionToken, TokenError>
 parse_reprovision_token(const std::uint8_t* data, std::size_t size,
                         const VendorTrustRoot& root) noexcept;
 
-tl::expected<MigrationToken, TokenError>
+[[nodiscard]] tl::expected<MigrationToken, TokenError>
 parse_migration_token(const std::uint8_t* data, std::size_t size,
                       const VendorTrustRoot& root) noexcept;
 
@@ -145,7 +145,7 @@ parse_migration_token(const std::uint8_t* data, std::size_t size,
 // expiry, check nonce not yet consumed, check bindings. On success
 // marks the nonce consumed in `store` as the final step so a later
 // replay fails closed (doc 10 §6.3).
-tl::expected<ReprovisionToken, TokenError>
+[[nodiscard]] tl::expected<ReprovisionToken, TokenError>
 accept_reprovision_token(const std::uint8_t* data, std::size_t size,
                          const VendorTrustRoot& root,
                          const ReprovisionContext& ctx,
@@ -155,7 +155,7 @@ accept_reprovision_token(const std::uint8_t* data, std::size_t size,
 // expiry, check nonce not yet consumed, check current+target package
 // bindings, enforce allowed_import_once==true + floor-satisfied.
 // Marks the nonce consumed on success.
-tl::expected<MigrationToken, TokenError>
+[[nodiscard]] tl::expected<MigrationToken, TokenError>
 accept_migration_token(const std::uint8_t* data, std::size_t size,
                        const VendorTrustRoot& root,
                        const MigrationContext& ctx,

@@ -45,7 +45,7 @@ struct InnerPartition {
     std::vector<std::uint8_t> unit_descriptor_table;
 };
 
-tl::expected<InnerPartition, InnerPartitionError>
+[[nodiscard]] tl::expected<InnerPartition, InnerPartitionError>
 parse_inner_partition(const std::uint8_t* data, std::size_t size) noexcept;
 
 }  // namespace VMPilot::Runtime::Binding

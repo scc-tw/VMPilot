@@ -104,11 +104,11 @@ private:
 // Parse `[data, data+size)` as strict-subset canonical CBOR.
 // Returns the parsed root Value on success or a ParseError with the offset
 // at which the first violation was detected.
-tl::expected<Value, ParseError>
+[[nodiscard]] tl::expected<Value, ParseError>
 parse_strict(const std::uint8_t* data, std::size_t size) noexcept;
 
 // Convenience overload.
-inline tl::expected<Value, ParseError>
+[[nodiscard]] inline tl::expected<Value, ParseError>
 parse_strict(const std::vector<std::uint8_t>& bytes) noexcept {
     return parse_strict(bytes.data(), bytes.size());
 }

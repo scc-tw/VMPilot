@@ -87,16 +87,16 @@ public:
     explicit FileBackedEpochStore(std::string path);
 
     EpochState get() const noexcept override;
-    tl::expected<void, StoreError>
+    [[nodiscard]] tl::expected<void, StoreError>
     advance(const EpochState& proposed) noexcept override;
     void reset_for_testing(const EpochState& state) noexcept override;
 
     // Reload state from disk. Missing file is not an error — returns
     // a zero-initialised EpochState. Caller retains the store.
-    tl::expected<void, StoreError> load() noexcept;
+    [[nodiscard]] tl::expected<void, StoreError> load() noexcept;
 
 private:
-    tl::expected<void, StoreError> save_locked() noexcept;
+    [[nodiscard]] tl::expected<void, StoreError> save_locked() noexcept;
 
     std::string path_;
     mutable std::mutex mu_;
@@ -115,8 +115,8 @@ public:
     void mark_consumed(
         const std::array<std::uint8_t, 32>& nonce) noexcept override;
 
-    tl::expected<void, StoreError> persist() noexcept override;
-    tl::expected<void, StoreError> load() noexcept;
+    [[nodiscard]] tl::expected<void, StoreError> persist() noexcept override;
+    [[nodiscard]] tl::expected<void, StoreError> load() noexcept;
 
     std::size_t size() const noexcept;
 

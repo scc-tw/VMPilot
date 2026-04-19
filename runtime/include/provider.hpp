@@ -211,7 +211,7 @@ enum class PolicyRequirementParseError : std::uint8_t {
     UnsupportedRequirementVersion,
 };
 
-tl::expected<PolicyRequirement, PolicyRequirementParseError>
+[[nodiscard]] tl::expected<PolicyRequirement, PolicyRequirementParseError>
 parse_policy_requirement(const std::uint8_t* data,
                          std::size_t size) noexcept;
 
@@ -243,7 +243,7 @@ ProviderResult appraise(const CapabilityStatement& caps,
 
 // Gate the runtime dispatch path uses. Returns ProviderError on any
 // failure; maps doc 14 §7.1's degraded-vs-highsec rule internally.
-tl::expected<ProviderResult, ProviderError>
+[[nodiscard]] tl::expected<ProviderResult, ProviderError>
 evaluate_policy_requirement(TrustProvider& provider,
                             const PolicyRequirement& requirement,
                             const VerifiedArtifactContext& ctx,
@@ -262,13 +262,13 @@ public:
 
     CapabilityStatement get_capabilities() const noexcept override;
 
-    tl::expected<ProviderEvidence, ProviderError>
+    [[nodiscard]] tl::expected<ProviderEvidence, ProviderError>
     attest_runtime(const std::array<std::uint8_t, 32>& nonce,
                    const std::array<std::uint8_t, 32>& runtime_measurement,
                    const std::array<std::uint8_t, 32>&
                        profile_requirement_hash) noexcept override;
 
-    tl::expected<ProviderEvidence, ProviderError>
+    [[nodiscard]] tl::expected<ProviderEvidence, ProviderError>
     bind_artifact(const std::array<std::uint8_t, 32>& nonce,
                   const VerifiedArtifactContext& ctx) noexcept override;
 

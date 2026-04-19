@@ -109,7 +109,7 @@ enum class AcceptError : std::uint8_t {
 
 // Accept a package at runtime init. Fail-closed: any single rule violation
 // returns AcceptError; no partial acceptance.
-tl::expected<AcceptedPackage, AcceptError>
+[[nodiscard]] tl::expected<AcceptedPackage, AcceptError>
 accept_package(const std::uint8_t* artifact_data,
                std::size_t artifact_size,
                const VendorTrustRoot& root,

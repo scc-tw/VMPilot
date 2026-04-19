@@ -82,11 +82,11 @@ enum class ParseError : std::uint8_t {
 };
 
 // Parse the outer envelope from a contiguous byte buffer.
-tl::expected<OuterEnvelope, ParseError>
+[[nodiscard]] tl::expected<OuterEnvelope, ParseError>
 parse_outer_envelope(const std::uint8_t* data, std::size_t size) noexcept;
 
 // Convenience overload for range-friendly inputs.
-tl::expected<OuterEnvelope, ParseError>
+[[nodiscard]] tl::expected<OuterEnvelope, ParseError>
 parse_outer_envelope(std::string_view bytes) noexcept;
 
 inline tl::expected<OuterEnvelope, ParseError>

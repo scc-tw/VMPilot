@@ -142,7 +142,7 @@ enum class ContractVerifyError : std::uint8_t {
     FamilySpecificUnwindSurfaceMismatch,
 };
 
-tl::expected<ExceptionUnwindContract, ContractParseError>
+[[nodiscard]] tl::expected<ExceptionUnwindContract, ContractParseError>
 parse_exception_unwind_contract(const std::uint8_t* data,
                                 std::size_t size) noexcept;
 
@@ -152,7 +152,7 @@ parse_exception_unwind_contract(
     return parse_exception_unwind_contract(bytes.data(), bytes.size());
 }
 
-tl::expected<ExceptionUnwindContract, ContractVerifyError>
+[[nodiscard]] tl::expected<ExceptionUnwindContract, ContractVerifyError>
 verify_reserved_exception_unwind_contract(
     const std::uint8_t* data,
     std::size_t size,
@@ -169,7 +169,7 @@ verify_reserved_exception_unwind_contract(
 std::string_view expected_family_specific_unwind_surface_ref(
     VMPilot::DomainLabels::FamilyId family_id) noexcept;
 
-tl::expected<std::uint64_t, VMPilot::Common::DiagnosticCode>
+[[nodiscard]] tl::expected<std::uint64_t, VMPilot::Common::DiagnosticCode>
 guarded_platform_call(const VMPilot::Runtime::PlatformCallDesc* desc,
                       bool returns_struct,
                       void* struct_return_ptr) noexcept;
