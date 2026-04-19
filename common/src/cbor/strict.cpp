@@ -295,14 +295,18 @@ domain_hash_sha256(std::string_view domain_label,
     if (domain_label.empty() || domain_label.size() > 0xff) {
         std::abort();
     }
-    std::vector<std::uint8_t> buf;
-    buf.reserve(1 + domain_label.size() + size);
-    buf.push_back(static_cast<std::uint8_t>(domain_label.size()));
-    buf.insert(buf.end(),
-               reinterpret_cast<const std::uint8_t*>(domain_label.data()),
-               reinterpret_cast<const std::uint8_t*>(domain_label.data()) + domain_label.size());
+    // Single-allocation layout avoids push_back/insert chains that trip
+    // GCC 14 -O3 -Wfree-nonheap-object provenance tracking (the
+    // compiler loses track of _M_realloc_append's pointer through its
+    // own inlining and emits a false-positive "called on pointer with
+    // nonzero offset" error under -Werror).
+    const std::size_t total = 1 + domain_label.size() + size;
+    std::vector<std::uint8_t> buf(total);
+    buf[0] = static_cast<std::uint8_t>(domain_label.size());
+    std::memcpy(buf.data() + 1, domain_label.data(), domain_label.size());
     if (size > 0) {
-        buf.insert(buf.end(), canonical_bytes, canonical_bytes + size);
+        std::memcpy(buf.data() + 1 + domain_label.size(),
+                    canonical_bytes, size);
     }
 
     const auto digest = VMPilot::Crypto::SHA256(buf, /*salt=*/{});

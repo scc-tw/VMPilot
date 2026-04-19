@@ -37,7 +37,12 @@ jobs:
             platform: macos
           - os: windows-latest
             generator: "Visual Studio 17 2022"
-            cmake_args: "-A x64"
+            # CMAKE_BUILD_TYPE is set explicitly even though VS is a
+            # multi-config generator: the Botan ExternalProject picks
+            # --msvc-runtime at configure time, and without this flag
+            # common/crypto/src/CMakeLists.txt defaults to MDd (Debug),
+            # which then LNK2038s against the --config Release bench.
+            cmake_args: "-A x64 -DCMAKE_BUILD_TYPE=Release"
             build_args: "--config Release"
             bin: ./build/bin/Release/vmpilot_bench.exe
             platform: windows
