@@ -27,25 +27,31 @@ namespace VMPilot::Fixtures {
 
 // Result of a single builder `.build()` call.
 struct SignedArtifact {
-    std::vector<std::uint8_t> canonical_bytes;        // pre-signature content
-    std::array<std::uint8_t, 64> signature{};         // over length-prefixed domain || canonical_bytes
-    std::string covered_domain;                       // "package-binding-v1" / etc.
-    std::array<std::uint8_t, 32> signer_public_key{}; // so the test can wire it through trust root
+    std::vector<std::uint8_t> canonical_bytes;  // pre-signature content
+    std::array<std::uint8_t, 64>
+        signature{};  // over length-prefixed domain || canonical_bytes
+    std::string covered_domain;  // "package-binding-v1" / etc.
+    std::array<std::uint8_t, 32>
+        signer_public_key{};  // so the test can wire it through trust root
 };
 
 // ─── PackageBindingRecord ────────────────────────────────────────────────
 //
 class PackageBindingRecordBuilder {
-public:
+   public:
     PackageBindingRecordBuilder();  // installs happy-path defaults
 
     PackageBindingRecordBuilder& package_binding_record_id(std::string v);
     PackageBindingRecordBuilder& package_schema_version(std::string v);
     PackageBindingRecordBuilder& canonical_encoding_id(std::string v);
-    PackageBindingRecordBuilder& unit_binding_table_hash(std::array<std::uint8_t, 32> v);
-    PackageBindingRecordBuilder& resolved_profile_table_hash(std::array<std::uint8_t, 32> v);
-    PackageBindingRecordBuilder& runtime_specialization_registry_hash(std::array<std::uint8_t, 32> v);
-    PackageBindingRecordBuilder& artifact_layout_hash(std::array<std::uint8_t, 32> v);
+    PackageBindingRecordBuilder& unit_binding_table_hash(
+        std::array<std::uint8_t, 32> v);
+    PackageBindingRecordBuilder& resolved_profile_table_hash(
+        std::array<std::uint8_t, 32> v);
+    PackageBindingRecordBuilder& runtime_specialization_registry_hash(
+        std::array<std::uint8_t, 32> v);
+    PackageBindingRecordBuilder& artifact_layout_hash(
+        std::array<std::uint8_t, 32> v);
     PackageBindingRecordBuilder& anti_downgrade_epoch(std::uint64_t v);
     PackageBindingRecordBuilder& minimum_runtime_epoch(std::uint64_t v);
 
@@ -53,7 +59,8 @@ public:
     // by default. Tests that want to exercise signature mismatch can swap in
     // an arbitrary seed.
     PackageBindingRecordBuilder& signing_seed(std::array<std::uint8_t, 32> v);
-    PackageBindingRecordBuilder& signing_public_key(std::array<std::uint8_t, 32> v);
+    PackageBindingRecordBuilder& signing_public_key(
+        std::array<std::uint8_t, 32> v);
 
     // Optional key_id to embed inside the PackageBindingAuth object. Defaults
     // to "vmpilot-dev-rfc8032-test1" — matches the runtime's trust root.
@@ -67,7 +74,7 @@ public:
     // pull out of the artifact.
     std::vector<std::uint8_t> build_partition_bytes() const;
 
-private:
+   private:
     std::string id_;
     std::string schema_version_;
     std::string encoding_id_;
@@ -85,20 +92,15 @@ private:
 // ─── UnitDescriptor builder ─────────────────────────────────────────────
 
 class UnitDescriptorBuilder {
-public:
+   public:
     UnitDescriptorBuilder();
 
     UnitDescriptorBuilder& descriptor_version(std::string v);
     UnitDescriptorBuilder& unit_id(std::string v);
     UnitDescriptorBuilder& unit_identity_hash(std::array<std::uint8_t, 32> v);
-    UnitDescriptorBuilder& family_id(std::string v);
-    UnitDescriptorBuilder& family_id(VMPilot::DomainLabels::FamilyId v) {
-        return family_id(std::string(VMPilot::DomainLabels::to_text(v)));
-    }
-    UnitDescriptorBuilder& requested_policy_id(std::string v);
-    UnitDescriptorBuilder& requested_policy_id(VMPilot::DomainLabels::PolicyId v) {
-        return requested_policy_id(std::string(VMPilot::DomainLabels::to_text(v)));
-    }
+    UnitDescriptorBuilder& family_id(VMPilot::DomainLabels::FamilyId v);
+    UnitDescriptorBuilder& requested_policy_id(
+        VMPilot::DomainLabels::PolicyId v);
     UnitDescriptorBuilder& resolved_family_profile_id(std::string v);
     UnitDescriptorBuilder& payload_sha256(std::array<std::uint8_t, 32> v);
     UnitDescriptorBuilder& payload_size(std::uint64_t v);
@@ -106,12 +108,12 @@ public:
 
     std::vector<std::uint8_t> build() const;
 
-private:
+   private:
     std::string descriptor_version_;
     std::string unit_id_;
     std::array<std::uint8_t, 32> unit_identity_hash_{};
-    std::string family_id_;
-    std::string requested_policy_id_;
+    VMPilot::DomainLabels::FamilyId family_id_{VMPilot::DomainLabels::FamilyId::F1};
+    VMPilot::DomainLabels::PolicyId requested_policy_id_{VMPilot::DomainLabels::PolicyId::Standard};
     std::string resolved_family_profile_id_;
     std::array<std::uint8_t, 32> payload_sha256_{};
     std::uint64_t payload_size_{0};
@@ -141,8 +143,9 @@ struct ExceptionUnwindContractSpec {
     VMPilot::Runtime::EH::ExecutableEhStatus executable_eh_status{
         VMPilot::Runtime::EH::ExecutableEhStatus::ReservedDisabledV1};
     std::string planned_executable_eh_epoch{"v1_1"};
-    VMPilot::Runtime::EH::CrossProtectedFrameUnwind cross_protected_frame_unwind{
-        VMPilot::Runtime::EH::CrossProtectedFrameUnwind::Forbidden};
+    VMPilot::Runtime::EH::CrossProtectedFrameUnwind
+        cross_protected_frame_unwind{
+            VMPilot::Runtime::EH::CrossProtectedFrameUnwind::Forbidden};
     VMPilot::Runtime::EH::NativeBoundaryUnwindBehavior
         native_boundary_unwind_behavior{
             VMPilot::Runtime::EH::NativeBoundaryUnwindBehavior::
@@ -160,29 +163,27 @@ struct ExceptionUnwindContractSpec {
 };
 
 class ResolvedFamilyProfileBuilder {
-public:
+   public:
     ResolvedFamilyProfileBuilder();
 
     ResolvedFamilyProfileBuilder& profile_id(std::string v);
-    ResolvedFamilyProfileBuilder& family_id(std::string v);
-    ResolvedFamilyProfileBuilder& family_id(VMPilot::DomainLabels::FamilyId v) {
-        return family_id(std::string(VMPilot::DomainLabels::to_text(v)));
-    }
-    ResolvedFamilyProfileBuilder& requested_policy_id(std::string v);
-    ResolvedFamilyProfileBuilder& requested_policy_id(VMPilot::DomainLabels::PolicyId v) {
-        return requested_policy_id(std::string(VMPilot::DomainLabels::to_text(v)));
-    }
+    ResolvedFamilyProfileBuilder& family_id(VMPilot::DomainLabels::FamilyId v);
+    ResolvedFamilyProfileBuilder& requested_policy_id(
+        VMPilot::DomainLabels::PolicyId v);
     ResolvedFamilyProfileBuilder& profile_revision(std::string v);
     ResolvedFamilyProfileBuilder& runtime_specialization_id(std::string v);
     ResolvedFamilyProfileBuilder& semantic_contract_version(std::string v);
-    ResolvedFamilyProfileBuilder& exception_unwind_contract(ExceptionUnwindContractSpec v);
+    ResolvedFamilyProfileBuilder& exception_unwind_contract(
+        ExceptionUnwindContractSpec v);
 
     std::vector<std::uint8_t> build() const;
 
-private:
+   private:
     std::string profile_id_;
-    std::string family_id_;
-    std::string requested_policy_id_;
+    VMPilot::DomainLabels::FamilyId family_id_{
+        VMPilot::DomainLabels::FamilyId::F1};
+    VMPilot::DomainLabels::PolicyId requested_policy_id_{
+        VMPilot::DomainLabels::PolicyId::Standard};
     std::string profile_revision_;
     std::string runtime_specialization_id_;
     std::string semantic_contract_version_;
@@ -199,22 +200,20 @@ struct UnitBindingAuthSpec {
 };
 
 class UnitBindingRecordBuilder {
-public:
+   public:
     UnitBindingRecordBuilder();
 
     UnitBindingRecordBuilder& unit_binding_record_id(std::string v);
-    UnitBindingRecordBuilder& unit_identity_hash(std::array<std::uint8_t, 32> v);
-    UnitBindingRecordBuilder& unit_descriptor_hash(std::array<std::uint8_t, 32> v);
-    UnitBindingRecordBuilder& family_id(std::string v);
-    UnitBindingRecordBuilder& family_id(VMPilot::DomainLabels::FamilyId v) {
-        return family_id(std::string(VMPilot::DomainLabels::to_text(v)));
-    }
-    UnitBindingRecordBuilder& requested_policy_id(std::string v);
-    UnitBindingRecordBuilder& requested_policy_id(VMPilot::DomainLabels::PolicyId v) {
-        return requested_policy_id(std::string(VMPilot::DomainLabels::to_text(v)));
-    }
+    UnitBindingRecordBuilder& unit_identity_hash(
+        std::array<std::uint8_t, 32> v);
+    UnitBindingRecordBuilder& unit_descriptor_hash(
+        std::array<std::uint8_t, 32> v);
+    UnitBindingRecordBuilder& family_id(VMPilot::DomainLabels::FamilyId v);
+    UnitBindingRecordBuilder& requested_policy_id(
+        VMPilot::DomainLabels::PolicyId v);
     UnitBindingRecordBuilder& resolved_family_profile_id(std::string v);
-    UnitBindingRecordBuilder& resolved_family_profile_content_hash(std::array<std::uint8_t, 32> v);
+    UnitBindingRecordBuilder& resolved_family_profile_content_hash(
+        std::array<std::uint8_t, 32> v);
     UnitBindingRecordBuilder& payload_sha256(std::array<std::uint8_t, 32> v);
     UnitBindingRecordBuilder& payload_size(std::uint64_t v);
     UnitBindingRecordBuilder& anti_downgrade_epoch(std::uint64_t v);
@@ -222,12 +221,14 @@ public:
 
     std::vector<std::uint8_t> build() const;
 
-private:
+   private:
     std::string unit_binding_record_id_;
     std::array<std::uint8_t, 32> unit_identity_hash_{};
     std::array<std::uint8_t, 32> unit_descriptor_hash_{};
-    std::string family_id_;
-    std::string requested_policy_id_;
+    VMPilot::DomainLabels::FamilyId family_id_{
+        VMPilot::DomainLabels::FamilyId::F1};
+    VMPilot::DomainLabels::PolicyId requested_policy_id_{
+        VMPilot::DomainLabels::PolicyId::Standard};
     std::string resolved_family_profile_id_;
     std::array<std::uint8_t, 32> resolved_family_profile_content_hash_{};
     std::array<std::uint8_t, 32> payload_sha256_{};
@@ -239,26 +240,25 @@ private:
 // SHA-256 of the given bytes. Wraps VMPilot::Crypto::SHA256 so tests
 // can reach the digest without including VMPilot_crypto.hpp (which
 // opens an ambiguous `Crypto` namespace against runtime internals).
-std::array<std::uint8_t, 32>
-sha256_of(const std::vector<std::uint8_t>& bytes);
+std::array<std::uint8_t, 32> sha256_of(const std::vector<std::uint8_t>& bytes);
 
 // Wrap a list of UBR canonical byte strings into a strict-CBOR array —
 // the on-disk shape of `unit_binding_table`. Each element in `ubr_bytes`
 // is itself the full UBR map encoding.
-std::vector<std::uint8_t>
-build_unit_binding_table_bytes(const std::vector<std::vector<std::uint8_t>>& ubr_bytes);
+std::vector<std::uint8_t> build_unit_binding_table_bytes(
+    const std::vector<std::vector<std::uint8_t>>& ubr_bytes);
 
 // Wrap a list of (unit_id, descriptor_bytes) into the
 // UnitDescriptorTable CBOR map (text-keyed by unit_id).
-std::vector<std::uint8_t>
-build_unit_descriptor_table_bytes(
-    const std::vector<std::pair<std::string, std::vector<std::uint8_t>>>& entries);
+std::vector<std::uint8_t> build_unit_descriptor_table_bytes(
+    const std::vector<std::pair<std::string, std::vector<std::uint8_t>>>&
+        entries);
 
 // Wrap a list of (profile_id, profile_bytes) into the
 // ResolvedFamilyProfileTable CBOR map (text-keyed by profile_id).
-std::vector<std::uint8_t>
-build_resolved_profile_table_bytes(
-    const std::vector<std::pair<std::string, std::vector<std::uint8_t>>>& entries);
+std::vector<std::uint8_t> build_resolved_profile_table_bytes(
+    const std::vector<std::pair<std::string, std::vector<std::uint8_t>>>&
+        entries);
 
 // ─── RuntimeSpecializationRegistry builder ──────────────────────────────
 //
@@ -300,8 +300,8 @@ struct PolicyRequirementSpec {
 // runtime/src/provider/local_embedded.cpp). The hand-rolled
 // stringly-typed encoder lives in fixtures only; production runtime
 // never serializes PolicyRequirement.
-std::vector<std::uint8_t>
-encode_policy_requirement(const PolicyRequirementSpec& spec);
+std::vector<std::uint8_t> encode_policy_requirement(
+    const PolicyRequirementSpec& spec);
 
 struct RegistryEntrySpec {
     std::string runtime_specialization_id;
@@ -331,7 +331,7 @@ struct RegistryEntrySpec {
 };
 
 class RuntimeSpecializationRegistryBuilder {
-public:
+   public:
     RuntimeSpecializationRegistryBuilder();
 
     RuntimeSpecializationRegistryBuilder& registry_version(std::string v);
@@ -341,7 +341,8 @@ public:
     RuntimeSpecializationRegistryBuilder& add_entry(RegistryEntrySpec e);
     RuntimeSpecializationRegistryBuilder& clear_entries();
 
-    RuntimeSpecializationRegistryBuilder& signing_seed(std::array<std::uint8_t, 32> v);
+    RuntimeSpecializationRegistryBuilder& signing_seed(
+        std::array<std::uint8_t, 32> v);
     RuntimeSpecializationRegistryBuilder& auth_key_id(std::string v);
 
     // The inner canonical CBOR map of the registry (unsigned). Tests
@@ -355,7 +356,7 @@ public:
     // what `Registry::parse_partition` consumes.
     std::vector<std::uint8_t> build() const;
 
-private:
+   private:
     std::string registry_version_;
     std::string runtime_build_id_;
     std::string package_schema_version_;
@@ -368,11 +369,11 @@ private:
 // Build the inner partition CBOR map that wraps the four sub-tables.
 // Keys 1..3 are committed by PBR hashes; key 4 (unit_descriptor_table)
 // flows through UBR.unit_descriptor_hash instead.
-std::vector<std::uint8_t>
-build_inner_partition_bytes(const std::vector<std::uint8_t>& unit_binding_table_bytes,
-                            const std::vector<std::uint8_t>& resolved_profile_table_bytes,
-                            const std::vector<std::uint8_t>& registry_bytes,
-                            const std::vector<std::uint8_t>& unit_descriptor_table_bytes);
+std::vector<std::uint8_t> build_inner_partition_bytes(
+    const std::vector<std::uint8_t>& unit_binding_table_bytes,
+    const std::vector<std::uint8_t>& resolved_profile_table_bytes,
+    const std::vector<std::uint8_t>& registry_bytes,
+    const std::vector<std::uint8_t>& unit_descriptor_table_bytes);
 
 // ─── PackageArtifact: full end-to-end artifact assembly ──────────────────
 //
@@ -382,10 +383,10 @@ build_inner_partition_bytes(const std::vector<std::uint8_t>& unit_binding_table_
 // byte stream that `accept_package` can consume directly.
 
 struct PackageArtifactAssembly {
-    std::vector<std::uint8_t> bytes;             // full on-disk artifact
-    std::size_t metadata_offset;                 // outer envelope body start
+    std::vector<std::uint8_t> bytes;  // full on-disk artifact
+    std::size_t metadata_offset;      // outer envelope body start
     std::size_t metadata_length;
-    std::size_t envelope_body_end;               // metadata_offset + metadata_length
+    std::size_t envelope_body_end;  // metadata_offset + metadata_length
     std::size_t pbr_offset;
     std::size_t pbr_length;
     std::size_t inner_offset;
@@ -404,7 +405,7 @@ struct PackageArtifactAssembly {
 };
 
 class PackageArtifactBuilder {
-public:
+   public:
     PackageArtifactBuilder();
 
     PackageArtifactBuilder& package_binding_record_id(std::string v);
@@ -422,9 +423,12 @@ public:
     // already supplied a pre-built inner partition. Leaving any of these
     // empty lets build() auto-assemble a self-consistent sub-table from
     // the default UnitDescriptor / UnitBindingRecord / profile builders.
-    PackageArtifactBuilder& unit_binding_table_bytes(std::vector<std::uint8_t> v);
-    PackageArtifactBuilder& resolved_profile_table_bytes(std::vector<std::uint8_t> v);
-    PackageArtifactBuilder& unit_descriptor_table_bytes(std::vector<std::uint8_t> v);
+    PackageArtifactBuilder& unit_binding_table_bytes(
+        std::vector<std::uint8_t> v);
+    PackageArtifactBuilder& resolved_profile_table_bytes(
+        std::vector<std::uint8_t> v);
+    PackageArtifactBuilder& unit_descriptor_table_bytes(
+        std::vector<std::uint8_t> v);
     PackageArtifactBuilder& registry_bytes(std::vector<std::uint8_t> v);
 
     // Unit identity for the default unit baked into auto-assembled sub-
@@ -444,7 +448,7 @@ public:
 
     PackageArtifactAssembly build() const;
 
-private:
+   private:
     std::string id_;
     std::string schema_version_;
     std::string encoding_id_;
@@ -484,8 +488,8 @@ private:
 // partitions are placed back-to-back after the envelope metadata.
 
 struct OuterEnvelopeArtifact {
-    std::vector<std::uint8_t> bytes;         // full on-disk stream
-    std::size_t metadata_offset;             // after fixed header
+    std::vector<std::uint8_t> bytes;  // full on-disk stream
+    std::size_t metadata_offset;      // after fixed header
     std::size_t metadata_length;
     std::size_t pbr_offset;
     std::size_t pbr_length;
@@ -496,7 +500,7 @@ struct OuterEnvelopeArtifact {
 };
 
 class OuterEnvelopeBuilder {
-public:
+   public:
     OuterEnvelopeBuilder();  // installs happy-path defaults
 
     OuterEnvelopeBuilder& outer_format_version(std::uint64_t v);
@@ -515,7 +519,7 @@ public:
 
     OuterEnvelopeArtifact build() const;
 
-private:
+   private:
     std::uint64_t outer_format_version_{1};
     std::string schema_version_;
     std::string encoding_id_;

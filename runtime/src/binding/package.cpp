@@ -78,14 +78,6 @@ bool is_in_list(const std::vector<std::string>& list, std::string_view v) noexce
     return false;
 }
 
-bool copy_hash(std::array<std::uint8_t, 32>& out,
-               const std::vector<std::uint8_t>& src) noexcept {
-    if (src.size() != 32) return false;
-    std::memcpy(out.data(), src.data(), 32);
-    return true;
-}
-
-
 // Constant-time-ish equality for hashes. std::memcmp is fine here because
 // we're comparing digests; a timing side channel on equal-vs-not equal of
 // a commitment hash doesn't leak anything useful.

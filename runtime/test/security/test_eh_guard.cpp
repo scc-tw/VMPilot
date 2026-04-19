@@ -111,8 +111,8 @@ VMPilot::Fixtures::PackageArtifactAssembly build_artifact_with_contract(
     const auto desc = UnitDescriptorBuilder{}
         .unit_id("u-happy")
         .unit_identity_hash(unit_identity)
-        .family_id(family_id_s)
-        .requested_policy_id(policy_id_s)
+        .family_id(VMPilot::DomainLabels::parse_family_id(family_id_s).value())
+        .requested_policy_id(VMPilot::DomainLabels::parse_policy_id(policy_id_s).value())
         .resolved_family_profile_id(profile_id)
         .unit_binding_record_id("ubr-happy")
         .payload_sha256(payload_hash)
@@ -120,8 +120,8 @@ VMPilot::Fixtures::PackageArtifactAssembly build_artifact_with_contract(
         .build();
     const auto profile = ResolvedFamilyProfileBuilder{}
         .profile_id(profile_id)
-        .family_id(family_id_s)
-        .requested_policy_id(policy_id_s)
+        .family_id(VMPilot::DomainLabels::parse_family_id(family_id_s).value())
+        .requested_policy_id(VMPilot::DomainLabels::parse_policy_id(policy_id_s).value())
         .runtime_specialization_id(runtime_specialization_id)
         .exception_unwind_contract(contract)
         .build();
@@ -136,8 +136,8 @@ VMPilot::Fixtures::PackageArtifactAssembly build_artifact_with_contract(
         .unit_binding_record_id("ubr-happy")
         .unit_identity_hash(unit_identity)
         .unit_descriptor_hash(desc_hash)
-        .family_id(family_id_s)
-        .requested_policy_id(policy_id_s)
+        .family_id(VMPilot::DomainLabels::parse_family_id(family_id_s).value())
+        .requested_policy_id(VMPilot::DomainLabels::parse_policy_id(policy_id_s).value())
         .resolved_family_profile_id(profile_id)
         .resolved_family_profile_content_hash(profile_hash)
         .payload_sha256(payload_hash)

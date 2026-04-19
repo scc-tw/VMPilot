@@ -109,8 +109,8 @@ TEST(AcceptUnitEntry, TamperedDescriptorBytesFailDescriptorHash) {
 
     const auto bad_descriptor = UnitDescriptorBuilder{}
         .unit_id("u-happy")
-        .family_id("f1")
-        .requested_policy_id("standard")
+        .family_id(VMPilot::DomainLabels::FamilyId::F1)
+        .requested_policy_id(VMPilot::DomainLabels::PolicyId::Standard)
         .resolved_family_profile_id("rfp-happy")
         .unit_binding_record_id("ubr-happy")
         .descriptor_version("descriptor-v99")  // differs from default
@@ -135,8 +135,8 @@ TEST(AcceptUnitEntry, TamperedProfileBytesFailProfileContentHash) {
     // — the UBR's resolved_family_profile_content_hash no longer matches.
     const auto bad_profile = ResolvedFamilyProfileBuilder{}
         .profile_id("rfp-happy")
-        .family_id("f1")
-        .requested_policy_id("standard")
+        .family_id(VMPilot::DomainLabels::FamilyId::F1)
+        .requested_policy_id(VMPilot::DomainLabels::PolicyId::Standard)
         .profile_revision("rev-different")
         .build();
 
@@ -192,8 +192,8 @@ TEST(AcceptUnitEntry, PayloadSizeMismatchFails) {
 
     const auto desc = UnitDescriptorBuilder{}
         .unit_id("u-happy")
-        .family_id("f1")
-        .requested_policy_id("standard")
+        .family_id(VMPilot::DomainLabels::FamilyId::F1)
+        .requested_policy_id(VMPilot::DomainLabels::PolicyId::Standard)
         .resolved_family_profile_id("rfp-happy")
         .unit_binding_record_id("ubr-happy")
         .payload_sha256(sha)
@@ -212,8 +212,8 @@ TEST(AcceptUnitEntry, PayloadSizeMismatchFails) {
     const auto ubr_bytes = UnitBindingRecordBuilder{}
         .unit_binding_record_id("ubr-happy")
         .unit_descriptor_hash(desc_hash)
-        .family_id("f1")
-        .requested_policy_id("standard")
+        .family_id(VMPilot::DomainLabels::FamilyId::F1)
+        .requested_policy_id(VMPilot::DomainLabels::PolicyId::Standard)
         .resolved_family_profile_id("rfp-happy")
         .resolved_family_profile_content_hash(prof_hash)
         .payload_sha256(sha)
@@ -272,8 +272,8 @@ build_cross_field_art(const CrossFieldCase& c) {
     const auto desc = UnitDescriptorBuilder{}
         .unit_id("u-happy")
         .unit_identity_hash(unit_identity)
-        .family_id(c.desc_family)
-        .requested_policy_id(c.desc_policy)
+        .family_id(VMPilot::DomainLabels::parse_family_id(c.desc_family).value())
+        .requested_policy_id(VMPilot::DomainLabels::parse_policy_id(c.desc_policy).value())
         .resolved_family_profile_id(c.desc_profile)
         .unit_binding_record_id("ubr-happy")
         .payload_sha256(sha)
@@ -293,8 +293,8 @@ build_cross_field_art(const CrossFieldCase& c) {
         .unit_binding_record_id("ubr-happy")
         .unit_identity_hash(unit_identity)
         .unit_descriptor_hash(desc_hash)
-        .family_id(c.ubr_family)
-        .requested_policy_id(c.ubr_policy)
+        .family_id(VMPilot::DomainLabels::parse_family_id(c.ubr_family).value())
+        .requested_policy_id(VMPilot::DomainLabels::parse_policy_id(c.ubr_policy).value())
         .resolved_family_profile_id(c.ubr_profile)
         .resolved_family_profile_content_hash(prof_hash)
         .payload_sha256(sha)

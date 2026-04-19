@@ -417,8 +417,6 @@ UnitDescriptorBuilder::UnitDescriptorBuilder()
     : descriptor_version_{"descriptor-v1"},
       unit_id_{"u-happy"},
       unit_identity_hash_{filled(0x50)},
-      family_id_{"f1"},
-      requested_policy_id_{"standard"},
       resolved_family_profile_id_{"rfp-happy"},
       unit_binding_record_id_{"ubr-happy"} {}
 
@@ -431,11 +429,11 @@ UnitDescriptorBuilder& UnitDescriptorBuilder::unit_id(std::string v) {
 UnitDescriptorBuilder& UnitDescriptorBuilder::unit_identity_hash(std::array<std::uint8_t, 32> v) {
     unit_identity_hash_ = v; return *this;
 }
-UnitDescriptorBuilder& UnitDescriptorBuilder::family_id(std::string v) {
-    family_id_ = std::move(v); return *this;
+UnitDescriptorBuilder& UnitDescriptorBuilder::family_id(VMPilot::DomainLabels::FamilyId v) {
+    family_id_ = v; return *this;
 }
-UnitDescriptorBuilder& UnitDescriptorBuilder::requested_policy_id(std::string v) {
-    requested_policy_id_ = std::move(v); return *this;
+UnitDescriptorBuilder& UnitDescriptorBuilder::requested_policy_id(VMPilot::DomainLabels::PolicyId v) {
+    requested_policy_id_ = v; return *this;
 }
 UnitDescriptorBuilder& UnitDescriptorBuilder::resolved_family_profile_id(std::string v) {
     resolved_family_profile_id_ = std::move(v); return *this;
@@ -462,8 +460,8 @@ std::vector<std::uint8_t> UnitDescriptorBuilder::build() const {
     m.put_uint(1, encode_text(descriptor_version_));
     m.put_uint(2, encode_text(unit_id_));
     m.put_uint(3, encode_bytes(bytes_from(unit_identity_hash_)));
-    m.put_uint(4, encode_text(family_id_));
-    m.put_uint(5, encode_text(requested_policy_id_));
+    m.put_uint(4, encode_text(VMPilot::DomainLabels::to_text(family_id_)));
+    m.put_uint(5, encode_text(VMPilot::DomainLabels::to_text(requested_policy_id_)));
     m.put_uint(6, encode_text(resolved_family_profile_id_));
     m.put_uint(7, pi_bytes);
     m.put_uint(8, encode_text(unit_binding_record_id_));
@@ -472,23 +470,21 @@ std::vector<std::uint8_t> UnitDescriptorBuilder::build() const {
 
 ResolvedFamilyProfileBuilder::ResolvedFamilyProfileBuilder()
     : profile_id_{"rfp-happy"},
-      family_id_{"f1"},
-      requested_policy_id_{"standard"},
       profile_revision_{"rev1"},
-    runtime_specialization_id_{"f1-standard-v1"},
-    semantic_contract_version_{"semantic-contract-v1"} {}
+      runtime_specialization_id_{"f1-standard-v1"},
+      semantic_contract_version_{"semantic-contract-v1"} {}
 
 ResolvedFamilyProfileBuilder&
 ResolvedFamilyProfileBuilder::profile_id(std::string v) {
     profile_id_ = std::move(v); return *this;
 }
 ResolvedFamilyProfileBuilder&
-ResolvedFamilyProfileBuilder::family_id(std::string v) {
-    family_id_ = std::move(v); return *this;
+ResolvedFamilyProfileBuilder::family_id(VMPilot::DomainLabels::FamilyId v) {
+    family_id_ = v; return *this;
 }
 ResolvedFamilyProfileBuilder&
-ResolvedFamilyProfileBuilder::requested_policy_id(std::string v) {
-    requested_policy_id_ = std::move(v); return *this;
+ResolvedFamilyProfileBuilder::requested_policy_id(VMPilot::DomainLabels::PolicyId v) {
+    requested_policy_id_ = v; return *this;
 }
 ResolvedFamilyProfileBuilder&
 ResolvedFamilyProfileBuilder::profile_revision(std::string v) {
@@ -512,17 +508,18 @@ std::vector<std::uint8_t> ResolvedFamilyProfileBuilder::build() const {
     // correctness_legality_contract.exception_unwind_contract.
     using namespace VMPilot::Fixtures::Cbor;
 
+    const auto family_text = VMPilot::DomainLabels::to_text(family_id_);
     MapBuilder correctness_legality_contract;
     correctness_legality_contract.put_uint(
         1, encode_text(semantic_contract_version_));
     correctness_legality_contract.put_uint(
         2, encode_exception_unwind_contract(
-               exception_unwind_contract_, family_id_));
+               exception_unwind_contract_, family_text));
 
     MapBuilder m;
     m.put_uint(1, encode_text(profile_id_));
-    m.put_uint(2, encode_text(family_id_));
-    m.put_uint(3, encode_text(requested_policy_id_));
+    m.put_uint(2, encode_text(family_text));
+    m.put_uint(3, encode_text(VMPilot::DomainLabels::to_text(requested_policy_id_)));
     m.put_uint(4, encode_text(profile_revision_));
     m.put_uint(5, encode_text(runtime_specialization_id_));
     m.put_uint(6, correctness_legality_contract.build());
@@ -533,8 +530,6 @@ UnitBindingRecordBuilder::UnitBindingRecordBuilder()
     : unit_binding_record_id_{"ubr-happy"},
       unit_identity_hash_{filled(0x50)},
       unit_descriptor_hash_{filled(0x60)},
-      family_id_{"f1"},
-      requested_policy_id_{"standard"},
       resolved_family_profile_id_{"rfp-happy"},
       resolved_family_profile_content_hash_{filled(0x70)},
       payload_sha256_{filled(0x80)},
@@ -554,12 +549,12 @@ UnitBindingRecordBuilder::unit_descriptor_hash(std::array<std::uint8_t, 32> v) {
     unit_descriptor_hash_ = v; return *this;
 }
 UnitBindingRecordBuilder&
-UnitBindingRecordBuilder::family_id(std::string v) {
-    family_id_ = std::move(v); return *this;
+UnitBindingRecordBuilder::family_id(VMPilot::DomainLabels::FamilyId v) {
+    family_id_ = v; return *this;
 }
 UnitBindingRecordBuilder&
-UnitBindingRecordBuilder::requested_policy_id(std::string v) {
-    requested_policy_id_ = std::move(v); return *this;
+UnitBindingRecordBuilder::requested_policy_id(VMPilot::DomainLabels::PolicyId v) {
+    requested_policy_id_ = v; return *this;
 }
 UnitBindingRecordBuilder&
 UnitBindingRecordBuilder::resolved_family_profile_id(std::string v) {
@@ -601,8 +596,8 @@ std::vector<std::uint8_t> UnitBindingRecordBuilder::build() const {
     m.put_uint(1, encode_text(unit_binding_record_id_));
     m.put_uint(2, encode_bytes(bytes_from(unit_identity_hash_)));
     m.put_uint(3, encode_bytes(bytes_from(unit_descriptor_hash_)));
-    m.put_uint(4, encode_text(family_id_));
-    m.put_uint(5, encode_text(requested_policy_id_));
+    m.put_uint(4, encode_text(VMPilot::DomainLabels::to_text(family_id_)));
+    m.put_uint(5, encode_text(VMPilot::DomainLabels::to_text(requested_policy_id_)));
     m.put_uint(6, encode_text(resolved_family_profile_id_));
     m.put_uint(7, encode_bytes(bytes_from(resolved_family_profile_content_hash_)));
     m.put_uint(8, pi_bytes);
@@ -939,12 +934,19 @@ PackageArtifactAssembly PackageArtifactBuilder::build() const {
         resolved_profile_table_bytes.empty() ||
         unit_descriptor_table_bytes.empty()) {
 
+        const auto fam_enum =
+            VMPilot::DomainLabels::parse_family_id(default_family_id_)
+                .value_or(VMPilot::DomainLabels::FamilyId::F1);
+        const auto pol_enum =
+            VMPilot::DomainLabels::parse_policy_id(default_policy_id_)
+                .value_or(VMPilot::DomainLabels::PolicyId::Standard);
+
         descriptor_bytes = UnitDescriptorBuilder{}
             .descriptor_version("descriptor-v1")
             .unit_id(default_unit_id_)
             .unit_identity_hash(unit_identity)
-            .family_id(default_family_id_)
-            .requested_policy_id(default_policy_id_)
+            .family_id(fam_enum)
+            .requested_policy_id(pol_enum)
             .resolved_family_profile_id(default_profile_id_)
             .payload_sha256(payload_sha)
             .payload_size(payload_size)
@@ -953,8 +955,8 @@ PackageArtifactAssembly PackageArtifactBuilder::build() const {
 
         profile_bytes = ResolvedFamilyProfileBuilder{}
             .profile_id(default_profile_id_)
-            .family_id(default_family_id_)
-            .requested_policy_id(default_policy_id_)
+            .family_id(fam_enum)
+            .requested_policy_id(pol_enum)
             .build();
 
         const auto descriptor_hash = VMPilot::Cbor::domain_hash_sha256(
@@ -977,8 +979,8 @@ PackageArtifactAssembly PackageArtifactBuilder::build() const {
             .unit_binding_record_id(default_record_id_)
             .unit_identity_hash(unit_identity)
             .unit_descriptor_hash(descriptor_hash)
-            .family_id(default_family_id_)
-            .requested_policy_id(default_policy_id_)
+            .family_id(fam_enum)
+            .requested_policy_id(pol_enum)
             .resolved_family_profile_id(default_profile_id_)
             .resolved_family_profile_content_hash(profile_hash)
             .payload_sha256(payload_sha)

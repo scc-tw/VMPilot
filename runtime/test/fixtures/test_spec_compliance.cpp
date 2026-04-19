@@ -112,8 +112,8 @@ VMPilot::Fixtures::PackageArtifactAssembly build_vm_payload_artifact(
     const auto desc = UnitDescriptorBuilder{}
                           .unit_id("u-happy")
                           .unit_identity_hash(unit_identity)
-                          .family_id(family_id_s)
-                          .requested_policy_id(policy_id_s)
+                          .family_id(VMPilot::DomainLabels::parse_family_id(family_id_s).value())
+                          .requested_policy_id(VMPilot::DomainLabels::parse_policy_id(policy_id_s).value())
                           .resolved_family_profile_id(profile_id_s)
                           .unit_binding_record_id("ubr-happy")
                           .payload_sha256(payload_hash)
@@ -121,8 +121,8 @@ VMPilot::Fixtures::PackageArtifactAssembly build_vm_payload_artifact(
                           .build();
     const auto prof = ResolvedFamilyProfileBuilder{}
                           .profile_id(profile_id_s)
-                          .family_id(family_id_s)
-                          .requested_policy_id(policy_id_s)
+                          .family_id(VMPilot::DomainLabels::parse_family_id(family_id_s).value())
+                          .requested_policy_id(VMPilot::DomainLabels::parse_policy_id(policy_id_s).value())
                           .runtime_specialization_id(runtime_spec_id)
                           .build();
 
@@ -136,8 +136,8 @@ VMPilot::Fixtures::PackageArtifactAssembly build_vm_payload_artifact(
                          .unit_binding_record_id("ubr-happy")
                          .unit_identity_hash(unit_identity)
                          .unit_descriptor_hash(desc_hash)
-                         .family_id(family_id_s)
-                         .requested_policy_id(policy_id_s)
+                         .family_id(VMPilot::DomainLabels::parse_family_id(family_id_s).value())
+                         .requested_policy_id(VMPilot::DomainLabels::parse_policy_id(policy_id_s).value())
                          .resolved_family_profile_id(profile_id_s)
                          .resolved_family_profile_content_hash(prof_hash)
                          .payload_sha256(payload_hash)
@@ -239,8 +239,8 @@ VMPilot::Fixtures::PackageArtifactAssembly build_aligned_artifact(
     const auto desc = UnitDescriptorBuilder{}
                           .unit_id("u-happy")
                           .unit_identity_hash(unit_identity)
-                          .family_id("f1")
-                          .requested_policy_id(std::string(policy_text))
+                          .family_id(VMPilot::DomainLabels::FamilyId::F1)
+                          .requested_policy_id(VMPilot::DomainLabels::parse_policy_id(policy_text).value())
                           .resolved_family_profile_id(std::string(profile_id))
                           .unit_binding_record_id("ubr-happy")
                           .payload_sha256(sha)
@@ -248,8 +248,8 @@ VMPilot::Fixtures::PackageArtifactAssembly build_aligned_artifact(
                           .build();
     const auto prof = ResolvedFamilyProfileBuilder{}
                           .profile_id(std::string(profile_id))
-                          .family_id("f1")
-                          .requested_policy_id(std::string(policy_text))
+                          .family_id(VMPilot::DomainLabels::FamilyId::F1)
+                          .requested_policy_id(VMPilot::DomainLabels::parse_policy_id(policy_text).value())
                           .build();
 
     const auto desc_hash = VMPilot::Cbor::domain_hash_sha256(
@@ -262,8 +262,8 @@ VMPilot::Fixtures::PackageArtifactAssembly build_aligned_artifact(
                          .unit_binding_record_id("ubr-happy")
                          .unit_identity_hash(unit_identity)
                          .unit_descriptor_hash(desc_hash)
-                         .family_id("f1")
-                         .requested_policy_id(std::string(policy_text))
+                         .family_id(VMPilot::DomainLabels::FamilyId::F1)
+                         .requested_policy_id(VMPilot::DomainLabels::parse_policy_id(policy_text).value())
                          .resolved_family_profile_id(std::string(profile_id))
                          .resolved_family_profile_content_hash(prof_hash)
                          .payload_sha256(sha)
@@ -330,8 +330,8 @@ TEST(SpecCompliance, DebugProfileWithHighsecUbrRejected_doc08_9_2) {
     const auto desc = UnitDescriptorBuilder{}
                           .unit_id("u-happy")
                           .unit_identity_hash(unit_identity)
-                          .family_id("f1")
-                          .requested_policy_id("highsec")
+                          .family_id(VMPilot::DomainLabels::FamilyId::F1)
+                          .requested_policy_id(VMPilot::DomainLabels::PolicyId::HighSec)
                           .resolved_family_profile_id("rfp-debug")
                           .unit_binding_record_id("ubr-happy")
                           .payload_sha256(payload_hash)
@@ -339,8 +339,8 @@ TEST(SpecCompliance, DebugProfileWithHighsecUbrRejected_doc08_9_2) {
                           .build();
     const auto prof_debug = ResolvedFamilyProfileBuilder{}
                                 .profile_id("rfp-debug")
-                                .family_id("f1")
-                                .requested_policy_id("debug")
+                                .family_id(VMPilot::DomainLabels::FamilyId::F1)
+                                .requested_policy_id(VMPilot::DomainLabels::PolicyId::Debug)
                                 .runtime_specialization_id("f1-highsec-v1")
                                 .build();
     const auto desc_hash = VMPilot::Cbor::domain_hash_sha256(
@@ -353,8 +353,8 @@ TEST(SpecCompliance, DebugProfileWithHighsecUbrRejected_doc08_9_2) {
                          .unit_binding_record_id("ubr-happy")
                          .unit_identity_hash(unit_identity)
                          .unit_descriptor_hash(desc_hash)
-                         .family_id("f1")
-                         .requested_policy_id("highsec")
+                         .family_id(VMPilot::DomainLabels::FamilyId::F1)
+                         .requested_policy_id(VMPilot::DomainLabels::PolicyId::HighSec)
                          .resolved_family_profile_id("rfp-debug")
                          .resolved_family_profile_content_hash(prof_hash)
                          .payload_sha256(payload_hash)

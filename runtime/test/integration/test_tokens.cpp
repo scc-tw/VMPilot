@@ -59,8 +59,8 @@ std::vector<std::uint8_t> encode_auth_wrapper(
     MapBuilder auth;
     auth.put_uint(1, encode_text("vendor_signature_v1"));
     auth.put_uint(2, encode_text("vmpilot-dev-rfc8032-test1"));
-    auth.put_uint(3, encode_text(std::string(covered_domain)));
-    auth.put_uint(4, encode_text("ed25519-pure-v1"));
+    auth.put_uint(3, encode_text("ed25519-pure-v1"));
+    auth.put_uint(4, encode_text(std::string(covered_domain)));
     std::vector<std::uint8_t> sig_vec(signature.begin(), signature.end());
     auth.put_uint(5, encode_bytes(sig_vec));
     return auth.build();

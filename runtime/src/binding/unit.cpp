@@ -15,9 +15,9 @@ namespace VMPilot::Cbor {
 template <>
 struct RequireErrors<VMPilot::Runtime::Binding::UnitAcceptError> {
     using E = VMPilot::Runtime::Binding::UnitAcceptError;
-    static constexpr E missing_field    = E::MissingCoreField;
+    static constexpr E missing_field = E::MissingCoreField;
     static constexpr E wrong_field_type = E::WrongFieldType;
-    static constexpr E wrong_hash_size  = E::WrongHashSize;
+    static constexpr E wrong_hash_size = E::WrongHashSize;
 };
 }  // namespace VMPilot::Cbor
 
@@ -25,19 +25,19 @@ namespace VMPilot::Runtime::Binding {
 
 namespace {
 
-using VMPilot::Cbor::Value;
-using VMPilot::Cbor::parse_strict;
 using VMPilot::Cbor::domain_hash_sha256;
+using VMPilot::Cbor::parse_strict;
+using VMPilot::Cbor::Value;
 
 // ─── UnitDescriptor field IDs (doc 03 §7) ────────────────────────────────
-constexpr std::uint64_t kUd_DescriptorVersion           = 1;
-constexpr std::uint64_t kUd_UnitId                       = 2;
-constexpr std::uint64_t kUd_UnitIdentityHash             = 3;
-constexpr std::uint64_t kUd_FamilyId                     = 4;
-constexpr std::uint64_t kUd_RequestedPolicyId            = 5;
-constexpr std::uint64_t kUd_ResolvedFamilyProfileId      = 6;
-constexpr std::uint64_t kUd_PayloadIdentity              = 7;
-constexpr std::uint64_t kUd_UnitBindingRecordId          = 8;
+constexpr std::uint64_t kUd_DescriptorVersion = 1;
+constexpr std::uint64_t kUd_UnitId = 2;
+constexpr std::uint64_t kUd_UnitIdentityHash = 3;
+constexpr std::uint64_t kUd_FamilyId = 4;
+constexpr std::uint64_t kUd_RequestedPolicyId = 5;
+constexpr std::uint64_t kUd_ResolvedFamilyProfileId = 6;
+constexpr std::uint64_t kUd_PayloadIdentity = 7;
+constexpr std::uint64_t kUd_UnitBindingRecordId = 8;
 
 // ─── UBR field IDs (doc 06 §5.1) ────────────────────────────────────────
 //
@@ -46,25 +46,25 @@ constexpr std::uint64_t kUd_UnitBindingRecordId          = 8;
 // them avoids the self-referential commitment problem where
 // binding_auth.record_hash would have to commit to bytes that include
 // itself.
-constexpr std::uint64_t kUbr_UnitBindingRecordId                  = 1;
-constexpr std::uint64_t kUbr_UnitIdentityHash                     = 2;
-constexpr std::uint64_t kUbr_UnitDescriptorHash                   = 3;
-constexpr std::uint64_t kUbr_FamilyId                             = 4;
-constexpr std::uint64_t kUbr_RequestedPolicyId                    = 5;
-constexpr std::uint64_t kUbr_ResolvedFamilyProfileId              = 6;
-constexpr std::uint64_t kUbr_ResolvedFamilyProfileContentHash     = 7;
-constexpr std::uint64_t kUbr_PayloadIdentity                      = 8;
-constexpr std::uint64_t kUbr_AntiDowngradeEpoch                   = 9;
+constexpr std::uint64_t kUbr_UnitBindingRecordId = 1;
+constexpr std::uint64_t kUbr_UnitIdentityHash = 2;
+constexpr std::uint64_t kUbr_UnitDescriptorHash = 3;
+constexpr std::uint64_t kUbr_FamilyId = 4;
+constexpr std::uint64_t kUbr_RequestedPolicyId = 5;
+constexpr std::uint64_t kUbr_ResolvedFamilyProfileId = 6;
+constexpr std::uint64_t kUbr_ResolvedFamilyProfileContentHash = 7;
+constexpr std::uint64_t kUbr_PayloadIdentity = 8;
+constexpr std::uint64_t kUbr_AntiDowngradeEpoch = 9;
 
 // ─── PayloadIdentity sub-map field IDs (doc 06 §3.1) ────────────────────
-constexpr std::uint64_t kPi_Sha256Digest  = 1;
-constexpr std::uint64_t kPi_PayloadSize   = 2;
+constexpr std::uint64_t kPi_Sha256Digest = 1;
+constexpr std::uint64_t kPi_PayloadSize = 2;
 
 // ─── UnitBindingAuth field IDs (doc 06 §9.3) ────────────────────────────
-constexpr std::uint64_t kAuth_Kind                    = 1;
-constexpr std::uint64_t kAuth_UnitBindingTableHash    = 2;
-constexpr std::uint64_t kAuth_InclusionIndex          = 3;
-constexpr std::uint64_t kAuth_RecordHash              = 4;
+constexpr std::uint64_t kAuth_Kind = 1;
+constexpr std::uint64_t kAuth_UnitBindingTableHash = 2;
+constexpr std::uint64_t kAuth_InclusionIndex = 3;
+constexpr std::uint64_t kAuth_RecordHash = 4;
 
 constexpr std::string_view kAuthKindPackageSignedUnitInclusionV1 =
     "package_signed_unit_inclusion_v1";
@@ -76,13 +76,6 @@ inline tl::unexpected<UnitAcceptError> err(UnitAcceptError e) noexcept {
 template <typename E>
 tl::unexpected<UnitAcceptError> err_as(UnitAcceptError e, const E&) noexcept {
     return tl::make_unexpected(e);
-}
-
-bool copy32(std::array<std::uint8_t, 32>& out,
-            const std::vector<std::uint8_t>& src) noexcept {
-    if (src.size() != 32) return false;
-    std::memcpy(out.data(), src.data(), 32);
-    return true;
 }
 
 bool hash_equals(const std::array<std::uint8_t, 32>& a,
@@ -134,79 +127,93 @@ inline auto require_hash32(const Value& m, std::uint64_t k) noexcept {
 
 // ─── PayloadIdentity ────────────────────────────────────────────────────
 
-tl::expected<PayloadIdentity, UnitAcceptError>
-parse_payload_identity(const Value& m, UnitAcceptError malformed_err) noexcept {
-    if (m.kind() != Value::Kind::Map) return err(malformed_err);
-auto digest = require_hash32(m, kPi_Sha256Digest);
+tl::expected<PayloadIdentity, UnitAcceptError> parse_payload_identity(
+    const Value& m, UnitAcceptError malformed_err) noexcept {
+    if (m.kind() != Value::Kind::Map)
+        return err(malformed_err);
+    auto digest = require_hash32(m, kPi_Sha256Digest);
     auto size_or = require_uint(m, kPi_PayloadSize);
-    if (!digest) return err(digest.error());
-    if (!size_or) return err(size_or.error());
+    if (!digest)
+        return err(digest.error());
+    if (!size_or)
+        return err(size_or.error());
     return PayloadIdentity{*digest, *size_or};
 }
 
 // ─── UnitDescriptor ─────────────────────────────────────────────────────
 
-tl::expected<UnitDescriptor, UnitAcceptError>
-parse_unit_descriptor_bytes(const std::vector<std::uint8_t>& bytes) noexcept {
+tl::expected<UnitDescriptor, UnitAcceptError> parse_unit_descriptor_bytes(
+    const std::vector<std::uint8_t>& bytes) noexcept {
     auto tree_or = parse_strict(bytes.data(), bytes.size());
-    if (!tree_or) return err(UnitAcceptError::UnitDescriptorMalformed);
+    if (!tree_or)
+        return err(UnitAcceptError::UnitDescriptorMalformed);
     const Value& tree = *tree_or;
-    if (tree.kind() != Value::Kind::Map) return err(UnitAcceptError::UnitDescriptorMalformed);
+    if (tree.kind() != Value::Kind::Map)
+        return err(UnitAcceptError::UnitDescriptorMalformed);
 
-    VMPILOT_TRY_ASSIGN(ver,  require_text(tree, kUd_DescriptorVersion));
-    VMPILOT_TRY_ASSIGN(uid,  require_text(tree, kUd_UnitId));
-    VMPILOT_TRY_ASSIGN(uih,  require_hash32(tree, kUd_UnitIdentityHash));
-    VMPILOT_TRY_ASSIGN(fam,  require_text(tree, kUd_FamilyId));
-    VMPILOT_TRY_ASSIGN(pol,  require_text(tree, kUd_RequestedPolicyId));
+    VMPILOT_TRY_ASSIGN(ver, require_text(tree, kUd_DescriptorVersion));
+    VMPILOT_TRY_ASSIGN(uid, require_text(tree, kUd_UnitId));
+    VMPILOT_TRY_ASSIGN(uih, require_hash32(tree, kUd_UnitIdentityHash));
+    VMPILOT_TRY_ASSIGN(fam, require_text(tree, kUd_FamilyId));
+    VMPILOT_TRY_ASSIGN(pol, require_text(tree, kUd_RequestedPolicyId));
     VMPILOT_TRY_ASSIGN(prof, require_text(tree, kUd_ResolvedFamilyProfileId));
-    VMPILOT_TRY_ASSIGN(ubr,  require_text(tree, kUd_UnitBindingRecordId));
+    VMPILOT_TRY_ASSIGN(ubr, require_text(tree, kUd_UnitBindingRecordId));
 
     auto fam_enum = VMPilot::DomainLabels::parse_family_id(fam);
-    if (!fam_enum) return err(UnitAcceptError::UnknownFamilyId);
+    if (!fam_enum)
+        return err(UnitAcceptError::UnknownFamilyId);
     auto pol_enum = VMPilot::DomainLabels::parse_policy_id(pol);
-    if (!pol_enum) return err(UnitAcceptError::UnknownPolicyId);
+    if (!pol_enum)
+        return err(UnitAcceptError::UnknownPolicyId);
 
     const Value* pid_v = tree.find_by_uint_key(kUd_PayloadIdentity);
-    if (pid_v == nullptr) return err(UnitAcceptError::MissingCoreField);
-    VMPILOT_TRY_ASSIGN(pid,
-        parse_payload_identity(*pid_v, UnitAcceptError::UnitDescriptorMalformed));
+    if (pid_v == nullptr)
+        return err(UnitAcceptError::MissingCoreField);
+    VMPILOT_TRY_ASSIGN(
+        pid, parse_payload_identity(*pid_v,
+                                    UnitAcceptError::UnitDescriptorMalformed));
 
     UnitDescriptor out;
-    out.descriptor_version              = std::string(ver);
-    out.unit_id                          = std::string(uid);
-    out.unit_identity_hash               = uih;
-    out.family_id                        = *fam_enum;
-    out.requested_policy_id              = *pol_enum;
-    out.resolved_family_profile_id       = std::string(prof);
-    out.payload_identity                 = pid;
-    out.unit_binding_record_id           = std::string(ubr);
+    out.descriptor_version = std::string(ver);
+    out.unit_id = std::string(uid);
+    out.unit_identity_hash = uih;
+    out.family_id = *fam_enum;
+    out.requested_policy_id = *pol_enum;
+    out.resolved_family_profile_id = std::string(prof);
+    out.payload_identity = pid;
+    out.unit_binding_record_id = std::string(ubr);
     return out;
 }
 
 // ─── UnitBindingAuth + UBR ──────────────────────────────────────────────
 
-tl::expected<UnitBindingAuth, UnitAcceptError>
-parse_binding_auth(const Value& auth_v) noexcept {
-    if (auth_v.kind() != Value::Kind::Map) return err(UnitAcceptError::UnitBindingAuthMalformed);
+tl::expected<UnitBindingAuth, UnitAcceptError> parse_binding_auth(
+    const Value& auth_v) noexcept {
+    if (auth_v.kind() != Value::Kind::Map)
+        return err(UnitAcceptError::UnitBindingAuthMalformed);
 
-auto kind = require_text(auth_v, kAuth_Kind);
+    auto kind = require_text(auth_v, kAuth_Kind);
     auto ubt_hash = require_hash32(auth_v, kAuth_UnitBindingTableHash);
     auto inclusion = require_uint(auth_v, kAuth_InclusionIndex);
     auto rec_hash = require_hash32(auth_v, kAuth_RecordHash);
-    if (!kind) return err(kind.error());
-    if (!ubt_hash) return err(ubt_hash.error());
-    if (!inclusion) return err(inclusion.error());
-    if (!rec_hash) return err(rec_hash.error());
+    if (!kind)
+        return err(kind.error());
+    if (!ubt_hash)
+        return err(ubt_hash.error());
+    if (!inclusion)
+        return err(inclusion.error());
+    if (!rec_hash)
+        return err(rec_hash.error());
 
     if (*kind != kAuthKindPackageSignedUnitInclusionV1) {
         return err(UnitAcceptError::UnitBindingAuthMalformed);
     }
 
     UnitBindingAuth out;
-    out.kind                         = std::move(*kind);
-    out.unit_binding_table_hash      = *ubt_hash;
-    out.inclusion_index              = *inclusion;
-    out.record_hash                  = *rec_hash;
+    out.kind = std::move(*kind);
+    out.unit_binding_table_hash = *ubt_hash;
+    out.inclusion_index = *inclusion;
+    out.record_hash = *rec_hash;
     return out;
 }
 
@@ -214,8 +221,8 @@ auto kind = require_text(auth_v, kAuth_Kind);
 // UnitBindingAuth_map]) and verify the record_hash inside the auth object
 // matches the domain-hashed canonical bytes. This is where doc 06 §9.3's
 // "record_hash commits to UBR content minus auth" rule actually fires.
-tl::expected<UnitBindingRecord, UnitAcceptError>
-parse_unit_binding_record(const Value& wrapper_v) noexcept {
+tl::expected<UnitBindingRecord, UnitAcceptError> parse_unit_binding_record(
+    const Value& wrapper_v) noexcept {
     if (wrapper_v.kind() != Value::Kind::Array) {
         return err(UnitAcceptError::UnitBindingRecordMalformed);
     }
@@ -223,7 +230,7 @@ parse_unit_binding_record(const Value& wrapper_v) noexcept {
         return err(UnitAcceptError::UnitBindingRecordMalformed);
     }
     const Value& canonical_v = wrapper_v.as_array()[0];
-    const Value& auth_v      = wrapper_v.as_array()[1];
+    const Value& auth_v = wrapper_v.as_array()[1];
     if (canonical_v.kind() != Value::Kind::Bytes) {
         return err(UnitAcceptError::UnitBindingRecordMalformed);
     }
@@ -232,14 +239,16 @@ parse_unit_binding_record(const Value& wrapper_v) noexcept {
     }
 
     const auto& canonical_bytes = canonical_v.as_bytes();
-    auto inner_or = parse_strict(canonical_bytes.data(), canonical_bytes.size());
-    if (!inner_or) return err(UnitAcceptError::UnitBindingRecordMalformed);
+    auto inner_or =
+        parse_strict(canonical_bytes.data(), canonical_bytes.size());
+    if (!inner_or)
+        return err(UnitAcceptError::UnitBindingRecordMalformed);
     const Value& ubr_v = *inner_or;
     if (ubr_v.kind() != Value::Kind::Map) {
         return err(UnitAcceptError::UnitBindingRecordMalformed);
     }
 
-auto id = require_text(ubr_v, kUbr_UnitBindingRecordId);
+    auto id = require_text(ubr_v, kUbr_UnitBindingRecordId);
     auto uih = require_hash32(ubr_v, kUbr_UnitIdentityHash);
     auto udh = require_hash32(ubr_v, kUbr_UnitDescriptorHash);
     auto fam = require_text(ubr_v, kUbr_FamilyId);
@@ -247,50 +256,64 @@ auto id = require_text(ubr_v, kUbr_UnitBindingRecordId);
     auto prof = require_text(ubr_v, kUbr_ResolvedFamilyProfileId);
     auto pch = require_hash32(ubr_v, kUbr_ResolvedFamilyProfileContentHash);
     auto epoch = require_uint(ubr_v, kUbr_AntiDowngradeEpoch);
-    if (!id) return err(id.error());
-    if (!uih) return err(uih.error());
-    if (!udh) return err(udh.error());
-    if (!fam) return err(fam.error());
-    if (!pol) return err(pol.error());
-    if (!prof) return err(prof.error());
-    if (!pch) return err(pch.error());
-    if (!epoch) return err(epoch.error());
+    if (!id)
+        return err(id.error());
+    if (!uih)
+        return err(uih.error());
+    if (!udh)
+        return err(udh.error());
+    if (!fam)
+        return err(fam.error());
+    if (!pol)
+        return err(pol.error());
+    if (!prof)
+        return err(prof.error());
+    if (!pch)
+        return err(pch.error());
+    if (!epoch)
+        return err(epoch.error());
 
     auto fam_enum = VMPilot::DomainLabels::parse_family_id(*fam);
-    if (!fam_enum) return err(UnitAcceptError::UnknownFamilyId);
+    if (!fam_enum)
+        return err(UnitAcceptError::UnknownFamilyId);
     auto pol_enum = VMPilot::DomainLabels::parse_policy_id(*pol);
-    if (!pol_enum) return err(UnitAcceptError::UnknownPolicyId);
+    if (!pol_enum)
+        return err(UnitAcceptError::UnknownPolicyId);
 
     const Value* pid_v = ubr_v.find_by_uint_key(kUbr_PayloadIdentity);
-    if (pid_v == nullptr) return err(UnitAcceptError::MissingCoreField);
-    auto pid = parse_payload_identity(*pid_v, UnitAcceptError::UnitBindingRecordMalformed);
-    if (!pid) return err(pid.error());
+    if (pid_v == nullptr)
+        return err(UnitAcceptError::MissingCoreField);
+    auto pid = parse_payload_identity(
+        *pid_v, UnitAcceptError::UnitBindingRecordMalformed);
+    if (!pid)
+        return err(pid.error());
 
     auto auth = parse_binding_auth(auth_v);
-    if (!auth) return err(auth.error());
+    if (!auth)
+        return err(auth.error());
 
     // Record hash must commit to the exact canonical bytes we just parsed.
     // Without this the wrapper's element [0] could be swapped for any
     // other UBR's canonical bytes and acceptance would continue on
     // stale content.
-    const auto computed_record_hash = domain_hash_sha256(
-        VMPilot::DomainLabels::Hash::UnitBindingRecord,
-        canonical_bytes.data(), canonical_bytes.size());
+    const auto computed_record_hash =
+        domain_hash_sha256(VMPilot::DomainLabels::Hash::UnitBindingRecord,
+                           canonical_bytes.data(), canonical_bytes.size());
     if (!hash_equals(computed_record_hash, auth->record_hash)) {
         return err(UnitAcceptError::UnitBindingRecordRecordHashMismatch);
     }
 
     UnitBindingRecord out;
-    out.unit_binding_record_id                    = std::move(*id);
-    out.unit_identity_hash                         = *uih;
-    out.unit_descriptor_hash                       = *udh;
-    out.family_id                                  = *fam_enum;
-    out.requested_policy_id                        = *pol_enum;
-    out.resolved_family_profile_id                 = std::move(*prof);
-    out.resolved_family_profile_content_hash       = *pch;
-    out.payload_identity                           = *pid;
-    out.anti_downgrade_epoch                       = *epoch;
-    out.binding_auth                               = std::move(*auth);
+    out.unit_binding_record_id = std::move(*id);
+    out.unit_identity_hash = *uih;
+    out.unit_descriptor_hash = *udh;
+    out.family_id = *fam_enum;
+    out.requested_policy_id = *pol_enum;
+    out.resolved_family_profile_id = std::move(*prof);
+    out.resolved_family_profile_content_hash = *pch;
+    out.payload_identity = *pid;
+    out.anti_downgrade_epoch = *epoch;
+    out.binding_auth = std::move(*auth);
     return out;
 }
 
@@ -301,13 +324,17 @@ tl::expected<std::vector<std::uint8_t>, UnitAcceptError>
 lookup_descriptor_bytes(const std::vector<std::uint8_t>& table_bytes,
                         std::string_view unit_id) noexcept {
     auto tree_or = parse_strict(table_bytes.data(), table_bytes.size());
-    if (!tree_or) return err(UnitAcceptError::UnitDescriptorTableMalformed);
+    if (!tree_or)
+        return err(UnitAcceptError::UnitDescriptorTableMalformed);
     const Value& tree = *tree_or;
-    if (tree.kind() != Value::Kind::Map) return err(UnitAcceptError::UnitDescriptorTableMalformed);
+    if (tree.kind() != Value::Kind::Map)
+        return err(UnitAcceptError::UnitDescriptorTableMalformed);
 
     const Value* v = tree.find_by_text_key(unit_id);
-    if (v == nullptr) return err(UnitAcceptError::UnitDescriptorNotFound);
-    if (v->kind() != Value::Kind::Bytes) return err(UnitAcceptError::UnitDescriptorTableMalformed);
+    if (v == nullptr)
+        return err(UnitAcceptError::UnitDescriptorNotFound);
+    if (v->kind() != Value::Kind::Bytes)
+        return err(UnitAcceptError::UnitDescriptorTableMalformed);
     return v->as_bytes();
 }
 
@@ -317,13 +344,15 @@ lookup_descriptor_bytes(const std::vector<std::uint8_t>& table_bytes,
 // position in the array. Any structural anomaly surfaces UbtMalformed
 // before content mismatches so fuzzed or truncated tables don't reach
 // downstream acceptance logic with half-initialised state.
-tl::expected<UnitBindingRecord, UnitAcceptError>
-lookup_ubr(const std::vector<std::uint8_t>& table_bytes,
-           std::string_view record_id) noexcept {
+tl::expected<UnitBindingRecord, UnitAcceptError> lookup_ubr(
+    const std::vector<std::uint8_t>& table_bytes,
+    std::string_view record_id) noexcept {
     auto tree_or = parse_strict(table_bytes.data(), table_bytes.size());
-    if (!tree_or) return err(UnitAcceptError::UnitBindingTableMalformed);
+    if (!tree_or)
+        return err(UnitAcceptError::UnitBindingTableMalformed);
     const Value& tree = *tree_or;
-    if (tree.kind() != Value::Kind::Array) return err(UnitAcceptError::UnitBindingTableMalformed);
+    if (tree.kind() != Value::Kind::Array)
+        return err(UnitAcceptError::UnitBindingTableMalformed);
 
     const auto& entries = tree.as_array();
     for (std::size_t i = 0; i < entries.size(); ++i) {
@@ -342,15 +371,19 @@ lookup_ubr(const std::vector<std::uint8_t>& table_bytes,
         }
         auto peek_or = parse_strict(canonical_v.as_bytes().data(),
                                     canonical_v.as_bytes().size());
-        if (!peek_or) continue;
+        if (!peek_or)
+            continue;
         const Value* id_v = peek_or->find_by_uint_key(kUbr_UnitBindingRecordId);
-        if (id_v == nullptr || id_v->kind() != Value::Kind::Text) continue;
-        if (id_v->as_text() != record_id) continue;
+        if (id_v == nullptr || id_v->kind() != Value::Kind::Text)
+            continue;
+        if (id_v->as_text() != record_id)
+            continue;
 
         // Match: parse fully (verifies record_hash) and cross-check the
         // auth's inclusion_index against the UBR's real position.
         auto parsed = parse_unit_binding_record(entry);
-        if (!parsed) return err(parsed.error());
+        if (!parsed)
+            return err(parsed.error());
         if (parsed->binding_auth.inclusion_index != i) {
             return err(UnitAcceptError::UnitBindingAuthMalformed);
         }
@@ -360,57 +393,65 @@ lookup_ubr(const std::vector<std::uint8_t>& table_bytes,
 }
 
 // ResolvedFamilyProfileTable: CBOR map { profile_id (text) : profile_bytes }.
-tl::expected<std::vector<std::uint8_t>, UnitAcceptError>
-lookup_profile_bytes(const std::vector<std::uint8_t>& table_bytes,
-                     std::string_view profile_id) noexcept {
+tl::expected<std::vector<std::uint8_t>, UnitAcceptError> lookup_profile_bytes(
+    const std::vector<std::uint8_t>& table_bytes,
+    std::string_view profile_id) noexcept {
     auto tree_or = parse_strict(table_bytes.data(), table_bytes.size());
-    if (!tree_or) return err(UnitAcceptError::ResolvedProfileTableMalformed);
+    if (!tree_or)
+        return err(UnitAcceptError::ResolvedProfileTableMalformed);
     const Value& tree = *tree_or;
-    if (tree.kind() != Value::Kind::Map) return err(UnitAcceptError::ResolvedProfileTableMalformed);
+    if (tree.kind() != Value::Kind::Map)
+        return err(UnitAcceptError::ResolvedProfileTableMalformed);
 
     const Value* v = tree.find_by_text_key(profile_id);
-    if (v == nullptr) return err(UnitAcceptError::ResolvedProfileNotFound);
-    if (v->kind() != Value::Kind::Bytes) return err(UnitAcceptError::ResolvedProfileTableMalformed);
+    if (v == nullptr)
+        return err(UnitAcceptError::ResolvedProfileNotFound);
+    if (v->kind() != Value::Kind::Bytes)
+        return err(UnitAcceptError::ResolvedProfileTableMalformed);
     return v->as_bytes();
 }
 
 }  // namespace
 
-tl::expected<AcceptedUnit, UnitAcceptError>
-accept_unit_entry(const std::uint8_t* artifact_data,
-                  std::size_t artifact_size,
-                  const Envelope::OuterEnvelope& env,
-                  const AcceptedPackage& accepted_pkg,
-                  std::string_view unit_id,
-                  const AcceptConfig& config) noexcept {
+tl::expected<AcceptedUnit, UnitAcceptError> accept_unit_entry(
+    const std::uint8_t* artifact_data, std::size_t artifact_size,
+    const Envelope::OuterEnvelope& env, const AcceptedPackage& accepted_pkg,
+    std::string_view unit_id, const AcceptConfig& config) noexcept {
     // Carve the inner partition + payload partition out of the buffer.
     if (env.inner_metadata_partition.offset +
-            env.inner_metadata_partition.length > artifact_size) {
+            env.inner_metadata_partition.length >
+        artifact_size) {
         return err(UnitAcceptError::InnerPartitionMalformed);
     }
-    if (env.payload_partition.offset +
-            env.payload_partition.length > artifact_size) {
+    if (env.payload_partition.offset + env.payload_partition.length >
+        artifact_size) {
         return err(UnitAcceptError::InnerPartitionMalformed);
     }
     auto inner_or = parse_inner_partition(
         artifact_data + env.inner_metadata_partition.offset,
         env.inner_metadata_partition.length);
-    if (!inner_or) return err(UnitAcceptError::InnerPartitionMalformed);
+    if (!inner_or)
+        return err(UnitAcceptError::InnerPartitionMalformed);
     const InnerPartition& inner = *inner_or;
 
     // 1. Locate the descriptor for this unit. Both descriptor and UBR
     //    need to exist before we can start cross-checking.
-    auto desc_bytes_or = lookup_descriptor_bytes(inner.unit_descriptor_table, unit_id);
-    if (!desc_bytes_or) return err(desc_bytes_or.error());
+    auto desc_bytes_or =
+        lookup_descriptor_bytes(inner.unit_descriptor_table, unit_id);
+    if (!desc_bytes_or)
+        return err(desc_bytes_or.error());
     const std::vector<std::uint8_t>& desc_bytes = *desc_bytes_or;
 
     auto desc_or = parse_unit_descriptor_bytes(desc_bytes);
-    if (!desc_or) return err(desc_or.error());
+    if (!desc_or)
+        return err(desc_or.error());
     UnitDescriptor desc = std::move(*desc_or);
 
     // 2. Use the descriptor's binding-record id to fetch the UBR.
-    auto ubr_or = lookup_ubr(inner.unit_binding_table, desc.unit_binding_record_id);
-    if (!ubr_or) return err(ubr_or.error());
+    auto ubr_or =
+        lookup_ubr(inner.unit_binding_table, desc.unit_binding_record_id);
+    if (!ubr_or)
+        return err(ubr_or.error());
     UnitBindingRecord ubr = std::move(*ubr_or);
 
     // 3. Inclusion is already proven by construction: Stage 5 verified the
@@ -427,9 +468,9 @@ accept_unit_entry(const std::uint8_t* artifact_data,
 
     // 4. Descriptor hash: the UBR commits to the canonical descriptor
     //    bytes; re-hash and compare.
-    const auto desc_hash = domain_hash_sha256(
-        VMPilot::DomainLabels::Hash::UnitDescriptor,
-        desc_bytes.data(), desc_bytes.size());
+    const auto desc_hash =
+        domain_hash_sha256(VMPilot::DomainLabels::Hash::UnitDescriptor,
+                           desc_bytes.data(), desc_bytes.size());
     if (!hash_equals(desc_hash, ubr.unit_descriptor_hash)) {
         return err(UnitAcceptError::UnitDescriptorHashMismatch);
     }
@@ -457,12 +498,13 @@ accept_unit_entry(const std::uint8_t* artifact_data,
     // 6. Profile: hash-verify. Full profile parsing waits for Stage 8.
     auto profile_bytes_or = lookup_profile_bytes(
         inner.resolved_profile_table, desc.resolved_family_profile_id);
-    if (!profile_bytes_or) return err(profile_bytes_or.error());
+    if (!profile_bytes_or)
+        return err(profile_bytes_or.error());
     std::vector<std::uint8_t> profile_bytes = std::move(*profile_bytes_or);
 
-    const auto profile_hash = domain_hash_sha256(
-        VMPilot::DomainLabels::Hash::ResolvedFamilyProfile,
-        profile_bytes.data(), profile_bytes.size());
+    const auto profile_hash =
+        domain_hash_sha256(VMPilot::DomainLabels::Hash::ResolvedFamilyProfile,
+                           profile_bytes.data(), profile_bytes.size());
     if (!hash_equals(profile_hash, ubr.resolved_family_profile_content_hash)) {
         return err(UnitAcceptError::ResolvedProfileContentHashMismatch);
     }
@@ -503,8 +545,10 @@ accept_unit_entry(const std::uint8_t* artifact_data,
     // 7. Payload identity: single-unit packaging for now — the whole
     //    payload partition belongs to this unit. Multi-unit payload
     //    slicing is a future stage.
-    const std::size_t payload_off = static_cast<std::size_t>(env.payload_partition.offset);
-    const std::size_t payload_len = static_cast<std::size_t>(env.payload_partition.length);
+    const std::size_t payload_off =
+        static_cast<std::size_t>(env.payload_partition.offset);
+    const std::size_t payload_len =
+        static_cast<std::size_t>(env.payload_partition.length);
     if (payload_len != ubr.payload_identity.payload_size) {
         return err(UnitAcceptError::PayloadSizeMismatch);
     }
@@ -515,7 +559,8 @@ accept_unit_entry(const std::uint8_t* artifact_data,
         artifact_data + payload_off, artifact_data + payload_off + payload_len);
     const auto sha_vec = VMPilot::Crypto::SHA256(payload_copy, /*salt=*/{});
     std::array<std::uint8_t, 32> sha{};
-    if (sha_vec.size() != 32) return err(UnitAcceptError::PayloadSha256Mismatch);
+    if (sha_vec.size() != 32)
+        return err(UnitAcceptError::PayloadSha256Mismatch);
     std::memcpy(sha.data(), sha_vec.data(), 32);
     if (!hash_equals(sha, ubr.payload_identity.sha256_digest)) {
         return err(UnitAcceptError::PayloadSha256Mismatch);
@@ -545,11 +590,11 @@ accept_unit_entry(const std::uint8_t* artifact_data,
     }
 
     AcceptedUnit out;
-    out.descriptor               = std::move(desc);
-    out.ubr                      = std::move(ubr);
-    out.resolved_profile_bytes   = std::move(profile_bytes);
-    out.payload_offset           = payload_off;
-    out.payload_length           = payload_len;
+    out.descriptor = std::move(desc);
+    out.ubr = std::move(ubr);
+    out.resolved_profile_bytes = std::move(profile_bytes);
+    out.payload_offset = payload_off;
+    out.payload_length = payload_len;
     return out;
 }
 
