@@ -20,6 +20,7 @@ struct CborConsumerTraits<VMPilot::Runtime::Registry::ParseError> {
     static constexpr E wrong_hash_size               = E::WrongHashSize;
     static constexpr E bad_cbor                      = E::BadCbor;
     static constexpr E not_a_map                     = E::NotAMap;
+    static constexpr E unknown_core_field            = E::UnknownCoreField;
     static constexpr E partition_malformed           = E::PartitionMalformed;
     static constexpr E auth_kind_unsupported         = E::AuthKindUnsupported;
     static constexpr E auth_key_id_mismatch          = E::AuthKeyIdMismatch;
@@ -71,6 +72,18 @@ tl::expected<SpecializationEntry, ParseError>
 parse_entry(const Value& entry_v) noexcept {
     using namespace VMPilot::Cbor::Schema;
     if (entry_v.kind() != Value::Kind::Map) return err(ParseError::WrongFieldType);
+
+    {
+        auto unknown_or = reject_unknown_keys<ParseError>(
+            entry_v,
+            {kEnt_SpecId, kEnt_FamilyId, kEnt_PolicyId, kEnt_ProfileRevision,
+             kEnt_SemanticContractVersion, kEnt_ExecutionContractRef,
+             kEnt_RequiredPrimitivesHash, kEnt_RequiredHelpersHash,
+             kEnt_ProviderRequirementHash, kEnt_AcceptedProfileContentHash,
+             kEnt_DiagnosticVisibilityClass, kEnt_EnabledInThisRuntime,
+             kEnt_ProviderRequirementCanonicalBytes});
+        if (!unknown_or) return err(unknown_or.error());
+    }
 
     const auto schema = std::make_tuple(
         TextField<SpecializationEntry>{
@@ -151,6 +164,14 @@ parse(const std::uint8_t* data, std::size_t size) noexcept {
     auto tree_or = parse_strict(data, size);
     if (!tree_or) return err(ParseError::BadCbor);
     const Value& tree = *tree_or;
+
+    {
+        auto unknown_or = reject_unknown_keys<ParseError>(
+            tree,
+            {kHdr_Version, kHdr_RuntimeBuildId, kHdr_PackageSchemaV,
+             kHdr_RegistryEpoch, kHdr_Entries});
+        if (!unknown_or) return err(unknown_or.error());
+    }
 
     const auto header_schema = std::make_tuple(
         TextField<Registry>{kHdr_Version, &Registry::registry_version},

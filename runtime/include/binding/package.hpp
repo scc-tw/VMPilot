@@ -82,6 +82,7 @@ enum class AcceptError : std::uint8_t {
     WrongFieldType,
     WrongHashSize,                // expected 32 bytes for a *_hash field
     SignatureWrongSize,
+    UnknownCoreField,             // PBR map carries a key outside the v1 schema
 
     // Trust root sanity.
     TrustRootMalformed,           // trust_root_is_well_formed() == false

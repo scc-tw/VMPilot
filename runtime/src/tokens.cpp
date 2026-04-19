@@ -21,6 +21,9 @@ struct CborConsumerTraits<VMPilot::Runtime::Tokens::TokenError> {
     static constexpr E not_a_map                     = E::TokenMalformed;
     static constexpr E unknown_enum_value            = E::UnknownEnumValue;
     static constexpr E array_too_long                = E::WrongFieldType;
+    // Unknown map keys → TokenMalformed (doc 10 §9.1 redaction rule
+    // collapses all structural parse failures into a single surface).
+    static constexpr E unknown_core_field            = E::TokenMalformed;
     // Token layer collapses most wrapper-level failures into
     // TokenMalformed to keep the public surface narrow (doc 10 §9.1
     // redaction rule). Key-id mismatch is the one exception — it
@@ -108,6 +111,18 @@ parse_reprovision_token(const std::uint8_t* data, std::size_t size,
     if (m.kind() != Value::Kind::Map) return err(TokenError::TokenMalformed);
 
     using namespace VMPilot::Cbor::Schema;
+    {
+        auto unknown_or = reject_unknown_keys<TokenError>(
+            m,
+            {Rep::kTokenVersion, Rep::kOldEnrollmentId, Rep::kNewEnrollmentId,
+             Rep::kCustomerAccountIdHash, Rep::kOldAttestedKeyHash,
+             Rep::kNewAttestedKeyHash, Rep::kNewProviderEvidenceHash,
+             Rep::kAllowedPackageBindingRecordHash, Rep::kAllowedPolicyFloor,
+             Rep::kAllowedFamilySet, Rep::kReasonCode, Rep::kSupportCaseId,
+             Rep::kApprovalChainHash, Rep::kIssuedAt, Rep::kExpiresAt,
+             Rep::kOneTimeNonce});
+        if (!unknown_or) return err(unknown_or.error());
+    }
     const auto schema = std::make_tuple(
         TextField<ReprovisionToken>{Rep::kTokenVersion,
                                     &ReprovisionToken::token_version},
@@ -218,6 +233,15 @@ parse_migration_token(const std::uint8_t* data, std::size_t size,
     if (m.kind() != Value::Kind::Map) return err(TokenError::TokenMalformed);
 
     using namespace VMPilot::Cbor::Schema;
+    {
+        auto unknown_or = reject_unknown_keys<TokenError>(
+            m,
+            {Mig::kTokenVersion, Mig::kOldPackageBindingRecordHash,
+             Mig::kNewPackageBindingRecordHash, Mig::kCustomerAccountIdHash,
+             Mig::kAllowedImportOnce, Mig::kAllowedPolicyFloor,
+             Mig::kExpiresAt, Mig::kNonce});
+        if (!unknown_or) return err(unknown_or.error());
+    }
     const auto schema = std::make_tuple(
         TextField<MigrationToken>{Mig::kTokenVersion,
                                   &MigrationToken::token_version},

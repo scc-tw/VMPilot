@@ -21,6 +21,7 @@ struct CborConsumerTraits<VMPilot::Runtime::Binding::AcceptError> {
     static constexpr E wrong_hash_size               = E::WrongHashSize;
     static constexpr E bad_cbor                      = E::PbrCanonicalDecodeFailed;
     static constexpr E not_a_map                     = E::PbrCanonicalDecodeFailed;
+    static constexpr E unknown_core_field            = E::UnknownCoreField;
     static constexpr E partition_malformed           = E::PbrPartitionMalformed;
     static constexpr E auth_kind_unsupported         = E::AuthKindUnsupported;
     static constexpr E auth_key_id_mismatch          = E::AuthKeyIdMismatch;
@@ -125,6 +126,18 @@ accept_package(const std::uint8_t* artifact_data,
     if (!pbr_or) return err(AcceptError::PbrCanonicalDecodeFailed);
 
     using namespace VMPilot::Cbor::Schema;
+    // Reject any PBR map key outside the v1 schema before field extraction
+    // — doc 07's strict-subset ethos: unknown producer fields must not slip
+    // past a signed record.
+    {
+        auto unknown_or = reject_unknown_keys<AcceptError>(
+            *pbr_or,
+            {kField_PbrId, kField_PackageSchemaVersion, kField_CanonicalEncodingId,
+             kField_UnitBindingTableHash, kField_ResolvedProfileTableHash,
+             kField_RuntimeSpecRegistryHash, kField_ArtifactLayoutHash,
+             kField_AntiDowngradeEpoch, kField_MinimumRuntimeEpoch});
+        if (!unknown_or) return err(unknown_or.error());
+    }
     const auto schema = std::make_tuple(
         TextField<AcceptedPackage>{kField_PbrId,
                                    &AcceptedPackage::package_binding_record_id},

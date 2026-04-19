@@ -8,10 +8,11 @@ namespace VMPilot::Cbor {
 template <>
 struct CborConsumerTraits<VMPilot::Runtime::Binding::ResolvedFamilyProfileParseError> {
     using E = VMPilot::Runtime::Binding::ResolvedFamilyProfileParseError;
-    static constexpr E missing_field    = E::MissingField;
-    static constexpr E wrong_field_type = E::WrongFieldType;
-    static constexpr E bad_cbor         = E::BadCbor;
-    static constexpr E not_a_map        = E::NotAMap;
+    static constexpr E missing_field      = E::MissingField;
+    static constexpr E wrong_field_type   = E::WrongFieldType;
+    static constexpr E bad_cbor           = E::BadCbor;
+    static constexpr E not_a_map          = E::NotAMap;
+    static constexpr E unknown_core_field = E::UnknownCoreField;
 };
 }  // namespace VMPilot::Cbor
 
@@ -33,6 +34,14 @@ parse_resolved_family_profile_header(const std::uint8_t* data, std::size_t size)
     using E = ResolvedFamilyProfileParseError;
     auto tree_or = VMPilot::Cbor::parse_strict(data, size);
     if (!tree_or) return tl::make_unexpected(E::BadCbor);
+
+    {
+        auto unknown_or = reject_unknown_keys<E>(
+            *tree_or,
+            {kField_ProfileId, kField_FamilyId, kField_RequestedPolicyId,
+             kField_ProfileRevision, kField_RuntimeSpecializationId});
+        if (!unknown_or) return tl::make_unexpected(unknown_or.error());
+    }
 
     const auto schema = std::make_tuple(
         TextField<ResolvedFamilyProfileHeader>{

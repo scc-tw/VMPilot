@@ -32,6 +32,7 @@ enum class InnerPartitionError : std::uint8_t {
     NotAMap,
     MissingField,
     WrongFieldType,
+    UnknownCoreField,
 };
 
 struct InnerPartition {

@@ -16,16 +16,17 @@ namespace VMPilot::Cbor {
 template <>
 struct CborConsumerTraits<VMPilot::Runtime::Binding::UnitAcceptError> {
     using E = VMPilot::Runtime::Binding::UnitAcceptError;
-    static constexpr E missing_field    = E::MissingCoreField;
-    static constexpr E wrong_field_type = E::WrongFieldType;
-    static constexpr E wrong_hash_size  = E::WrongHashSize;
+    static constexpr E missing_field      = E::MissingCoreField;
+    static constexpr E wrong_field_type   = E::WrongFieldType;
+    static constexpr E wrong_hash_size    = E::WrongHashSize;
+    static constexpr E unknown_core_field = E::UnknownCoreField;
     // Schema-side defaults. parse_payload_identity is still imperative
     // because its caller needs to route a not-a-map failure to
     // UnitDescriptorMalformed vs UnitBindingRecordMalformed by
     // context; the constants below are the generic fall-backs
     // used only by the top-level schema calls.
-    static constexpr E bad_cbor         = E::UnitDescriptorMalformed;
-    static constexpr E not_a_map        = E::UnitDescriptorMalformed;
+    static constexpr E bad_cbor           = E::UnitDescriptorMalformed;
+    static constexpr E not_a_map          = E::UnitDescriptorMalformed;
 };
 }  // namespace VMPilot::Cbor
 
@@ -150,6 +151,15 @@ tl::expected<UnitDescriptor, UnitAcceptError> parse_unit_descriptor_bytes(
         return err(UnitAcceptError::UnitDescriptorMalformed);
     const Value& tree = *tree_or;
 
+    {
+        auto unknown_or = reject_unknown_keys<UnitAcceptError>(
+            tree,
+            {kUd_DescriptorVersion, kUd_UnitId, kUd_UnitIdentityHash,
+             kUd_FamilyId, kUd_RequestedPolicyId, kUd_ResolvedFamilyProfileId,
+             kUd_PayloadIdentity, kUd_UnitBindingRecordId});
+        if (!unknown_or) return err(unknown_or.error());
+    }
+
     const auto schema = std::make_tuple(
         TextField<UnitDescriptor>{kUd_DescriptorVersion,
                                   &UnitDescriptor::descriptor_version},
@@ -189,6 +199,14 @@ tl::expected<UnitBindingAuth, UnitAcceptError> parse_binding_auth(
     using namespace VMPilot::Cbor::Schema;
     if (auth_v.kind() != Value::Kind::Map)
         return err(UnitAcceptError::UnitBindingAuthMalformed);
+
+    {
+        auto unknown_or = reject_unknown_keys<UnitAcceptError>(
+            auth_v,
+            {kAuth_Kind, kAuth_UnitBindingTableHash,
+             kAuth_InclusionIndex, kAuth_RecordHash});
+        if (!unknown_or) return err(UnitAcceptError::UnitBindingAuthMalformed);
+    }
 
     const auto schema = std::make_tuple(
         TextField<UnitBindingAuth>{kAuth_Kind, &UnitBindingAuth::kind},
@@ -236,6 +254,17 @@ tl::expected<UnitBindingRecord, UnitAcceptError> parse_unit_binding_record(
     if (!inner_or)
         return err(UnitAcceptError::UnitBindingRecordMalformed);
     const Value& ubr_v = *inner_or;
+
+    if (ubr_v.kind() == Value::Kind::Map) {
+        auto unknown_or = reject_unknown_keys<UnitAcceptError>(
+            ubr_v,
+            {kUbr_UnitBindingRecordId, kUbr_UnitIdentityHash,
+             kUbr_UnitDescriptorHash, kUbr_FamilyId, kUbr_RequestedPolicyId,
+             kUbr_ResolvedFamilyProfileId,
+             kUbr_ResolvedFamilyProfileContentHash,
+             kUbr_PayloadIdentity, kUbr_AntiDowngradeEpoch});
+        if (!unknown_or) return err(UnitAcceptError::UnitBindingRecordMalformed);
+    }
 
     const auto schema = std::make_tuple(
         TextField<UnitBindingRecord>{kUbr_UnitBindingRecordId,

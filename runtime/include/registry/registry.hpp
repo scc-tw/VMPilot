@@ -93,6 +93,7 @@ enum class ParseError : std::uint8_t {
     DuplicateEntry,           // two entries share the same lookup tuple
     UnknownFamilyId,
     UnknownPolicyId,
+    UnknownCoreField,
 
     // Partition wrapper (see parse_partition below).
     PartitionMalformed,

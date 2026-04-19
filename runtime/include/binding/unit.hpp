@@ -94,6 +94,7 @@ enum class UnitAcceptError : std::uint8_t {
     WrongHashSize,
     UnknownFamilyId,
     UnknownPolicyId,
+    UnknownCoreField,
 
     // Whole-unit binding (doc 06 §7.2).
     UnitBindingRecordRecordHashMismatch,  // binding_auth.record_hash !=

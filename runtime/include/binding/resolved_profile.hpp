@@ -39,6 +39,7 @@ enum class ResolvedFamilyProfileParseError : std::uint8_t {
     WrongFieldType,
     UnknownFamilyId,
     UnknownPolicyId,
+    UnknownCoreField,
 };
 
 [[nodiscard]] tl::expected<ResolvedFamilyProfileHeader, ResolvedFamilyProfileParseError>

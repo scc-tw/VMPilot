@@ -105,6 +105,7 @@ enum class TokenError : std::uint8_t {
     WrongHashSize,
     SignatureWrongSize,
     UnknownEnumValue,
+    UnknownCoreField,
 
     // Cross-field.
     TokenVersionUnsupported,
