@@ -276,10 +276,38 @@ private:
     std::string instance_pseudonym_{"local-embedded-default"};
 };
 
-// TrustProvider singleton used by the runtime dispatch path. Tests may
-// swap in an alternate provider via install_provider_for_testing().
+// TrustProvider singleton used by the runtime dispatch path. The
+// backing pointer is std::atomic so concurrent callers (multi-threaded
+// tests, future multi-worker runtime) see a consistent provider and
+// can't tear the pointer while another thread is mid-install.
 TrustProvider& runtime_provider() noexcept;
-void install_provider_for_testing(TrustProvider* provider) noexcept;
+
+// Swap in an alternate provider (tests only). Returns the previous
+// installed pointer so tests can restore state on teardown. A
+// nullptr argument restores the default LocalEmbeddedProvider.
+TrustProvider* install_provider_for_testing(TrustProvider* provider) noexcept;
+
+// RAII scope guard that installs `provider` on construction and
+// restores the previous installed pointer on destruction. Preferred
+// over manual install_provider_for_testing() calls because it makes
+// tests exception-safe and composable.
+class ScopedProviderOverride {
+public:
+    [[nodiscard]] explicit ScopedProviderOverride(TrustProvider* provider) noexcept
+        : previous_(install_provider_for_testing(provider)) {}
+
+    ~ScopedProviderOverride() noexcept {
+        (void)install_provider_for_testing(previous_);
+    }
+
+    ScopedProviderOverride(const ScopedProviderOverride&) = delete;
+    ScopedProviderOverride& operator=(const ScopedProviderOverride&) = delete;
+    ScopedProviderOverride(ScopedProviderOverride&&) = delete;
+    ScopedProviderOverride& operator=(ScopedProviderOverride&&) = delete;
+
+private:
+    TrustProvider* previous_;
+};
 
 }  // namespace VMPilot::Runtime::Provider
 

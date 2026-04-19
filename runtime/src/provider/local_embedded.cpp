@@ -1,6 +1,7 @@
 #include "provider.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 
 #include "cbor/strict.hpp"
@@ -223,7 +224,10 @@ bool evidence_binds_to_context(const ProviderEvidence& ev,
            ev.policy_requirement_hash == ctx.policy_requirement_hash;
 }
 
-TrustProvider* g_installed_provider = nullptr;
+// std::atomic so parallel test runners (and any future multi-worker
+// runtime) observe a consistent provider pointer and cannot tear
+// while another thread is mid-install.
+std::atomic<TrustProvider*> g_installed_provider{nullptr};
 
 LocalEmbeddedProvider& default_provider() noexcept {
     static LocalEmbeddedProvider instance;
@@ -526,12 +530,13 @@ LocalEmbeddedProvider::bind_artifact(
 // ─── Singleton access ───────────────────────────────────────────────────
 
 TrustProvider& runtime_provider() noexcept {
-    if (g_installed_provider != nullptr) return *g_installed_provider;
+    auto* p = g_installed_provider.load(std::memory_order_acquire);
+    if (p != nullptr) return *p;
     return default_provider();
 }
 
-void install_provider_for_testing(TrustProvider* provider) noexcept {
-    g_installed_provider = provider;
+TrustProvider* install_provider_for_testing(TrustProvider* provider) noexcept {
+    return g_installed_provider.exchange(provider, std::memory_order_acq_rel);
 }
 
 }  // namespace VMPilot::Runtime::Provider
