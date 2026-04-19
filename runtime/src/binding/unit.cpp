@@ -13,7 +13,7 @@
 
 namespace VMPilot::Cbor {
 template <>
-struct RequireErrors<VMPilot::Runtime::Binding::UnitAcceptError> {
+struct CborConsumerTraits<VMPilot::Runtime::Binding::UnitAcceptError> {
     using E = VMPilot::Runtime::Binding::UnitAcceptError;
     static constexpr E missing_field = E::MissingCoreField;
     static constexpr E wrong_field_type = E::WrongFieldType;

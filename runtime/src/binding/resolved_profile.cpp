@@ -5,7 +5,7 @@
 
 namespace VMPilot::Cbor {
 template <>
-struct RequireErrors<VMPilot::Runtime::Binding::ResolvedFamilyProfileParseError> {
+struct CborConsumerTraits<VMPilot::Runtime::Binding::ResolvedFamilyProfileParseError> {
     using E = VMPilot::Runtime::Binding::ResolvedFamilyProfileParseError;
     static constexpr E missing_field    = E::MissingField;
     static constexpr E wrong_field_type = E::WrongFieldType;

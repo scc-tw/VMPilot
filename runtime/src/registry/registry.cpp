@@ -12,18 +12,11 @@
 
 namespace VMPilot::Cbor {
 template <>
-struct RequireErrors<VMPilot::Runtime::Registry::ParseError> {
+struct CborConsumerTraits<VMPilot::Runtime::Registry::ParseError> {
     using E = VMPilot::Runtime::Registry::ParseError;
-    static constexpr E missing_field    = E::MissingField;
-    static constexpr E wrong_field_type = E::WrongFieldType;
-    static constexpr E wrong_hash_size  = E::WrongHashSize;
-};
-}  // namespace VMPilot::Cbor
-
-namespace VMPilot::Runtime::Binding {
-template <>
-struct SignedPartitionErrors<VMPilot::Runtime::Registry::ParseError> {
-    using E = VMPilot::Runtime::Registry::ParseError;
+    static constexpr E missing_field                 = E::MissingField;
+    static constexpr E wrong_field_type              = E::WrongFieldType;
+    static constexpr E wrong_hash_size               = E::WrongHashSize;
     static constexpr E partition_malformed           = E::PartitionMalformed;
     static constexpr E auth_kind_unsupported         = E::AuthKindUnsupported;
     static constexpr E auth_key_id_mismatch          = E::AuthKeyIdMismatch;
@@ -32,9 +25,8 @@ struct SignedPartitionErrors<VMPilot::Runtime::Registry::ParseError> {
     static constexpr E signature_wrong_size          = E::SignatureWrongSize;
     static constexpr E signature_invalid             = E::SignatureInvalid;
     static constexpr E missing_core_field            = E::MissingField;
-    static constexpr E wrong_field_type              = E::WrongFieldType;
 };
-}  // namespace VMPilot::Runtime::Binding
+}  // namespace VMPilot::Cbor
 
 namespace VMPilot::Runtime::Registry {
 

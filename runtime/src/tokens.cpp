@@ -11,18 +11,11 @@
 
 namespace VMPilot::Cbor {
 template <>
-struct RequireErrors<VMPilot::Runtime::Tokens::TokenError> {
+struct CborConsumerTraits<VMPilot::Runtime::Tokens::TokenError> {
     using E = VMPilot::Runtime::Tokens::TokenError;
-    static constexpr E missing_field    = E::MissingCoreField;
-    static constexpr E wrong_field_type = E::WrongFieldType;
-    static constexpr E wrong_hash_size  = E::WrongHashSize;
-};
-}  // namespace VMPilot::Cbor
-
-namespace VMPilot::Runtime::Binding {
-template <>
-struct SignedPartitionErrors<VMPilot::Runtime::Tokens::TokenError> {
-    using E = VMPilot::Runtime::Tokens::TokenError;
+    static constexpr E missing_field                 = E::MissingCoreField;
+    static constexpr E wrong_field_type              = E::WrongFieldType;
+    static constexpr E wrong_hash_size               = E::WrongHashSize;
     // Token layer collapses most wrapper-level failures into
     // TokenMalformed to keep the public surface narrow (doc 10 §9.1
     // redaction rule). Key-id mismatch is the one exception — it
@@ -35,9 +28,8 @@ struct SignedPartitionErrors<VMPilot::Runtime::Tokens::TokenError> {
     static constexpr E signature_wrong_size          = E::SignatureWrongSize;
     static constexpr E signature_invalid             = E::SignatureInvalid;
     static constexpr E missing_core_field            = E::MissingCoreField;
-    static constexpr E wrong_field_type              = E::WrongFieldType;
 };
-}  // namespace VMPilot::Runtime::Binding
+}  // namespace VMPilot::Cbor
 
 namespace VMPilot::Runtime::Tokens {
 

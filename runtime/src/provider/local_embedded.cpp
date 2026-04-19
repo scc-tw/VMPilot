@@ -11,25 +11,17 @@
 
 namespace VMPilot::Cbor {
 template <>
-struct RequireErrors<VMPilot::Runtime::Provider::PolicyRequirementParseError> {
+struct CborConsumerTraits<VMPilot::Runtime::Provider::PolicyRequirementParseError> {
     using E = VMPilot::Runtime::Provider::PolicyRequirementParseError;
-    static constexpr E missing_field    = E::MissingCoreField;
-    static constexpr E wrong_field_type = E::WrongFieldType;
-};
-namespace Schema {
-template <>
-struct SchemaErrors<VMPilot::Runtime::Provider::PolicyRequirementParseError> {
-    using E = VMPilot::Runtime::Provider::PolicyRequirementParseError;
-    static constexpr E bad_cbor             = E::BadCbor;
-    static constexpr E not_a_map            = E::NotAMap;
     static constexpr E missing_field        = E::MissingCoreField;
     static constexpr E wrong_field_type     = E::WrongFieldType;
+    static constexpr E bad_cbor             = E::BadCbor;
+    static constexpr E not_a_map            = E::NotAMap;
     static constexpr E unknown_core_field   = E::UnknownCoreField;
     static constexpr E unknown_enum_value   = E::UnknownEnumValue;
     static constexpr E array_too_long       = E::ArrayTooLong;
     static constexpr E unsupported_version  = E::UnsupportedRequirementVersion;
 };
-}  // namespace Schema
 }  // namespace VMPilot::Cbor
 
 namespace VMPilot::Runtime::Provider {

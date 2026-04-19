@@ -6,7 +6,7 @@
 
 namespace VMPilot::Cbor {
 template <>
-struct RequireErrors<VMPilot::Runtime::EH::ContractParseError> {
+struct CborConsumerTraits<VMPilot::Runtime::EH::ContractParseError> {
     using E = VMPilot::Runtime::EH::ContractParseError;
     static constexpr E missing_field    = E::MissingField;
     static constexpr E wrong_field_type = E::WrongFieldType;
