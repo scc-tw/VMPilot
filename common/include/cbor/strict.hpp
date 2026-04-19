@@ -271,4 +271,40 @@ require_uint_bool(const Value& m, std::uint64_t key) noexcept {
 
 }  // namespace VMPilot::Cbor
 
+// ─── TRY / TRY_ASSIGN propagation macros ─────────────────────────────────
+//
+// The runtime parser code is dominated by this idiom:
+//
+//     auto x_or = some_expected_returning(...);
+//     if (!x_or) return tl::make_unexpected(x_or.error());
+//     auto x = std::move(*x_or);
+//
+// TRY_ASSIGN collapses the three lines into one, binding `var` to the
+// unwrapped success value and short-circuiting the enclosing function
+// on error. `var` becomes a new local named `var`; the intermediate
+// `var##__expected` is a concrete, debugger-friendly name.
+//
+// TRY is the void-returning sibling (for paths that only care about
+// the error); use it when the expected<void, E> is the whole point.
+//
+// These macros deliberately stay out of `namespace VMPilot::Cbor` so
+// they can be used at any call site regardless of the parsed type's
+// namespace. They are opt-in — every existing three-line pattern that
+// doesn't want to switch compiles unchanged.
+
+#define VMPILOT_TRY_ASSIGN(var, expr)                                    \
+    auto var##__expected = (expr);                                       \
+    if (!var##__expected) {                                              \
+        return ::tl::make_unexpected(var##__expected.error());           \
+    }                                                                    \
+    auto var = std::move(*var##__expected)
+
+#define VMPILOT_TRY(expr)                                                \
+    do {                                                                 \
+        auto __expected_##__LINE__ = (expr);                             \
+        if (!__expected_##__LINE__) {                                    \
+            return ::tl::make_unexpected(__expected_##__LINE__.error()); \
+        }                                                                \
+    } while (0)
+
 #endif  // VMPILOT_COMMON_CBOR_STRICT_HPP

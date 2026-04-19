@@ -153,40 +153,33 @@ parse_unit_descriptor_bytes(const std::vector<std::uint8_t>& bytes) noexcept {
     const Value& tree = *tree_or;
     if (tree.kind() != Value::Kind::Map) return err(UnitAcceptError::UnitDescriptorMalformed);
 
-auto ver = require_text(tree, kUd_DescriptorVersion);
-    auto uid = require_text(tree, kUd_UnitId);
-    auto uih = require_hash32(tree, kUd_UnitIdentityHash);
-    auto fam = require_text(tree, kUd_FamilyId);
-    auto pol = require_text(tree, kUd_RequestedPolicyId);
-    auto prof = require_text(tree, kUd_ResolvedFamilyProfileId);
-    auto ubr = require_text(tree, kUd_UnitBindingRecordId);
-    if (!ver) return err(ver.error());
-    if (!uid) return err(uid.error());
-    if (!uih) return err(uih.error());
-    if (!fam) return err(fam.error());
-    if (!pol) return err(pol.error());
-    if (!prof) return err(prof.error());
-    if (!ubr) return err(ubr.error());
+    VMPILOT_TRY_ASSIGN(ver,  require_text(tree, kUd_DescriptorVersion));
+    VMPILOT_TRY_ASSIGN(uid,  require_text(tree, kUd_UnitId));
+    VMPILOT_TRY_ASSIGN(uih,  require_hash32(tree, kUd_UnitIdentityHash));
+    VMPILOT_TRY_ASSIGN(fam,  require_text(tree, kUd_FamilyId));
+    VMPILOT_TRY_ASSIGN(pol,  require_text(tree, kUd_RequestedPolicyId));
+    VMPILOT_TRY_ASSIGN(prof, require_text(tree, kUd_ResolvedFamilyProfileId));
+    VMPILOT_TRY_ASSIGN(ubr,  require_text(tree, kUd_UnitBindingRecordId));
 
-    auto fam_enum = VMPilot::DomainLabels::parse_family_id(*fam);
+    auto fam_enum = VMPilot::DomainLabels::parse_family_id(fam);
     if (!fam_enum) return err(UnitAcceptError::UnknownFamilyId);
-    auto pol_enum = VMPilot::DomainLabels::parse_policy_id(*pol);
+    auto pol_enum = VMPilot::DomainLabels::parse_policy_id(pol);
     if (!pol_enum) return err(UnitAcceptError::UnknownPolicyId);
 
     const Value* pid_v = tree.find_by_uint_key(kUd_PayloadIdentity);
     if (pid_v == nullptr) return err(UnitAcceptError::MissingCoreField);
-    auto pid = parse_payload_identity(*pid_v, UnitAcceptError::UnitDescriptorMalformed);
-    if (!pid) return err(pid.error());
+    VMPILOT_TRY_ASSIGN(pid,
+        parse_payload_identity(*pid_v, UnitAcceptError::UnitDescriptorMalformed));
 
     UnitDescriptor out;
-    out.descriptor_version              = std::move(*ver);
-    out.unit_id                          = std::move(*uid);
-    out.unit_identity_hash               = *uih;
+    out.descriptor_version              = std::string(ver);
+    out.unit_id                          = std::string(uid);
+    out.unit_identity_hash               = uih;
     out.family_id                        = *fam_enum;
     out.requested_policy_id              = *pol_enum;
-    out.resolved_family_profile_id       = std::move(*prof);
-    out.payload_identity                 = *pid;
-    out.unit_binding_record_id           = std::move(*ubr);
+    out.resolved_family_profile_id       = std::string(prof);
+    out.payload_identity                 = pid;
+    out.unit_binding_record_id           = std::string(ubr);
     return out;
 }
 
