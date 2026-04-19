@@ -12,6 +12,14 @@
 #include <fstream>
 #include <string>
 
+#if defined(_WIN32)
+#include <process.h>  // _getpid
+#define VMPILOT_GETPID() ::_getpid()
+#else
+#include <unistd.h>   // getpid
+#define VMPILOT_GETPID() ::getpid()
+#endif
+
 #include "epoch_store.hpp"
 
 namespace {
@@ -29,7 +37,7 @@ public:
         static int counter = 0;
         ++counter;
         path_ = (fs::temp_directory_path() /
-                 ("vmpilot_stage12_" + std::to_string(::_getpid()) + "_" +
+                 ("vmpilot_stage12_" + std::to_string(VMPILOT_GETPID()) + "_" +
                   std::to_string(counter) + "_" + suffix))
                     .string();
         std::error_code ec;
