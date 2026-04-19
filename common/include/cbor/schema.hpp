@@ -104,20 +104,23 @@ struct EnumTextArrayField {
 
 // ─── Error-mapping trait ────────────────────────────────────────────────
 //
-// The parser needs to know which error-enum member to emit for each
-// class of failure. Consumers specialize this next to their error enum.
-
-template <typename E>
-struct SchemaErrors;
-// Expected members (per use — specializations may omit unused ones):
+// Schema-side error constants now live in the shared
+// CborConsumerTraits<E> specialisation alongside the require_* and
+// signed_partition constants. SchemaErrors<E> is kept as a pass-
+// through type alias so existing call sites stay stable.
+//
+// Schema-specific members the consumer should declare:
 //   static constexpr E bad_cbor;
 //   static constexpr E not_a_map;
-//   static constexpr E missing_field;
-//   static constexpr E wrong_field_type;
+//   static constexpr E missing_field;            (shared with require_*)
+//   static constexpr E wrong_field_type;         (shared with require_*)
 //   static constexpr E unknown_core_field;
 //   static constexpr E unknown_enum_value;
 //   static constexpr E array_too_long;
 //   static constexpr E unsupported_version;
+
+template <typename E>
+using SchemaErrors = VMPilot::Cbor::CborConsumerTraits<E>;
 
 // ─── Field extractors ───────────────────────────────────────────────────
 

@@ -142,24 +142,28 @@ domain_hash_sha256(std::string_view domain_label,
 // require_text / require_uint / require_hash / require_bool / require_bytes
 // with the same body parameterised only by the consumer's error enum.
 // Collapse them into generic templates whose error mapping is declared
-// once per consumer by specializing `RequireErrors<E>`.
+// once per consumer by specializing `CborConsumerTraits<E>`.
 //
-// Usage (consumer side):
+// Usage (consumer side): each error enum specialises
+// `CborConsumerTraits<E>` with whichever rejection-class constants
+// this consumer actually needs — `missing_field` / `wrong_field_type`
+// for require_*, the SignedPartition-family constants if the enum
+// routes through signed_partition.hpp, and the schema-family
+// constants if it routes through schema.hpp. Unused fields can be
+// omitted; only sites that actually reference a missing field fail
+// at instantiation.
 //
-//   namespace VMPilot::Cbor {
-//   template <> struct RequireErrors<MyError> {
-//       static constexpr MyError missing_field    = MyError::MissingField;
-//       static constexpr MyError wrong_field_type = MyError::WrongFieldType;
-//       static constexpr MyError wrong_hash_size  = MyError::WrongHashSize;
-//   };
-//   }
-//
-// Then call `require_text<MyError>(map, key)` etc. No error enum has to
-// ship every constant — fields that a particular consumer never calls
-// don't need to exist in the specialization.
+// The old one-concern-per-trait names (`RequireErrors`,
+// `SignedPartitionErrors`, `SchemaErrors`) are now type aliases of
+// `CborConsumerTraits` so existing specialisations keep compiling
+// during migration; new code should target CborConsumerTraits
+// directly.
 
 template <typename E>
-struct RequireErrors;
+struct CborConsumerTraits;
+
+template <typename E>
+using RequireErrors = CborConsumerTraits<E>;
 
 namespace detail {
 

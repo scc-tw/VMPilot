@@ -4,7 +4,7 @@
 
 namespace VMPilot::Cbor {
 template <>
-struct RequireErrors<VMPilot::Runtime::Binding::InnerPartitionError> {
+struct CborConsumerTraits<VMPilot::Runtime::Binding::InnerPartitionError> {
     using E = VMPilot::Runtime::Binding::InnerPartitionError;
     static constexpr E missing_field    = E::MissingField;
     static constexpr E wrong_field_type = E::WrongFieldType;

@@ -49,11 +49,12 @@ struct SignedPartitionView {
     const std::vector<std::uint8_t>* signature_bytes;
 };
 
-// Consumer specializes this to map the shared rejection classes to
-// its own error enum. Every consumer has a matching enumerator for
-// these classes today (PBR/UBR/Registry/Tokens all carry them).
+// Alias for CborConsumerTraits<E>; consumers declare all of their
+// rejection-class constants (require_*, signed_partition,
+// schema) in one specialisation now. Kept as a pass-through type
+// alias so existing specialisations and call sites stay stable.
 template <typename E>
-struct SignedPartitionErrors;
+using SignedPartitionErrors = VMPilot::Cbor::CborConsumerTraits<E>;
 
 namespace detail {
 

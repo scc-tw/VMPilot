@@ -37,3 +37,11 @@ add_compile_options(
     $<$<COMPILE_LANGUAGE:C,CXX>:/wd4324>
     $<$<COMPILE_LANGUAGE:C,CXX>:/wd4146>
 )
+
+# Warning-parity with clang/gcc -Werror=unused-function.
+# MSVC's default /W4 places C4505 (unreferenced local function removed) at
+# the W4 warning level but does NOT elevate it to an error under /WX unless
+# we explicitly promote it. Without this, dead helpers land on dev-win,
+# compile clean, and break CI only when clang-18 / gcc-14 / apple-clang
+# see them with -Werror=unused-function enabled. Promoting closes the gap.
+add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/we4505>)
