@@ -1,9 +1,13 @@
 #ifndef VMPILOT_COMMON_VM_FAMILY_POLICY_HPP
 #define VMPILOT_COMMON_VM_FAMILY_POLICY_HPP
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string_view>
+#include <utility>
+
+#include "vm/enum_text.hpp"
 
 // Spec-faithful enumerations for the two customer-facing vocabularies.
 //
@@ -28,36 +32,53 @@ enum class PolicyId : std::uint8_t {
     HighSec  = 3,
 };
 
-constexpr std::string_view to_text(FamilyId f) noexcept {
-    switch (f) {
-        case FamilyId::F1: return "f1";
-        case FamilyId::F2: return "f2";
-        case FamilyId::F3: return "f3";
-    }
-    return {};  // unreachable with valid enum
-}
+}  // namespace VMPilot::DomainLabels
 
-constexpr std::string_view to_text(PolicyId p) noexcept {
-    switch (p) {
-        case PolicyId::Debug:    return "debug";
-        case PolicyId::Standard: return "standard";
-        case PolicyId::HighSec:  return "highsec";
-    }
-    return {};
-}
+// Trait specializations — single source of truth for enum ↔ text.
+namespace VMPilot {
 
-constexpr std::optional<FamilyId> parse_family_id(std::string_view s) noexcept {
-    if (s == "f1") return FamilyId::F1;
-    if (s == "f2") return FamilyId::F2;
-    if (s == "f3") return FamilyId::F3;
-    return std::nullopt;
-}
+template <>
+struct EnumTextTraits<DomainLabels::FamilyId> {
+    static constexpr std::array<
+        std::pair<DomainLabels::FamilyId, std::string_view>, 3>
+        entries{{
+            {DomainLabels::FamilyId::F1, "f1"},
+            {DomainLabels::FamilyId::F2, "f2"},
+            {DomainLabels::FamilyId::F3, "f3"},
+        }};
+};
 
-constexpr std::optional<PolicyId> parse_policy_id(std::string_view s) noexcept {
-    if (s == "debug")    return PolicyId::Debug;
-    if (s == "standard") return PolicyId::Standard;
-    if (s == "highsec")  return PolicyId::HighSec;
-    return std::nullopt;
+template <>
+struct EnumTextTraits<DomainLabels::PolicyId> {
+    static constexpr std::array<
+        std::pair<DomainLabels::PolicyId, std::string_view>, 3>
+        entries{{
+            {DomainLabels::PolicyId::Debug,    "debug"},
+            {DomainLabels::PolicyId::Standard, "standard"},
+            {DomainLabels::PolicyId::HighSec,  "highsec"},
+        }};
+};
+
+}  // namespace VMPilot
+
+namespace VMPilot::DomainLabels {
+
+// Backwards-compat overloads — kept so the 40+ existing call sites
+// don't have to change. They delegate into the generic trait-driven
+// helpers; adding a new enumerator only requires editing the trait.
+[[nodiscard]] constexpr std::string_view to_text(FamilyId f) noexcept {
+    return VMPilot::enum_to_text(f);
+}
+[[nodiscard]] constexpr std::string_view to_text(PolicyId p) noexcept {
+    return VMPilot::enum_to_text(p);
+}
+[[nodiscard]] constexpr std::optional<FamilyId>
+parse_family_id(std::string_view s) noexcept {
+    return VMPilot::enum_from_text<FamilyId>(s);
+}
+[[nodiscard]] constexpr std::optional<PolicyId>
+parse_policy_id(std::string_view s) noexcept {
+    return VMPilot::enum_from_text<PolicyId>(s);
 }
 
 }  // namespace VMPilot::DomainLabels

@@ -5,10 +5,12 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <tl/expected.hpp>
 
+#include "vm/enum_text.hpp"
 #include "vm/family_policy.hpp"
 
 // TrustProvider contract (doc 14 §3–§7). A TrustProvider is the
@@ -36,21 +38,10 @@ enum class ProviderClass : std::uint8_t {
     ExternalKms,
 };
 
-// Canonical on-wire text for ProviderClass. Matches the strings the
-// strict-CBOR parser accepts in PolicyRequirement's allowed_provider_
-// classes field; any other form (abbreviation, dash separator, camel
-// case) is rejected at parse time.
-constexpr std::string_view to_text(ProviderClass c) noexcept {
-    switch (c) {
-        case ProviderClass::LocalEmbedded:    return "local_embedded";
-        case ProviderClass::LocalTpm:         return "local_tpm";
-        case ProviderClass::LocalTee:         return "local_tee";
-        case ProviderClass::CloudAttestedVm:  return "cloud_attested_vm";
-        case ProviderClass::CloudHsm:         return "cloud_hsm";
-        case ProviderClass::ExternalKms:      return "external_kms";
-    }
-    return {};
-}
+// Canonical on-wire text for ProviderClass — delegates into
+// VMPilot::EnumTextTraits<ProviderClass> (specialization lives below
+// outside the nested namespace so it binds in ::VMPilot scope).
+[[nodiscard]] constexpr std::string_view to_text(ProviderClass c) noexcept;
 
 enum class CloneResistanceClass : std::uint8_t {
     None = 1,
@@ -76,19 +67,8 @@ enum class RecoveryModel : std::uint8_t {
     Quorum,
 };
 
-// Canonical on-wire text for RecoveryModel. Used by PolicyRequirement
-// wire encoding only for reference; the actual encoding on the wire
-// is the enum's integer value (field 8 is uint, not text). Kept
-// alongside the other to_text helpers for symmetry so fixtures
-// constructing canonical bytes have a single source of truth.
-constexpr std::string_view to_text(RecoveryModel m) noexcept {
-    switch (m) {
-        case RecoveryModel::SelfService:        return "self_service";
-        case RecoveryModel::SignedReprovision:  return "signed_reprovision";
-        case RecoveryModel::Quorum:             return "quorum";
-    }
-    return {};
-}
+// Canonical on-wire text for RecoveryModel — symmetric with ProviderClass.
+[[nodiscard]] constexpr std::string_view to_text(RecoveryModel m) noexcept;
 
 enum class PrivacyModel : std::uint8_t {
     Pairwise = 1,
@@ -300,6 +280,48 @@ private:
 // swap in an alternate provider via install_provider_for_testing().
 TrustProvider& runtime_provider() noexcept;
 void install_provider_for_testing(TrustProvider* provider) noexcept;
+
+}  // namespace VMPilot::Runtime::Provider
+
+// ─── Trait specializations + delegating to_text() definitions ──────────
+
+namespace VMPilot {
+
+template <>
+struct EnumTextTraits<VMPilot::Runtime::Provider::ProviderClass> {
+    using E = VMPilot::Runtime::Provider::ProviderClass;
+    static constexpr std::array<std::pair<E, std::string_view>, 6>
+        entries{{
+            {E::LocalEmbedded,    "local_embedded"},
+            {E::LocalTpm,         "local_tpm"},
+            {E::LocalTee,         "local_tee"},
+            {E::CloudAttestedVm,  "cloud_attested_vm"},
+            {E::CloudHsm,         "cloud_hsm"},
+            {E::ExternalKms,      "external_kms"},
+        }};
+};
+
+template <>
+struct EnumTextTraits<VMPilot::Runtime::Provider::RecoveryModel> {
+    using E = VMPilot::Runtime::Provider::RecoveryModel;
+    static constexpr std::array<std::pair<E, std::string_view>, 3>
+        entries{{
+            {E::SelfService,        "self_service"},
+            {E::SignedReprovision,  "signed_reprovision"},
+            {E::Quorum,             "quorum"},
+        }};
+};
+
+}  // namespace VMPilot
+
+namespace VMPilot::Runtime::Provider {
+
+constexpr std::string_view to_text(ProviderClass c) noexcept {
+    return VMPilot::enum_to_text(c);
+}
+constexpr std::string_view to_text(RecoveryModel m) noexcept {
+    return VMPilot::enum_to_text(m);
+}
 
 }  // namespace VMPilot::Runtime::Provider
 

@@ -1,16 +1,19 @@
 #ifndef VMPILOT_RUNTIME_EH_GUARD_HPP
 #define VMPILOT_RUNTIME_EH_GUARD_HPP
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <tl/expected.hpp>
 
 #include "diagnostic.hpp"
 #include "platform_call.hpp"
+#include "vm/enum_text.hpp"
 #include "vm/family_policy.hpp"
 
 namespace VMPilot::Runtime::EH {
@@ -35,40 +38,70 @@ enum class ReservedTableStatus : std::uint8_t {
     ProfileSpecific,
 };
 
-// Canonical on-wire text for each enum. Matches the strings the
-// strict-CBOR parser in eh_guard.cpp accepts. Kept here alongside
-// the enum definitions so fixtures and runtime share one source of
-// truth — adding a new enumerator in one place without updating the
-// other is now a compile-time visible gap.
-constexpr std::string_view to_text(ExecutableEhStatus s) noexcept {
-    switch (s) {
-        case ExecutableEhStatus::ReservedDisabledV1: return "reserved_disabled_v1";
-        case ExecutableEhStatus::ExecutableV1_1:     return "executable_v1_1";
-    }
-    return {};
+}  // namespace VMPilot::Runtime::EH
+
+// Trait specializations — canonical on-wire text for each EH enum.
+// Single source of truth; the to_text overloads below just delegate.
+namespace VMPilot {
+
+template <>
+struct EnumTextTraits<VMPilot::Runtime::EH::ExecutableEhStatus> {
+    using E = VMPilot::Runtime::EH::ExecutableEhStatus;
+    static constexpr std::array<std::pair<E, std::string_view>, 2>
+        entries{{
+            {E::ReservedDisabledV1, "reserved_disabled_v1"},
+            {E::ExecutableV1_1,     "executable_v1_1"},
+        }};
+};
+
+template <>
+struct EnumTextTraits<VMPilot::Runtime::EH::CrossProtectedFrameUnwind> {
+    using E = VMPilot::Runtime::EH::CrossProtectedFrameUnwind;
+    static constexpr std::array<std::pair<E, std::string_view>, 2>
+        entries{{
+            {E::Forbidden,          "forbidden"},
+            {E::PermittedByProfile, "permitted_by_profile"},
+        }};
+};
+
+template <>
+struct EnumTextTraits<VMPilot::Runtime::EH::NativeBoundaryUnwindBehavior> {
+    using E = VMPilot::Runtime::EH::NativeBoundaryUnwindBehavior;
+    static constexpr std::array<std::pair<E, std::string_view>, 2>
+        entries{{
+            {E::TranslateToTrapOrFailClosed, "translate_to_trap_or_fail_closed"},
+            {E::ProfileUpgraded,             "profile-upgraded"},
+        }};
+};
+
+template <>
+struct EnumTextTraits<VMPilot::Runtime::EH::ReservedTableStatus> {
+    using E = VMPilot::Runtime::EH::ReservedTableStatus;
+    static constexpr std::array<std::pair<E, std::string_view>, 2>
+        entries{{
+            {E::ReservedEmpty,    "reserved_empty"},
+            {E::ProfileSpecific,  "profile-specific"},
+        }};
+};
+
+}  // namespace VMPilot
+
+namespace VMPilot::Runtime::EH {
+
+// Canonical on-wire text — delegates into VMPilot::EnumTextTraits
+// specializations above; adding a new enumerator only requires
+// editing the trait's entries array.
+[[nodiscard]] constexpr std::string_view to_text(ExecutableEhStatus s) noexcept {
+    return VMPilot::enum_to_text(s);
 }
-constexpr std::string_view to_text(CrossProtectedFrameUnwind u) noexcept {
-    switch (u) {
-        case CrossProtectedFrameUnwind::Forbidden:           return "forbidden";
-        case CrossProtectedFrameUnwind::PermittedByProfile:  return "permitted_by_profile";
-    }
-    return {};
+[[nodiscard]] constexpr std::string_view to_text(CrossProtectedFrameUnwind u) noexcept {
+    return VMPilot::enum_to_text(u);
 }
-constexpr std::string_view to_text(NativeBoundaryUnwindBehavior b) noexcept {
-    switch (b) {
-        case NativeBoundaryUnwindBehavior::TranslateToTrapOrFailClosed:
-            return "translate_to_trap_or_fail_closed";
-        case NativeBoundaryUnwindBehavior::ProfileUpgraded:
-            return "profile-upgraded";
-    }
-    return {};
+[[nodiscard]] constexpr std::string_view to_text(NativeBoundaryUnwindBehavior b) noexcept {
+    return VMPilot::enum_to_text(b);
 }
-constexpr std::string_view to_text(ReservedTableStatus s) noexcept {
-    switch (s) {
-        case ReservedTableStatus::ReservedEmpty:    return "reserved_empty";
-        case ReservedTableStatus::ProfileSpecific:  return "profile-specific";
-    }
-    return {};
+[[nodiscard]] constexpr std::string_view to_text(ReservedTableStatus s) noexcept {
+    return VMPilot::enum_to_text(s);
 }
 
 struct ExceptionUnwindContract {
