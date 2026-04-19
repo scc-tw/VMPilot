@@ -6,6 +6,15 @@
 #include "cbor/strict.hpp"
 #include "vm/domain_labels.hpp"
 
+namespace VMPilot::Cbor {
+template <>
+struct RequireErrors<VMPilot::Runtime::Provider::PolicyRequirementParseError> {
+    using E = VMPilot::Runtime::Provider::PolicyRequirementParseError;
+    static constexpr E missing_field    = E::MissingCoreField;
+    static constexpr E wrong_field_type = E::WrongFieldType;
+};
+}  // namespace VMPilot::Cbor
+
 namespace VMPilot::Runtime::Provider {
 
 namespace {
@@ -261,28 +270,16 @@ parse_policy_requirement(const std::uint8_t* data,
         }
     }
 
-    auto require_text = [&](std::uint64_t k)
-        -> tl::expected<std::string_view, PolicyRequirementParseError> {
-        const Value* v = root.find_by_uint_key(k);
-        if (v == nullptr) return err(PolicyRequirementParseError::MissingCoreField);
-        if (v->kind() != Value::Kind::Text) {
-            return err(PolicyRequirementParseError::WrongFieldType);
-        }
-        return std::string_view(v->as_text());
+    auto require_text = [&](std::uint64_t k) {
+        return VMPilot::Cbor::require_text_ref<PolicyRequirementParseError>(root, k);
     };
-    auto require_uint = [&](std::uint64_t k)
-        -> tl::expected<std::uint64_t, PolicyRequirementParseError> {
-        const Value* v = root.find_by_uint_key(k);
-        if (v == nullptr) return err(PolicyRequirementParseError::MissingCoreField);
-        if (v->kind() != Value::Kind::Uint) {
-            return err(PolicyRequirementParseError::WrongFieldType);
-        }
-        return v->as_uint();
+    auto require_uint = [&](std::uint64_t k) {
+        return VMPilot::Cbor::require_uint<PolicyRequirementParseError>(root, k);
     };
 
     auto version_or = require_text(kReq_RequirementVersion);
     if (!version_or) return err(version_or.error());
-    if (*version_or != kRequirementVersionV1) {
+    if (**version_or != kRequirementVersionV1) {
         return err(PolicyRequirementParseError::UnsupportedRequirementVersion);
     }
 
@@ -366,7 +363,7 @@ parse_policy_requirement(const std::uint8_t* data,
     }
 
     PolicyRequirement out;
-    out.requirement_version         = std::string(*version_or);
+    out.requirement_version         = **version_or;
     out.required_policy_floor       = *floor_or;
     out.required_family_set         = std::move(families);
     out.require_hardware_bound      = *hw_b;

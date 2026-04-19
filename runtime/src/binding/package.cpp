@@ -8,6 +8,17 @@
 #include "cbor/strict.hpp"
 #include "vm/domain_labels.hpp"
 
+// Wire AcceptError into the common CBOR require_* templates.
+namespace VMPilot::Cbor {
+template <>
+struct RequireErrors<VMPilot::Runtime::Binding::AcceptError> {
+    using E = VMPilot::Runtime::Binding::AcceptError;
+    static constexpr E missing_field    = E::MissingCoreField;
+    static constexpr E wrong_field_type = E::WrongFieldType;
+    static constexpr E wrong_hash_size  = E::WrongHashSize;
+};
+}  // namespace VMPilot::Cbor
+
 namespace VMPilot::Runtime::Binding {
 
 namespace {
@@ -15,6 +26,17 @@ namespace {
 using VMPilot::Cbor::Value;
 using VMPilot::Cbor::parse_strict;
 using VMPilot::Cbor::domain_hash_sha256;
+
+// Thin wrappers that pre-bind AcceptError so call sites stay tidy.
+inline auto require_text(const Value& m, std::uint64_t k) noexcept {
+    return VMPilot::Cbor::require_text<AcceptError>(m, k);
+}
+inline auto require_uint(const Value& m, std::uint64_t k) noexcept {
+    return VMPilot::Cbor::require_uint<AcceptError>(m, k);
+}
+inline auto require_hash(const Value& m, std::uint64_t k) noexcept {
+    return VMPilot::Cbor::require_hash<AcceptError>(m, k);
+}
 
 // Field IDs inside the canonical PBR map. Keep in sync with the fixture
 // builder in runtime/test/fixtures/fixture_generator.cpp and with
@@ -53,33 +75,6 @@ bool copy_hash(std::array<std::uint8_t, 32>& out,
     return true;
 }
 
-// Extract a required 32-byte hash field from a strict-CBOR map, returning
-// a consistent error if the field is missing, wrong type, or wrong length.
-tl::expected<std::array<std::uint8_t, 32>, AcceptError>
-require_hash(const Value& map, std::uint64_t key) noexcept {
-    const Value* v = map.find_by_uint_key(key);
-    if (v == nullptr) return err(AcceptError::MissingCoreField);
-    if (v->kind() != Value::Kind::Bytes) return err(AcceptError::WrongFieldType);
-    std::array<std::uint8_t, 32> out{};
-    if (!copy_hash(out, v->as_bytes())) return err(AcceptError::WrongHashSize);
-    return out;
-}
-
-tl::expected<std::uint64_t, AcceptError>
-require_uint(const Value& map, std::uint64_t key) noexcept {
-    const Value* v = map.find_by_uint_key(key);
-    if (v == nullptr) return err(AcceptError::MissingCoreField);
-    if (v->kind() != Value::Kind::Uint) return err(AcceptError::WrongFieldType);
-    return v->as_uint();
-}
-
-tl::expected<std::string, AcceptError>
-require_text(const Value& map, std::uint64_t key) noexcept {
-    const Value* v = map.find_by_uint_key(key);
-    if (v == nullptr) return err(AcceptError::MissingCoreField);
-    if (v->kind() != Value::Kind::Text) return err(AcceptError::WrongFieldType);
-    return v->as_text();
-}
 
 // Constant-time-ish equality for hashes. std::memcmp is fine here because
 // we're comparing digests; a timing side channel on equal-vs-not equal of

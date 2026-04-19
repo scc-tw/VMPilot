@@ -11,6 +11,16 @@
 #include "vm/domain_labels.hpp"
 #include "vm/family_policy.hpp"
 
+namespace VMPilot::Cbor {
+template <>
+struct RequireErrors<VMPilot::Runtime::Binding::UnitAcceptError> {
+    using E = VMPilot::Runtime::Binding::UnitAcceptError;
+    static constexpr E missing_field    = E::MissingCoreField;
+    static constexpr E wrong_field_type = E::WrongFieldType;
+    static constexpr E wrong_hash_size  = E::WrongHashSize;
+};
+}  // namespace VMPilot::Cbor
+
 namespace VMPilot::Runtime::Binding {
 
 namespace {
@@ -106,35 +116,20 @@ UnitAcceptError map_eh_contract_error(
 }
 
 // ─── Field extraction helpers ───────────────────────────────────────────
+//
+// Pre-bind the common CBOR templates to UnitAcceptError so call sites
+// stay tidy. Every previous RequireCtx usage emitted the same
+// {MissingCoreField, WrongFieldType, WrongHashSize} triple, so the
+// per-call error customisation point was dead weight.
 
-struct RequireCtx {
-    UnitAcceptError missing_err;
-    UnitAcceptError wrong_type_err;
-    UnitAcceptError wrong_hash_size_err;
-};
-
-tl::expected<std::string, UnitAcceptError>
-require_text(const Value& m, std::uint64_t key, const RequireCtx& ctx) noexcept {
-    const Value* v = m.find_by_uint_key(key);
-    if (v == nullptr) return err(ctx.missing_err);
-    if (v->kind() != Value::Kind::Text) return err(ctx.wrong_type_err);
-    return v->as_text();
+inline auto require_text(const Value& m, std::uint64_t k) noexcept {
+    return VMPilot::Cbor::require_text<UnitAcceptError>(m, k);
 }
-tl::expected<std::uint64_t, UnitAcceptError>
-require_uint(const Value& m, std::uint64_t key, const RequireCtx& ctx) noexcept {
-    const Value* v = m.find_by_uint_key(key);
-    if (v == nullptr) return err(ctx.missing_err);
-    if (v->kind() != Value::Kind::Uint) return err(ctx.wrong_type_err);
-    return v->as_uint();
+inline auto require_uint(const Value& m, std::uint64_t k) noexcept {
+    return VMPilot::Cbor::require_uint<UnitAcceptError>(m, k);
 }
-tl::expected<std::array<std::uint8_t, 32>, UnitAcceptError>
-require_hash32(const Value& m, std::uint64_t key, const RequireCtx& ctx) noexcept {
-    const Value* v = m.find_by_uint_key(key);
-    if (v == nullptr) return err(ctx.missing_err);
-    if (v->kind() != Value::Kind::Bytes) return err(ctx.wrong_type_err);
-    std::array<std::uint8_t, 32> out{};
-    if (!copy32(out, v->as_bytes())) return err(ctx.wrong_hash_size_err);
-    return out;
+inline auto require_hash32(const Value& m, std::uint64_t k) noexcept {
+    return VMPilot::Cbor::require_hash<UnitAcceptError, 32>(m, k);
 }
 
 // ─── PayloadIdentity ────────────────────────────────────────────────────
@@ -142,13 +137,8 @@ require_hash32(const Value& m, std::uint64_t key, const RequireCtx& ctx) noexcep
 tl::expected<PayloadIdentity, UnitAcceptError>
 parse_payload_identity(const Value& m, UnitAcceptError malformed_err) noexcept {
     if (m.kind() != Value::Kind::Map) return err(malformed_err);
-    RequireCtx ctx{
-        UnitAcceptError::MissingCoreField,
-        UnitAcceptError::WrongFieldType,
-        UnitAcceptError::WrongHashSize,
-    };
-    auto digest = require_hash32(m, kPi_Sha256Digest, ctx);
-    auto size_or = require_uint(m, kPi_PayloadSize, ctx);
+auto digest = require_hash32(m, kPi_Sha256Digest);
+    auto size_or = require_uint(m, kPi_PayloadSize);
     if (!digest) return err(digest.error());
     if (!size_or) return err(size_or.error());
     return PayloadIdentity{*digest, *size_or};
@@ -163,19 +153,13 @@ parse_unit_descriptor_bytes(const std::vector<std::uint8_t>& bytes) noexcept {
     const Value& tree = *tree_or;
     if (tree.kind() != Value::Kind::Map) return err(UnitAcceptError::UnitDescriptorMalformed);
 
-    RequireCtx ctx{
-        UnitAcceptError::MissingCoreField,
-        UnitAcceptError::WrongFieldType,
-        UnitAcceptError::WrongHashSize,
-    };
-
-    auto ver = require_text(tree, kUd_DescriptorVersion, ctx);
-    auto uid = require_text(tree, kUd_UnitId, ctx);
-    auto uih = require_hash32(tree, kUd_UnitIdentityHash, ctx);
-    auto fam = require_text(tree, kUd_FamilyId, ctx);
-    auto pol = require_text(tree, kUd_RequestedPolicyId, ctx);
-    auto prof = require_text(tree, kUd_ResolvedFamilyProfileId, ctx);
-    auto ubr = require_text(tree, kUd_UnitBindingRecordId, ctx);
+auto ver = require_text(tree, kUd_DescriptorVersion);
+    auto uid = require_text(tree, kUd_UnitId);
+    auto uih = require_hash32(tree, kUd_UnitIdentityHash);
+    auto fam = require_text(tree, kUd_FamilyId);
+    auto pol = require_text(tree, kUd_RequestedPolicyId);
+    auto prof = require_text(tree, kUd_ResolvedFamilyProfileId);
+    auto ubr = require_text(tree, kUd_UnitBindingRecordId);
     if (!ver) return err(ver.error());
     if (!uid) return err(uid.error());
     if (!uih) return err(uih.error());
@@ -212,16 +196,10 @@ tl::expected<UnitBindingAuth, UnitAcceptError>
 parse_binding_auth(const Value& auth_v) noexcept {
     if (auth_v.kind() != Value::Kind::Map) return err(UnitAcceptError::UnitBindingAuthMalformed);
 
-    RequireCtx ctx{
-        UnitAcceptError::MissingCoreField,
-        UnitAcceptError::WrongFieldType,
-        UnitAcceptError::WrongHashSize,
-    };
-
-    auto kind = require_text(auth_v, kAuth_Kind, ctx);
-    auto ubt_hash = require_hash32(auth_v, kAuth_UnitBindingTableHash, ctx);
-    auto inclusion = require_uint(auth_v, kAuth_InclusionIndex, ctx);
-    auto rec_hash = require_hash32(auth_v, kAuth_RecordHash, ctx);
+auto kind = require_text(auth_v, kAuth_Kind);
+    auto ubt_hash = require_hash32(auth_v, kAuth_UnitBindingTableHash);
+    auto inclusion = require_uint(auth_v, kAuth_InclusionIndex);
+    auto rec_hash = require_hash32(auth_v, kAuth_RecordHash);
     if (!kind) return err(kind.error());
     if (!ubt_hash) return err(ubt_hash.error());
     if (!inclusion) return err(inclusion.error());
@@ -268,20 +246,14 @@ parse_unit_binding_record(const Value& wrapper_v) noexcept {
         return err(UnitAcceptError::UnitBindingRecordMalformed);
     }
 
-    RequireCtx ctx{
-        UnitAcceptError::MissingCoreField,
-        UnitAcceptError::WrongFieldType,
-        UnitAcceptError::WrongHashSize,
-    };
-
-    auto id = require_text(ubr_v, kUbr_UnitBindingRecordId, ctx);
-    auto uih = require_hash32(ubr_v, kUbr_UnitIdentityHash, ctx);
-    auto udh = require_hash32(ubr_v, kUbr_UnitDescriptorHash, ctx);
-    auto fam = require_text(ubr_v, kUbr_FamilyId, ctx);
-    auto pol = require_text(ubr_v, kUbr_RequestedPolicyId, ctx);
-    auto prof = require_text(ubr_v, kUbr_ResolvedFamilyProfileId, ctx);
-    auto pch = require_hash32(ubr_v, kUbr_ResolvedFamilyProfileContentHash, ctx);
-    auto epoch = require_uint(ubr_v, kUbr_AntiDowngradeEpoch, ctx);
+auto id = require_text(ubr_v, kUbr_UnitBindingRecordId);
+    auto uih = require_hash32(ubr_v, kUbr_UnitIdentityHash);
+    auto udh = require_hash32(ubr_v, kUbr_UnitDescriptorHash);
+    auto fam = require_text(ubr_v, kUbr_FamilyId);
+    auto pol = require_text(ubr_v, kUbr_RequestedPolicyId);
+    auto prof = require_text(ubr_v, kUbr_ResolvedFamilyProfileId);
+    auto pch = require_hash32(ubr_v, kUbr_ResolvedFamilyProfileContentHash);
+    auto epoch = require_uint(ubr_v, kUbr_AntiDowngradeEpoch);
     if (!id) return err(id.error());
     if (!uih) return err(uih.error());
     if (!udh) return err(udh.error());

@@ -2,6 +2,15 @@
 
 #include "cbor/strict.hpp"
 
+namespace VMPilot::Cbor {
+template <>
+struct RequireErrors<VMPilot::Runtime::Binding::InnerPartitionError> {
+    using E = VMPilot::Runtime::Binding::InnerPartitionError;
+    static constexpr E missing_field    = E::MissingField;
+    static constexpr E wrong_field_type = E::WrongFieldType;
+};
+}  // namespace VMPilot::Cbor
+
 namespace VMPilot::Runtime::Binding {
 
 namespace {
@@ -18,12 +27,8 @@ inline tl::unexpected<InnerPartitionError> err(InnerPartitionError e) noexcept {
     return tl::make_unexpected(e);
 }
 
-tl::expected<std::vector<std::uint8_t>, InnerPartitionError>
-require_bytes(const Value& m, std::uint64_t key) noexcept {
-    const Value* v = m.find_by_uint_key(key);
-    if (v == nullptr) return err(InnerPartitionError::MissingField);
-    if (v->kind() != Value::Kind::Bytes) return err(InnerPartitionError::WrongFieldType);
-    return v->as_bytes();
+inline auto require_bytes(const Value& m, std::uint64_t k) noexcept {
+    return VMPilot::Cbor::require_bytes<InnerPartitionError>(m, k);
 }
 
 }  // namespace

@@ -4,6 +4,15 @@
 
 #include "cbor/strict.hpp"
 
+namespace VMPilot::Cbor {
+template <>
+struct RequireErrors<VMPilot::Runtime::EH::ContractParseError> {
+    using E = VMPilot::Runtime::EH::ContractParseError;
+    static constexpr E missing_field    = E::MissingField;
+    static constexpr E wrong_field_type = E::WrongFieldType;
+};
+}  // namespace VMPilot::Cbor
+
 #if defined(_WIN32)
 #include <windows.h>
 #elif defined(__unix__) || defined(__APPLE__)
@@ -46,14 +55,8 @@ verify_err(ContractVerifyError e) noexcept {
     return tl::make_unexpected(e);
 }
 
-tl::expected<std::string, ContractParseError>
-require_text(const Value& map, std::uint64_t key) noexcept {
-    const Value* value = map.find_by_uint_key(key);
-    if (value == nullptr) return parse_err(ContractParseError::MissingField);
-    if (value->kind() != Value::Kind::Text) {
-        return parse_err(ContractParseError::WrongFieldType);
-    }
-    return value->as_text();
+inline auto require_text(const Value& m, std::uint64_t k) noexcept {
+    return VMPilot::Cbor::require_text<ContractParseError>(m, k);
 }
 
 tl::expected<const Value*, ContractParseError>

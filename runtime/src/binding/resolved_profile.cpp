@@ -3,6 +3,15 @@
 #include "cbor/strict.hpp"
 #include "vm/family_policy.hpp"
 
+namespace VMPilot::Cbor {
+template <>
+struct RequireErrors<VMPilot::Runtime::Binding::ResolvedFamilyProfileParseError> {
+    using E = VMPilot::Runtime::Binding::ResolvedFamilyProfileParseError;
+    static constexpr E missing_field    = E::MissingField;
+    static constexpr E wrong_field_type = E::WrongFieldType;
+};
+}  // namespace VMPilot::Cbor
+
 namespace VMPilot::Runtime::Binding {
 
 namespace {
@@ -24,12 +33,8 @@ err(ResolvedFamilyProfileParseError e) noexcept {
     return tl::make_unexpected(e);
 }
 
-tl::expected<std::string, ResolvedFamilyProfileParseError>
-require_text(const Value& m, std::uint64_t key) noexcept {
-    const Value* v = m.find_by_uint_key(key);
-    if (v == nullptr) return err(ResolvedFamilyProfileParseError::MissingField);
-    if (v->kind() != Value::Kind::Text) return err(ResolvedFamilyProfileParseError::WrongFieldType);
-    return v->as_text();
+inline auto require_text(const Value& m, std::uint64_t k) noexcept {
+    return VMPilot::Cbor::require_text<ResolvedFamilyProfileParseError>(m, k);
 }
 
 }  // namespace

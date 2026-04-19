@@ -9,6 +9,16 @@
 #include "vm/domain_labels.hpp"
 #include "vm/family_policy.hpp"
 
+namespace VMPilot::Cbor {
+template <>
+struct RequireErrors<VMPilot::Runtime::Registry::ParseError> {
+    using E = VMPilot::Runtime::Registry::ParseError;
+    static constexpr E missing_field    = E::MissingField;
+    static constexpr E wrong_field_type = E::WrongFieldType;
+    static constexpr E wrong_hash_size  = E::WrongHashSize;
+};
+}  // namespace VMPilot::Cbor
+
 namespace VMPilot::Runtime::Registry {
 
 namespace {
@@ -45,31 +55,14 @@ inline tl::unexpected<LookupError> lookup_err(LookupError e) noexcept {
     return tl::make_unexpected(e);
 }
 
-tl::expected<std::string, ParseError>
-require_text(const Value& m, std::uint64_t key) noexcept {
-    const Value* v = m.find_by_uint_key(key);
-    if (v == nullptr) return err(ParseError::MissingField);
-    if (v->kind() != Value::Kind::Text) return err(ParseError::WrongFieldType);
-    return v->as_text();
+inline auto require_text(const Value& m, std::uint64_t k) noexcept {
+    return VMPilot::Cbor::require_text<ParseError>(m, k);
 }
-
-tl::expected<std::uint64_t, ParseError>
-require_uint(const Value& m, std::uint64_t key) noexcept {
-    const Value* v = m.find_by_uint_key(key);
-    if (v == nullptr) return err(ParseError::MissingField);
-    if (v->kind() != Value::Kind::Uint) return err(ParseError::WrongFieldType);
-    return v->as_uint();
+inline auto require_uint(const Value& m, std::uint64_t k) noexcept {
+    return VMPilot::Cbor::require_uint<ParseError>(m, k);
 }
-
-tl::expected<std::array<std::uint8_t, 32>, ParseError>
-require_hash(const Value& m, std::uint64_t key) noexcept {
-    const Value* v = m.find_by_uint_key(key);
-    if (v == nullptr) return err(ParseError::MissingField);
-    if (v->kind() != Value::Kind::Bytes) return err(ParseError::WrongFieldType);
-    if (v->as_bytes().size() != 32) return err(ParseError::WrongHashSize);
-    std::array<std::uint8_t, 32> out{};
-    std::memcpy(out.data(), v->as_bytes().data(), 32);
-    return out;
+inline auto require_hash(const Value& m, std::uint64_t k) noexcept {
+    return VMPilot::Cbor::require_hash<ParseError, 32>(m, k);
 }
 
 tl::expected<SpecializationEntry, ParseError>

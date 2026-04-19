@@ -8,6 +8,16 @@
 #include "cbor/strict.hpp"
 #include "vm/domain_labels.hpp"
 
+namespace VMPilot::Cbor {
+template <>
+struct RequireErrors<VMPilot::Runtime::Tokens::TokenError> {
+    using E = VMPilot::Runtime::Tokens::TokenError;
+    static constexpr E missing_field    = E::MissingCoreField;
+    static constexpr E wrong_field_type = E::WrongFieldType;
+    static constexpr E wrong_hash_size  = E::WrongHashSize;
+};
+}  // namespace VMPilot::Cbor
+
 namespace VMPilot::Runtime::Tokens {
 
 namespace {
@@ -60,52 +70,23 @@ inline tl::unexpected<TokenError> err(TokenError code) noexcept {
     return tl::make_unexpected(code);
 }
 
-tl::expected<std::string, TokenError> require_text(
-    const Value& map, std::uint64_t key) noexcept {
-    const Value* value = map.find_by_uint_key(key);
-    if (value == nullptr) return err(TokenError::MissingCoreField);
-    if (value->kind() != Value::Kind::Text) return err(TokenError::WrongFieldType);
-    return value->as_text();
+inline auto require_text(const Value& m, std::uint64_t k) noexcept {
+    return VMPilot::Cbor::require_text<TokenError>(m, k);
 }
-
-tl::expected<std::vector<std::uint8_t>, TokenError> require_bytes(
-    const Value& map, std::uint64_t key) noexcept {
-    const Value* value = map.find_by_uint_key(key);
-    if (value == nullptr) return err(TokenError::MissingCoreField);
-    if (value->kind() != Value::Kind::Bytes) return err(TokenError::WrongFieldType);
-    return value->as_bytes();
+inline auto require_bytes(const Value& m, std::uint64_t k) noexcept {
+    return VMPilot::Cbor::require_bytes<TokenError>(m, k);
 }
-
-tl::expected<std::array<std::uint8_t, 32>, TokenError> require_hash32(
-    const Value& map, std::uint64_t key) noexcept {
-    auto bytes_or = require_bytes(map, key);
-    if (!bytes_or) return err(bytes_or.error());
-    if (bytes_or->size() != 32) return err(TokenError::WrongHashSize);
-    std::array<std::uint8_t, 32> out{};
-    std::memcpy(out.data(), bytes_or->data(), 32);
-    return out;
+inline auto require_hash32(const Value& m, std::uint64_t k) noexcept {
+    return VMPilot::Cbor::require_hash<TokenError, 32>(m, k);
 }
-
-tl::expected<std::uint64_t, TokenError> require_uint(
-    const Value& map, std::uint64_t key) noexcept {
-    const Value* value = map.find_by_uint_key(key);
-    if (value == nullptr) return err(TokenError::MissingCoreField);
-    if (value->kind() != Value::Kind::Uint) return err(TokenError::WrongFieldType);
-    return value->as_uint();
+inline auto require_uint(const Value& m, std::uint64_t k) noexcept {
+    return VMPilot::Cbor::require_uint<TokenError>(m, k);
 }
-
 // Strict CBOR subset has no `bool` kind (doc 07 §3). Canonical
 // encoding for the single-bit `allowed_import_once` field is a
 // uint — 0 → false, 1 → true; any other value is malformed.
-tl::expected<bool, TokenError> require_bool(
-    const Value& map, std::uint64_t key) noexcept {
-    const Value* value = map.find_by_uint_key(key);
-    if (value == nullptr) return err(TokenError::MissingCoreField);
-    if (value->kind() != Value::Kind::Uint) return err(TokenError::WrongFieldType);
-    const auto v = value->as_uint();
-    if (v == 0) return false;
-    if (v == 1) return true;
-    return err(TokenError::WrongFieldType);
+inline auto require_bool(const Value& m, std::uint64_t k) noexcept {
+    return VMPilot::Cbor::require_uint_bool<TokenError>(m, k);
 }
 
 tl::expected<VMPilot::DomainLabels::PolicyId, TokenError> parse_policy_id(

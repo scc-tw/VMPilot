@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -133,6 +134,128 @@ inline std::array<std::uint8_t, 32>
 domain_hash_sha256(std::string_view domain_label,
                    const std::vector<std::uint8_t>& canonical_bytes) noexcept {
     return domain_hash_sha256(domain_label, canonical_bytes.data(), canonical_bytes.size());
+}
+
+// ─── Field extraction helpers ───────────────────────────────────────────
+//
+// Before this header, seven runtime TUs each rolled their own
+// require_text / require_uint / require_hash / require_bool / require_bytes
+// with the same body parameterised only by the consumer's error enum.
+// Collapse them into generic templates whose error mapping is declared
+// once per consumer by specializing `RequireErrors<E>`.
+//
+// Usage (consumer side):
+//
+//   namespace VMPilot::Cbor {
+//   template <> struct RequireErrors<MyError> {
+//       static constexpr MyError missing_field    = MyError::MissingField;
+//       static constexpr MyError wrong_field_type = MyError::WrongFieldType;
+//       static constexpr MyError wrong_hash_size  = MyError::WrongHashSize;
+//   };
+//   }
+//
+// Then call `require_text<MyError>(map, key)` etc. No error enum has to
+// ship every constant — fields that a particular consumer never calls
+// don't need to exist in the specialization.
+
+template <typename E>
+struct RequireErrors;
+
+namespace detail {
+
+// Uniform error lookup — `RequireErrors<E>::missing_field` etc. must be
+// `constexpr static E`. Wrapped behind helper functions so specialization
+// is opt-in (specializations that don't need wrong_hash_size just don't
+// declare it; callers that never use require_hash don't trip a lookup).
+template <typename E>
+[[nodiscard]] constexpr E missing_field_code() noexcept {
+    return RequireErrors<E>::missing_field;
+}
+template <typename E>
+[[nodiscard]] constexpr E wrong_field_type_code() noexcept {
+    return RequireErrors<E>::wrong_field_type;
+}
+template <typename E>
+[[nodiscard]] constexpr E wrong_hash_size_code() noexcept {
+    return RequireErrors<E>::wrong_hash_size;
+}
+
+}  // namespace detail
+
+template <typename E>
+[[nodiscard]] inline tl::expected<const std::string*, E>
+require_text_ref(const Value& m, std::uint64_t key) noexcept {
+    const Value* v = m.find_by_uint_key(key);
+    if (v == nullptr) return tl::make_unexpected(detail::missing_field_code<E>());
+    if (v->kind() != Value::Kind::Text) {
+        return tl::make_unexpected(detail::wrong_field_type_code<E>());
+    }
+    return &v->as_text();
+}
+
+template <typename E>
+[[nodiscard]] inline tl::expected<std::string, E>
+require_text(const Value& m, std::uint64_t key) noexcept {
+    auto ref = require_text_ref<E>(m, key);
+    if (!ref) return tl::make_unexpected(ref.error());
+    return **ref;
+}
+
+template <typename E>
+[[nodiscard]] inline tl::expected<std::uint64_t, E>
+require_uint(const Value& m, std::uint64_t key) noexcept {
+    const Value* v = m.find_by_uint_key(key);
+    if (v == nullptr) return tl::make_unexpected(detail::missing_field_code<E>());
+    if (v->kind() != Value::Kind::Uint) {
+        return tl::make_unexpected(detail::wrong_field_type_code<E>());
+    }
+    return v->as_uint();
+}
+
+template <typename E>
+[[nodiscard]] inline tl::expected<const std::vector<std::uint8_t>*, E>
+require_bytes_ref(const Value& m, std::uint64_t key) noexcept {
+    const Value* v = m.find_by_uint_key(key);
+    if (v == nullptr) return tl::make_unexpected(detail::missing_field_code<E>());
+    if (v->kind() != Value::Kind::Bytes) {
+        return tl::make_unexpected(detail::wrong_field_type_code<E>());
+    }
+    return &v->as_bytes();
+}
+
+template <typename E>
+[[nodiscard]] inline tl::expected<std::vector<std::uint8_t>, E>
+require_bytes(const Value& m, std::uint64_t key) noexcept {
+    auto ref = require_bytes_ref<E>(m, key);
+    if (!ref) return tl::make_unexpected(ref.error());
+    return **ref;
+}
+
+template <typename E, std::size_t N = 32>
+[[nodiscard]] inline tl::expected<std::array<std::uint8_t, N>, E>
+require_hash(const Value& m, std::uint64_t key) noexcept {
+    auto bytes_or = require_bytes_ref<E>(m, key);
+    if (!bytes_or) return tl::make_unexpected(bytes_or.error());
+    const auto& b = **bytes_or;
+    if (b.size() != N) {
+        return tl::make_unexpected(detail::wrong_hash_size_code<E>());
+    }
+    std::array<std::uint8_t, N> out{};
+    std::memcpy(out.data(), b.data(), N);
+    return out;
+}
+
+// CBOR strict subset has no dedicated bool kind — the convention is
+// uint{0,1}. Anything outside that range is WrongFieldType, matching
+// the behaviour consumers wrote manually.
+template <typename E>
+[[nodiscard]] inline tl::expected<bool, E>
+require_uint_bool(const Value& m, std::uint64_t key) noexcept {
+    auto u = require_uint<E>(m, key);
+    if (!u) return tl::make_unexpected(u.error());
+    if (*u == 0) return false;
+    if (*u == 1) return true;
+    return tl::make_unexpected(detail::wrong_field_type_code<E>());
 }
 
 }  // namespace VMPilot::Cbor
