@@ -5,6 +5,7 @@
 
 #include <VMPilot_crypto.hpp>
 
+#include "binding/signed_partition.hpp"
 #include "cbor/strict.hpp"
 #include "vm/domain_labels.hpp"
 
@@ -18,6 +19,26 @@ struct RequireErrors<VMPilot::Runtime::Tokens::TokenError> {
 };
 }  // namespace VMPilot::Cbor
 
+namespace VMPilot::Runtime::Binding {
+template <>
+struct SignedPartitionErrors<VMPilot::Runtime::Tokens::TokenError> {
+    using E = VMPilot::Runtime::Tokens::TokenError;
+    // Token layer collapses most wrapper-level failures into
+    // TokenMalformed to keep the public surface narrow (doc 10 §9.1
+    // redaction rule). Key-id mismatch is the one exception — it
+    // flags trust-root drift, which has its own code.
+    static constexpr E partition_malformed           = E::TokenMalformed;
+    static constexpr E auth_kind_unsupported         = E::TokenMalformed;
+    static constexpr E auth_key_id_mismatch          = E::TrustRootKeyUsageMismatch;
+    static constexpr E auth_signature_alg_mismatch   = E::TokenMalformed;
+    static constexpr E auth_covered_domain_mismatch  = E::TokenMalformed;
+    static constexpr E signature_wrong_size          = E::SignatureWrongSize;
+    static constexpr E signature_invalid             = E::SignatureInvalid;
+    static constexpr E missing_core_field            = E::MissingCoreField;
+    static constexpr E wrong_field_type              = E::WrongFieldType;
+};
+}  // namespace VMPilot::Runtime::Binding
+
 namespace VMPilot::Runtime::Tokens {
 
 namespace {
@@ -26,14 +47,6 @@ using VMPilot::Cbor::Value;
 using VMPilot::Cbor::parse_strict;
 
 // Shared auth-wrapper keys (doc 06 §9.2 pattern).
-constexpr std::uint64_t kAuth_Kind            = 1;
-constexpr std::uint64_t kAuth_KeyId           = 2;
-constexpr std::uint64_t kAuth_CoveredDomain   = 3;
-constexpr std::uint64_t kAuth_SignatureAlgId  = 4;
-constexpr std::uint64_t kAuth_Signature       = 5;
-
-constexpr std::string_view kAuthKindVendorSignatureV1 = "vendor_signature_v1";
-
 // ReprovisionToken field keys.
 namespace Rep {
     constexpr std::uint64_t kTokenVersion                        = 1;
@@ -113,50 +126,6 @@ tl::expected<ReasonCode, TokenError> parse_reason_code(
     return err(TokenError::UnknownEnumValue);
 }
 
-// Verify the binding_auth wrapper common to both token classes.
-// `expected_domain` is the covered_domain string the caller expects
-// (Auth::ReprovisionToken or Auth::MigrationToken). The function
-// returns the signature bytes on success so the caller can invoke
-// Verify_Ed25519 over the canonical bytes.
-tl::expected<std::vector<std::uint8_t>, TokenError> verify_auth_wrapper(
-    const Value& auth_map, const VendorTrustRoot& root,
-    std::string_view expected_domain,
-    const std::vector<std::uint8_t>& canonical_bytes) noexcept {
-    auto kind_or = require_text(auth_map, kAuth_Kind);
-    if (!kind_or) return err(kind_or.error());
-    if (*kind_or != kAuthKindVendorSignatureV1) {
-        return err(TokenError::TokenMalformed);
-    }
-
-    auto key_id_or = require_text(auth_map, kAuth_KeyId);
-    if (!key_id_or) return err(key_id_or.error());
-    if (*key_id_or != root.root_key_id) {
-        return err(TokenError::TrustRootKeyUsageMismatch);
-    }
-
-    auto alg_or = require_text(auth_map, kAuth_SignatureAlgId);
-    if (!alg_or) return err(alg_or.error());
-    if (*alg_or != root.signature_alg_id) {
-        return err(TokenError::TokenMalformed);
-    }
-
-    auto domain_or = require_text(auth_map, kAuth_CoveredDomain);
-    if (!domain_or) return err(domain_or.error());
-    if (*domain_or != expected_domain) return err(TokenError::TokenMalformed);
-
-    auto sig_or = require_bytes(auth_map, kAuth_Signature);
-    if (!sig_or) return err(sig_or.error());
-    if (sig_or->size() != 64) return err(TokenError::SignatureWrongSize);
-
-    const std::vector<std::uint8_t> pubkey_vec(
-        root.public_key, root.public_key + sizeof(root.public_key));
-    const bool sig_ok = VMPilot::Crypto::Verify_Ed25519(
-        pubkey_vec, *sig_or, std::string(expected_domain), canonical_bytes);
-    if (!sig_ok) return err(TokenError::SignatureInvalid);
-
-    return *sig_or;
-}
-
 }  // namespace
 
 // ─── Reprovision ─────────────────────────────────────────────────────────
@@ -173,21 +142,11 @@ parse_reprovision_token(const std::uint8_t* data, std::size_t size,
 
     auto outer_or = parse_strict(data, size);
     if (!outer_or) return err(TokenError::TokenMalformed);
-    const Value& outer = *outer_or;
-    if (outer.kind() != Value::Kind::Array) return err(TokenError::TokenMalformed);
-    if (outer.as_array().size() != 2) return err(TokenError::TokenMalformed);
-
-    const Value& canon_v = outer.as_array()[0];
-    const Value& auth_v  = outer.as_array()[1];
-    if (canon_v.kind() != Value::Kind::Bytes) return err(TokenError::TokenMalformed);
-    if (auth_v.kind()  != Value::Kind::Map)   return err(TokenError::TokenMalformed);
-
-    const auto& canonical_bytes = canon_v.as_bytes();
-
-    auto sig_or = verify_auth_wrapper(
-        auth_v, root, VMPilot::DomainLabels::Auth::ReprovisionToken,
-        canonical_bytes);
-    if (!sig_or) return err(sig_or.error());
+    auto view_or = VMPilot::Runtime::Binding::verify_signed_partition_view<TokenError>(
+        *outer_or, root, VMPilot::DomainLabels::Auth::ReprovisionToken);
+    if (!view_or) return err(view_or.error());
+    const auto& canonical_bytes = *view_or->canonical_bytes;
+    const auto& signature_bytes = *view_or->signature_bytes;
 
     auto inner_or = parse_strict(canonical_bytes.data(), canonical_bytes.size());
     if (!inner_or) return err(TokenError::TokenMalformed);
@@ -262,7 +221,7 @@ parse_reprovision_token(const std::uint8_t* data, std::size_t size,
     out.issued_at                            = *issued_at_or;
     out.expires_at                           = *expires_at_or;
     out.one_time_nonce                       = *one_time_nonce_or;
-    out.vendor_signature                     = std::move(*sig_or);
+    out.vendor_signature                     = signature_bytes;
 
     if (out.token_version != "reprovision-token-v1") {
         return err(TokenError::TokenVersionUnsupported);
@@ -319,20 +278,11 @@ parse_migration_token(const std::uint8_t* data, std::size_t size,
 
     auto outer_or = parse_strict(data, size);
     if (!outer_or) return err(TokenError::TokenMalformed);
-    const Value& outer = *outer_or;
-    if (outer.kind() != Value::Kind::Array) return err(TokenError::TokenMalformed);
-    if (outer.as_array().size() != 2) return err(TokenError::TokenMalformed);
-
-    const Value& canon_v = outer.as_array()[0];
-    const Value& auth_v  = outer.as_array()[1];
-    if (canon_v.kind() != Value::Kind::Bytes) return err(TokenError::TokenMalformed);
-    if (auth_v.kind()  != Value::Kind::Map)   return err(TokenError::TokenMalformed);
-
-    const auto& canonical_bytes = canon_v.as_bytes();
-    auto sig_or = verify_auth_wrapper(
-        auth_v, root, VMPilot::DomainLabels::Auth::MigrationToken,
-        canonical_bytes);
-    if (!sig_or) return err(sig_or.error());
+    auto view_or = VMPilot::Runtime::Binding::verify_signed_partition_view<TokenError>(
+        *outer_or, root, VMPilot::DomainLabels::Auth::MigrationToken);
+    if (!view_or) return err(view_or.error());
+    const auto& canonical_bytes = *view_or->canonical_bytes;
+    const auto& signature_bytes = *view_or->signature_bytes;
 
     auto inner_or = parse_strict(canonical_bytes.data(), canonical_bytes.size());
     if (!inner_or) return err(TokenError::TokenMalformed);
@@ -371,7 +321,7 @@ parse_migration_token(const std::uint8_t* data, std::size_t size,
     out.allowed_policy_floor                  = *policy_id_or;
     out.expires_at                            = *expires_at_or;
     out.nonce                                 = *nonce_or;
-    out.vendor_signature                      = std::move(*sig_or);
+    out.vendor_signature                      = signature_bytes;
 
     if (out.token_version != "migration-token-v1") {
         return err(TokenError::TokenVersionUnsupported);

@@ -5,10 +5,12 @@
 
 #include "VMPilot_crypto.hpp"
 #include "binding/inner_partition.hpp"
+#include "binding/signed_partition.hpp"
 #include "cbor/strict.hpp"
 #include "vm/domain_labels.hpp"
 
-// Wire AcceptError into the common CBOR require_* templates.
+// Wire AcceptError into the common CBOR require_* templates +
+// SignedPartition traits.
 namespace VMPilot::Cbor {
 template <>
 struct RequireErrors<VMPilot::Runtime::Binding::AcceptError> {
@@ -18,6 +20,22 @@ struct RequireErrors<VMPilot::Runtime::Binding::AcceptError> {
     static constexpr E wrong_hash_size  = E::WrongHashSize;
 };
 }  // namespace VMPilot::Cbor
+
+namespace VMPilot::Runtime::Binding {
+template <>
+struct SignedPartitionErrors<AcceptError> {
+    using E = AcceptError;
+    static constexpr E partition_malformed           = E::PbrPartitionMalformed;
+    static constexpr E auth_kind_unsupported         = E::AuthKindUnsupported;
+    static constexpr E auth_key_id_mismatch          = E::AuthKeyIdMismatch;
+    static constexpr E auth_signature_alg_mismatch   = E::AuthSignatureAlgMismatch;
+    static constexpr E auth_covered_domain_mismatch  = E::AuthCoveredDomainMismatch;
+    static constexpr E signature_wrong_size          = E::SignatureWrongSize;
+    static constexpr E signature_invalid             = E::SignatureInvalid;
+    static constexpr E missing_core_field            = E::MissingCoreField;
+    static constexpr E wrong_field_type              = E::WrongFieldType;
+};
+}  // namespace VMPilot::Runtime::Binding
 
 namespace VMPilot::Runtime::Binding {
 
@@ -51,14 +69,6 @@ constexpr std::uint64_t kField_AntiDowngradeEpoch         = 8;
 constexpr std::uint64_t kField_MinimumRuntimeEpoch        = 9;
 
 // Field IDs inside PackageBindingAuth (doc 06 §9.2).
-constexpr std::uint64_t kAuth_Kind            = 1;
-constexpr std::uint64_t kAuth_KeyId           = 2;
-constexpr std::uint64_t kAuth_SignatureAlgId  = 3;
-constexpr std::uint64_t kAuth_CoveredDomain   = 4;
-constexpr std::uint64_t kAuth_Signature       = 5;
-
-constexpr std::string_view kAuthKindVendorSignatureV1 = "vendor_signature_v1";
-
 inline tl::unexpected<AcceptError> err(AcceptError e) noexcept {
     return tl::make_unexpected(e);
 }
@@ -120,67 +130,16 @@ accept_package(const std::uint8_t* artifact_data,
         return err(AcceptError::TrustRootKeyUsageMismatch);
     }
 
-    // 2. The PBR partition is a strict CBOR array of exactly two elements:
-    //    [0] byte string holding the PBR canonical content (fields 1..9)
-    //    [1] map holding the PackageBindingAuth (doc 06 §9.2)
+    // 2. Open the PBR partition via the shared signed-partition
+    //    template. This does the [canonical_bytes, auth_map] +
+    //    Ed25519 verify pipeline in one place (see
+    //    runtime/include/binding/signed_partition.hpp).
     auto partition_or = parse_strict(pbr_bytes, env.package_binding_record.length);
     if (!partition_or) return err(AcceptError::PbrPartitionMalformed);
-    const Value& partition = *partition_or;
-    if (partition.kind() != Value::Kind::Array) return err(AcceptError::PbrPartitionMalformed);
-    if (partition.as_array().size() != 2)      return err(AcceptError::PbrPartitionMalformed);
-
-    const Value& canonical_v = partition.as_array()[0];
-    const Value& auth_v      = partition.as_array()[1];
-    if (canonical_v.kind() != Value::Kind::Bytes) return err(AcceptError::PbrPartitionMalformed);
-    if (auth_v.kind()      != Value::Kind::Map)   return err(AcceptError::PbrPartitionMalformed);
-
-    const std::vector<std::uint8_t>& canonical_bytes = canonical_v.as_bytes();
-
-    // 3. Pull the binding_auth fields. Everything about the auth object is
-    //    verified *before* touching the content bytes — fail-closed on a
-    //    malformed or wrong-domain auth object, never on the PBR itself.
-    auto kind_or = require_text(auth_v, kAuth_Kind);
-    if (!kind_or) return err(kind_or.error());
-    if (*kind_or != kAuthKindVendorSignatureV1) return err(AcceptError::AuthKindUnsupported);
-
-    auto auth_key_id_or = require_text(auth_v, kAuth_KeyId);
-    if (!auth_key_id_or) return err(auth_key_id_or.error());
-    // The embedded trust root stores a fixed-size key id string. Reject
-    // auth objects that name a different key until delegated trust is
-    // implemented (Stage 10+).
-    if (*auth_key_id_or != root.root_key_id) return err(AcceptError::AuthKeyIdMismatch);
-
-    // signature_alg_id must match the algorithm the embedded key is
-    // declared for. Without this check an artifact signed with a future
-    // alg (post-quantum etc.) could slip past when the runtime only
-    // knows how to verify Ed25519.
-    auto auth_alg_or = require_text(auth_v, kAuth_SignatureAlgId);
-    if (!auth_alg_or) return err(auth_alg_or.error());
-    if (*auth_alg_or != root.signature_alg_id) {
-        return err(AcceptError::AuthSignatureAlgMismatch);
-    }
-
-    auto auth_domain_or = require_text(auth_v, kAuth_CoveredDomain);
-    if (!auth_domain_or) return err(auth_domain_or.error());
-    if (*auth_domain_or != VMPilot::DomainLabels::Auth::PackageBinding) {
-        return err(AcceptError::AuthCoveredDomainMismatch);
-    }
-
-    const Value* sig_v = auth_v.find_by_uint_key(kAuth_Signature);
-    if (sig_v == nullptr) return err(AcceptError::MissingCoreField);
-    if (sig_v->kind() != Value::Kind::Bytes) return err(AcceptError::WrongFieldType);
-    const std::vector<std::uint8_t>& signature_bytes = sig_v->as_bytes();
-    if (signature_bytes.size() != 64) return err(AcceptError::SignatureWrongSize);
-
-    // 4. Verify the Ed25519 signature against the embedded trust root.
-    const std::vector<std::uint8_t> pubkey_vec(
-        root.public_key, root.public_key + sizeof(root.public_key));
-    const bool sig_ok = VMPilot::Crypto::Verify_Ed25519(
-        pubkey_vec,
-        signature_bytes,
-        std::string(VMPilot::DomainLabels::Auth::PackageBinding),
-        canonical_bytes);
-    if (!sig_ok) return err(AcceptError::SignatureInvalid);
+    auto view_or = verify_signed_partition_view<AcceptError>(
+        *partition_or, root, VMPilot::DomainLabels::Auth::PackageBinding);
+    if (!view_or) return err(view_or.error());
+    const std::vector<std::uint8_t>& canonical_bytes = *view_or->canonical_bytes;
 
     // 5. Parse the PBR canonical content. If this fails after the signature
     //    verified, an implementation bug snuck by — the signer produced
