@@ -6,8 +6,6 @@
 
 #include "vm_runner.hpp"
 
-#include "cbor/strict.hpp"  // for VMPILOT_TRY_ASSIGN
-
 namespace VMPilot::Runtime {
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -56,11 +54,12 @@ template<typename Policy, typename Oram>
 tl::expected<VmExecResult, DiagnosticCode> VmRunner<Policy, Oram>::run() {
     auto blob = build_blob_internal();
 
-    VMPILOT_TRY_ASSIGN(engine, VmEngine<Policy, Oram>::create(
+    auto engine = VmEngine<Policy, Oram>::create(
         blob.data(), blob.size(), seed_,
-        load_base_delta_, init_regs_, num_init_regs_));
+        load_base_delta_, init_regs_, num_init_regs_);
+    if (!engine) return tl::make_unexpected(engine.error());
 
-    return engine.execute();
+    return engine->execute();
 }
 
 template<typename Policy, typename Oram>
