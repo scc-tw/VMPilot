@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstring>
 
+#include "cbor/encode.hpp"
 #include "cbor/schema.hpp"
 #include "cbor/strict.hpp"
 #include "vm/domain_labels.hpp"
@@ -138,44 +139,43 @@ bool is_known_requirement_key(std::uint64_t k) noexcept {
     }
 }
 
-// Helpers used by the evidence serializer only — PolicyRequirement's
-// serializer is gone (producer-carried bytes path).
-void append_u8(std::vector<std::uint8_t>& out, std::uint8_t v) {
-    out.push_back(v);
-}
-void append_u16(std::vector<std::uint8_t>& out, std::uint16_t v) {
-    out.push_back(static_cast<std::uint8_t>(v & 0xFFu));
-    out.push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFu));
-}
-void append_str(std::vector<std::uint8_t>& out, std::string_view s) {
-    append_u16(out, static_cast<std::uint16_t>(s.size()));
-    out.insert(out.end(), s.begin(), s.end());
-}
-
+// ProviderEvidence canonical schema (strict CBOR map, uint keys):
+//
+//   1: evidence_version            text
+//   2: provider_class              uint  (ProviderClass enum value)
+//   3: provider_instance_pseudonym text
+//   4: nonce                       bytes(32)
+//   5: package_binding_record_hash bytes(32)
+//   6: resolved_profile_table_hash bytes(32)
+//   7: policy_requirement_hash     bytes(32)
+//   8: runtime_measurement_hash    bytes(32)
+//   9: attestation_payload         bytes
+//  10: freshness_proof_hash        bytes(32)
+//
+// Previously hand-rolled little-endian layout; moved to strict CBOR
+// so producers outside this process (future TPM/TEE providers) can
+// emit bytes whose hash the runtime reproduces bit-for-bit, without
+// a second serializer implementation to keep in sync. Uses the
+// common/include/cbor/encode.hpp helpers.
 std::vector<std::uint8_t> serialize_evidence_core(
     const ProviderEvidence& ev) {
-    std::vector<std::uint8_t> out;
-    out.reserve(256);
-    append_u8(out, 0x01);
-    append_str(out, ev.evidence_version);
-    append_u8(out, static_cast<std::uint8_t>(ev.provider_class));
-    append_str(out, ev.provider_instance_pseudonym);
-    out.insert(out.end(), ev.nonce.begin(), ev.nonce.end());
-    out.insert(out.end(), ev.package_binding_record_hash.begin(),
-               ev.package_binding_record_hash.end());
-    out.insert(out.end(), ev.resolved_profile_table_hash.begin(),
-               ev.resolved_profile_table_hash.end());
-    out.insert(out.end(), ev.policy_requirement_hash.begin(),
-               ev.policy_requirement_hash.end());
-    out.insert(out.end(), ev.runtime_measurement_hash.begin(),
-               ev.runtime_measurement_hash.end());
-    append_u16(out,
-               static_cast<std::uint16_t>(ev.attestation_payload.size()));
-    out.insert(out.end(), ev.attestation_payload.begin(),
-               ev.attestation_payload.end());
-    out.insert(out.end(), ev.freshness_proof_hash.begin(),
-               ev.freshness_proof_hash.end());
-    return out;
+    namespace E = VMPilot::Cbor::Encode;
+    const auto to_vec = [](const std::array<std::uint8_t, 32>& a) {
+        return std::vector<std::uint8_t>(a.begin(), a.end());
+    };
+
+    E::MapBuilder m;
+    m.put_uint(1,  E::encode_text(ev.evidence_version));
+    m.put_uint(2,  E::encode_uint(static_cast<std::uint64_t>(ev.provider_class)));
+    m.put_uint(3,  E::encode_text(ev.provider_instance_pseudonym));
+    m.put_uint(4,  E::encode_bytes(to_vec(ev.nonce)));
+    m.put_uint(5,  E::encode_bytes(to_vec(ev.package_binding_record_hash)));
+    m.put_uint(6,  E::encode_bytes(to_vec(ev.resolved_profile_table_hash)));
+    m.put_uint(7,  E::encode_bytes(to_vec(ev.policy_requirement_hash)));
+    m.put_uint(8,  E::encode_bytes(to_vec(ev.runtime_measurement_hash)));
+    m.put_uint(9,  E::encode_bytes(ev.attestation_payload));
+    m.put_uint(10, E::encode_bytes(to_vec(ev.freshness_proof_hash)));
+    return m.build();
 }
 
 bool capabilities_cover_requirement(
