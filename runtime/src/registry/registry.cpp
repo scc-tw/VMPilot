@@ -5,6 +5,7 @@
 
 #include "VMPilot_crypto.hpp"
 #include "binding/signed_partition.hpp"
+#include "cbor/schema.hpp"
 #include "cbor/strict.hpp"
 #include "trust_root.hpp"
 #include "vm/domain_labels.hpp"
@@ -17,6 +18,8 @@ struct CborConsumerTraits<VMPilot::Runtime::Registry::ParseError> {
     static constexpr E missing_field                 = E::MissingField;
     static constexpr E wrong_field_type              = E::WrongFieldType;
     static constexpr E wrong_hash_size               = E::WrongHashSize;
+    static constexpr E bad_cbor                      = E::BadCbor;
+    static constexpr E not_a_map                     = E::NotAMap;
     static constexpr E partition_malformed           = E::PartitionMalformed;
     static constexpr E auth_kind_unsupported         = E::AuthKindUnsupported;
     static constexpr E auth_key_id_mismatch          = E::AuthKeyIdMismatch;
@@ -64,120 +67,105 @@ inline tl::unexpected<LookupError> lookup_err(LookupError e) noexcept {
     return tl::make_unexpected(e);
 }
 
-inline auto require_text(const Value& m, std::uint64_t k) noexcept {
-    return VMPilot::Cbor::require_text<ParseError>(m, k);
-}
-inline auto require_uint(const Value& m, std::uint64_t k) noexcept {
-    return VMPilot::Cbor::require_uint<ParseError>(m, k);
-}
-inline auto require_hash(const Value& m, std::uint64_t k) noexcept {
-    return VMPilot::Cbor::require_hash<ParseError, 32>(m, k);
-}
-
 tl::expected<SpecializationEntry, ParseError>
 parse_entry(const Value& entry_v) noexcept {
+    using namespace VMPilot::Cbor::Schema;
     if (entry_v.kind() != Value::Kind::Map) return err(ParseError::WrongFieldType);
 
-    auto spec_id = require_text(entry_v, kEnt_SpecId);
-    if (!spec_id) return err(spec_id.error());
-    auto family = require_text(entry_v, kEnt_FamilyId);
-    if (!family) return err(family.error());
-    auto policy = require_text(entry_v, kEnt_PolicyId);
-    if (!policy) return err(policy.error());
-    auto fam_enum = VMPilot::DomainLabels::parse_family_id(*family);
-    if (!fam_enum) return err(ParseError::UnknownFamilyId);
-    auto pol_enum = VMPilot::DomainLabels::parse_policy_id(*policy);
-    if (!pol_enum) return err(ParseError::UnknownPolicyId);
-    auto revision = require_text(entry_v, kEnt_ProfileRevision);
-    if (!revision) return err(revision.error());
-    auto semantic = require_text(entry_v, kEnt_SemanticContractVersion);
-    if (!semantic) return err(semantic.error());
-    auto exec_ref = require_text(entry_v, kEnt_ExecutionContractRef);
-    if (!exec_ref) return err(exec_ref.error());
-    auto prim_hash = require_hash(entry_v, kEnt_RequiredPrimitivesHash);
-    if (!prim_hash) return err(prim_hash.error());
-    auto help_hash = require_hash(entry_v, kEnt_RequiredHelpersHash);
-    if (!help_hash) return err(help_hash.error());
-    auto prov_hash = require_hash(entry_v, kEnt_ProviderRequirementHash);
-    if (!prov_hash) return err(prov_hash.error());
-    auto prof_hash = require_hash(entry_v, kEnt_AcceptedProfileContentHash);
-    if (!prof_hash) return err(prof_hash.error());
-    auto diag_cls = require_uint(entry_v, kEnt_DiagnosticVisibilityClass);
-    if (!diag_cls) return err(diag_cls.error());
-    auto enabled_u = require_uint(entry_v, kEnt_EnabledInThisRuntime);
+    const auto schema = std::make_tuple(
+        TextField<SpecializationEntry>{
+            kEnt_SpecId, &SpecializationEntry::runtime_specialization_id},
+        EnumTextField<SpecializationEntry,
+                      VMPilot::DomainLabels::FamilyId, ParseError>{
+            kEnt_FamilyId, &SpecializationEntry::family_id,
+            ParseError::UnknownFamilyId},
+        EnumTextField<SpecializationEntry,
+                      VMPilot::DomainLabels::PolicyId, ParseError>{
+            kEnt_PolicyId, &SpecializationEntry::requested_policy_id,
+            ParseError::UnknownPolicyId},
+        TextField<SpecializationEntry>{
+            kEnt_ProfileRevision, &SpecializationEntry::profile_revision},
+        TextField<SpecializationEntry>{
+            kEnt_SemanticContractVersion,
+            &SpecializationEntry::semantic_contract_version},
+        TextField<SpecializationEntry>{
+            kEnt_ExecutionContractRef,
+            &SpecializationEntry::execution_contract_ref},
+        HashField<SpecializationEntry>{
+            kEnt_RequiredPrimitivesHash,
+            &SpecializationEntry::required_runtime_primitives_hash},
+        HashField<SpecializationEntry>{
+            kEnt_RequiredHelpersHash,
+            &SpecializationEntry::required_runtime_helpers_hash},
+        HashField<SpecializationEntry>{
+            kEnt_ProviderRequirementHash,
+            &SpecializationEntry::provider_requirement_hash},
+        HashField<SpecializationEntry>{
+            kEnt_AcceptedProfileContentHash,
+            &SpecializationEntry::accepted_profile_content_hash},
+        UintField<SpecializationEntry>{
+            kEnt_DiagnosticVisibilityClass,
+            &SpecializationEntry::diagnostic_visibility_class},
+        BytesField<SpecializationEntry>{
+            kEnt_ProviderRequirementCanonicalBytes,
+            &SpecializationEntry::provider_requirement_canonical_bytes}
+    );
+    auto parsed = parse_schema<SpecializationEntry, ParseError>(entry_v, schema);
+    if (!parsed) return err(parsed.error());
+
+    // enabled_in_this_runtime is a uint with a tighter range than BoolField
+    // gives us (registry surfaces EnabledFlagOutOfRange instead of
+    // WrongFieldType); parse it by hand to preserve the distinction.
+    auto enabled_u = VMPilot::Cbor::require_uint<ParseError>(
+        entry_v, kEnt_EnabledInThisRuntime);
     if (!enabled_u) return err(enabled_u.error());
     if (*enabled_u > 1) return err(ParseError::EnabledFlagOutOfRange);
+    parsed->enabled_in_this_runtime = (*enabled_u == 1);
 
-    // Field 13 is required in v1 but may carry zero-length bytes to
-    // represent "no provider requirement" (paired with an all-zero
-    // field 9). Any other bytes↔hash combination is a producer bug
-    // and rejected here before lookup runs.
-    const Value* req_bytes_v =
-        entry_v.find_by_uint_key(kEnt_ProviderRequirementCanonicalBytes);
-    if (req_bytes_v == nullptr) return err(ParseError::MissingField);
-    if (req_bytes_v->kind() != Value::Kind::Bytes) {
-        return err(ParseError::WrongFieldType);
-    }
-    const auto& req_bytes = req_bytes_v->as_bytes();
-
+    // Provider-requirement commitment sanity: zero-length bytes must
+    // pair with an all-zero hash; any other combination is a producer
+    // bug and is rejected before lookup runs.
     constexpr std::array<std::uint8_t, 32> kZeroHash{};
+    const auto& req_bytes = parsed->provider_requirement_canonical_bytes;
     const bool bytes_empty = req_bytes.empty();
-    const bool hash_zero = (*prov_hash == kZeroHash);
+    const bool hash_zero = (parsed->provider_requirement_hash == kZeroHash);
     if (bytes_empty != hash_zero) {
         return err(ParseError::InconsistentRequirementCommitment);
     }
     if (!bytes_empty) {
         const auto recomputed = VMPilot::Cbor::domain_hash_sha256(
             VMPilot::DomainLabels::Hash::PolicyRequirement, req_bytes);
-        if (recomputed != *prov_hash) {
+        if (recomputed != parsed->provider_requirement_hash) {
             return err(ParseError::InconsistentRequirementCommitment);
         }
     }
 
-    SpecializationEntry out;
-    out.runtime_specialization_id              = std::move(*spec_id);
-    out.family_id                              = *fam_enum;
-    out.requested_policy_id                    = *pol_enum;
-    out.profile_revision                       = std::move(*revision);
-    out.semantic_contract_version              = std::move(*semantic);
-    out.execution_contract_ref                 = std::move(*exec_ref);
-    out.required_runtime_primitives_hash       = *prim_hash;
-    out.required_runtime_helpers_hash          = *help_hash;
-    out.provider_requirement_hash              = *prov_hash;
-    out.accepted_profile_content_hash          = *prof_hash;
-    out.diagnostic_visibility_class            = *diag_cls;
-    out.enabled_in_this_runtime                = (*enabled_u == 1);
-    out.provider_requirement_canonical_bytes   = req_bytes;
-    return out;
+    return parsed;
 }
 
 }  // namespace
 
 tl::expected<Registry, ParseError>
 parse(const std::uint8_t* data, std::size_t size) noexcept {
+    using namespace VMPilot::Cbor::Schema;
     auto tree_or = parse_strict(data, size);
     if (!tree_or) return err(ParseError::BadCbor);
     const Value& tree = *tree_or;
-    if (tree.kind() != Value::Kind::Map) return err(ParseError::NotAMap);
 
-    auto version_or = require_text(tree, kHdr_Version);
-    auto build_or = require_text(tree, kHdr_RuntimeBuildId);
-    auto schema_or = require_text(tree, kHdr_PackageSchemaV);
-    auto epoch_or = require_uint(tree, kHdr_RegistryEpoch);
-    if (!version_or) return err(version_or.error());
-    if (!build_or) return err(build_or.error());
-    if (!schema_or) return err(schema_or.error());
-    if (!epoch_or) return err(epoch_or.error());
+    const auto header_schema = std::make_tuple(
+        TextField<Registry>{kHdr_Version, &Registry::registry_version},
+        TextField<Registry>{kHdr_RuntimeBuildId, &Registry::runtime_build_id},
+        TextField<Registry>{kHdr_PackageSchemaV, &Registry::package_schema_version},
+        UintField<Registry>{kHdr_RegistryEpoch, &Registry::registry_epoch}
+    );
+    auto hdr_or = parse_schema<Registry, ParseError>(tree, header_schema);
+    if (!hdr_or) return err(hdr_or.error());
 
     const Value* entries_v = tree.find_by_uint_key(kHdr_Entries);
     if (entries_v == nullptr) return err(ParseError::MissingField);
     if (entries_v->kind() != Value::Kind::Array) return err(ParseError::WrongFieldType);
 
-    Registry out;
-    out.registry_version = std::move(*version_or);
-    out.runtime_build_id = std::move(*build_or);
-    out.package_schema_version = std::move(*schema_or);
-    out.registry_epoch = *epoch_or;
+    Registry out = std::move(*hdr_or);
     out.entries.reserve(entries_v->as_array().size());
     for (const auto& e : entries_v->as_array()) {
         auto parsed = parse_entry(e);
