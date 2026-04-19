@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <tl/expected.hpp>
@@ -35,6 +36,22 @@ enum class ProviderClass : std::uint8_t {
     ExternalKms,
 };
 
+// Canonical on-wire text for ProviderClass. Matches the strings the
+// strict-CBOR parser accepts in PolicyRequirement's allowed_provider_
+// classes field; any other form (abbreviation, dash separator, camel
+// case) is rejected at parse time.
+constexpr std::string_view to_text(ProviderClass c) noexcept {
+    switch (c) {
+        case ProviderClass::LocalEmbedded:    return "local_embedded";
+        case ProviderClass::LocalTpm:         return "local_tpm";
+        case ProviderClass::LocalTee:         return "local_tee";
+        case ProviderClass::CloudAttestedVm:  return "cloud_attested_vm";
+        case ProviderClass::CloudHsm:         return "cloud_hsm";
+        case ProviderClass::ExternalKms:      return "external_kms";
+    }
+    return {};
+}
+
 enum class CloneResistanceClass : std::uint8_t {
     None = 1,
     Soft,
@@ -58,6 +75,20 @@ enum class RecoveryModel : std::uint8_t {
     SignedReprovision,
     Quorum,
 };
+
+// Canonical on-wire text for RecoveryModel. Used by PolicyRequirement
+// wire encoding only for reference; the actual encoding on the wire
+// is the enum's integer value (field 8 is uint, not text). Kept
+// alongside the other to_text helpers for symmetry so fixtures
+// constructing canonical bytes have a single source of truth.
+constexpr std::string_view to_text(RecoveryModel m) noexcept {
+    switch (m) {
+        case RecoveryModel::SelfService:        return "self_service";
+        case RecoveryModel::SignedReprovision:  return "signed_reprovision";
+        case RecoveryModel::Quorum:             return "quorum";
+    }
+    return {};
+}
 
 enum class PrivacyModel : std::uint8_t {
     Pairwise = 1,

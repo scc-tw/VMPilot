@@ -67,65 +67,21 @@ PolicyRequirement baseline_requirement() {
 // The runtime does not serialize PolicyRequirement; the producer
 // does. For tests that build a struct and then want its canonical
 // hash, round-trip the struct through the fixture encoder's
-// PolicyRequirementSpec so the bytes are the same ones a producer
-// would ship.
+// PolicyRequirementSpec. After the enum-class refactor the two
+// types line up field-for-field, so the helper is a direct copy.
 VMPilot::Fixtures::PolicyRequirementSpec req_to_spec(
     const PolicyRequirement& r) {
-    auto policy_text = [](VMPilot::DomainLabels::PolicyId p) {
-        switch (p) {
-            case VMPilot::DomainLabels::PolicyId::Debug:    return "debug";
-            case VMPilot::DomainLabels::PolicyId::Standard: return "standard";
-            case VMPilot::DomainLabels::PolicyId::HighSec:  return "highsec";
-        }
-        return "standard";
-    };
-    auto family_text = [](VMPilot::DomainLabels::FamilyId f) {
-        switch (f) {
-            case VMPilot::DomainLabels::FamilyId::F1: return "f1";
-            case VMPilot::DomainLabels::FamilyId::F2: return "f2";
-            case VMPilot::DomainLabels::FamilyId::F3: return "f3";
-        }
-        return "f1";
-    };
-    auto recovery_text = [](ProviderClass) { return std::string{}; };
-    (void)recovery_text;
-    auto recovery_model_text = [](RecoveryModel m) {
-        switch (m) {
-            case RecoveryModel::SelfService:       return "self_service";
-            case RecoveryModel::SignedReprovision: return "signed_reprovision";
-            case RecoveryModel::Quorum:            return "quorum";
-        }
-        return "self_service";
-    };
-    auto class_text = [](ProviderClass c) {
-        switch (c) {
-            case ProviderClass::LocalEmbedded:   return "local_embedded";
-            case ProviderClass::LocalTpm:        return "local_tpm";
-            case ProviderClass::LocalTee:        return "local_tee";
-            case ProviderClass::CloudAttestedVm: return "cloud_attested_vm";
-            case ProviderClass::CloudHsm:        return "cloud_hsm";
-            case ProviderClass::ExternalKms:     return "external_kms";
-        }
-        return "local_embedded";
-    };
-
     VMPilot::Fixtures::PolicyRequirementSpec s;
-    s.requirement_version       = r.requirement_version;
-    s.required_policy_floor     = policy_text(r.required_policy_floor);
-    s.required_family_set.clear();
-    for (auto f : r.required_family_set) {
-        s.required_family_set.emplace_back(family_text(f));
-    }
+    s.requirement_version        = r.requirement_version;
+    s.required_policy_floor      = r.required_policy_floor;
+    s.required_family_set        = r.required_family_set;
     s.require_hardware_bound     = r.require_hardware_bound;
     s.require_non_exportable_key = r.require_non_exportable_key;
     s.require_online_freshness   = r.require_online_freshness;
     s.require_remote_attestation = r.require_remote_attestation;
-    s.require_recovery_model     = recovery_model_text(r.require_recovery_model);
-    s.allowed_provider_classes.clear();
-    for (auto c : r.allowed_provider_classes) {
-        s.allowed_provider_classes.emplace_back(class_text(c));
-    }
-    s.minimum_provider_epoch = r.minimum_provider_epoch;
+    s.require_recovery_model     = r.require_recovery_model;
+    s.allowed_provider_classes   = r.allowed_provider_classes;
+    s.minimum_provider_epoch     = r.minimum_provider_epoch;
     return s;
 }
 
@@ -386,8 +342,10 @@ TEST(PolicyRequirementParse, TrailingBytesRejected) {
 }
 
 TEST(PolicyRequirementParse, OversizedFamilySetRejected) {
+    // Length 4 exceeds the hard cap (3). Enum-safe; no unknown values.
     VMPilot::Fixtures::PolicyRequirementSpec s;
-    s.required_family_set = {"f1", "f2", "f3", "f1"};  // len 4 > 3
+    s.required_family_set = {FamilyId::F1, FamilyId::F2, FamilyId::F3,
+                             FamilyId::F1};
     const auto bytes = VMPilot::Fixtures::encode_policy_requirement(s);
     auto parsed = parse_policy_requirement(bytes);
     ASSERT_FALSE(parsed.has_value());
@@ -395,11 +353,14 @@ TEST(PolicyRequirementParse, OversizedFamilySetRejected) {
 }
 
 TEST(PolicyRequirementParse, OversizedAllowedProviderClassesRejected) {
+    // Length 9 exceeds the hard cap (8). Enum-safe.
     VMPilot::Fixtures::PolicyRequirementSpec s;
     s.allowed_provider_classes = {
-        "local_embedded", "local_tpm", "local_tee", "cloud_attested_vm",
-        "cloud_hsm", "external_kms", "local_embedded", "local_tpm",
-        "local_tee"};  // len 9 > 8
+        ProviderClass::LocalEmbedded, ProviderClass::LocalTpm,
+        ProviderClass::LocalTee,      ProviderClass::CloudAttestedVm,
+        ProviderClass::CloudHsm,      ProviderClass::ExternalKms,
+        ProviderClass::LocalEmbedded, ProviderClass::LocalTpm,
+        ProviderClass::LocalTee};
     const auto bytes = VMPilot::Fixtures::encode_policy_requirement(s);
     auto parsed = parse_policy_requirement(bytes);
     ASSERT_FALSE(parsed.has_value());
@@ -407,19 +368,46 @@ TEST(PolicyRequirementParse, OversizedAllowedProviderClassesRejected) {
 }
 
 TEST(PolicyRequirementParse, UnknownFamilyIdRejected) {
-    VMPilot::Fixtures::PolicyRequirementSpec s;
-    s.required_family_set = {"f7"};  // unknown
-    const auto bytes = VMPilot::Fixtures::encode_policy_requirement(s);
-    auto parsed = parse_policy_requirement(bytes);
+    // Needs a raw-string injection: the production enum class has no
+    // value for "f7", so this negative test hand-builds the CBOR.
+    using namespace VMPilot::Fixtures::Cbor;
+    std::vector<std::vector<std::uint8_t>> family_items{encode_text("f7")};
+    std::vector<std::vector<std::uint8_t>> class_items{
+        encode_text("local_embedded")};
+    MapBuilder m;
+    m.put_uint(1,  encode_text("policy-requirement-v1"));
+    m.put_uint(2,  encode_uint(2));
+    m.put_uint(3,  encode_array(family_items));
+    m.put_uint(4,  encode_uint(0));
+    m.put_uint(5,  encode_uint(0));
+    m.put_uint(6,  encode_uint(0));
+    m.put_uint(7,  encode_uint(0));
+    m.put_uint(8,  encode_uint(1));
+    m.put_uint(9,  encode_array(class_items));
+    m.put_uint(10, encode_uint(0));
+    auto parsed = parse_policy_requirement(m.build());
     ASSERT_FALSE(parsed.has_value());
     EXPECT_EQ(parsed.error(), PolicyRequirementParseError::UnknownEnumValue);
 }
 
 TEST(PolicyRequirementParse, UnknownProviderClassRejected) {
-    VMPilot::Fixtures::PolicyRequirementSpec s;
-    s.allowed_provider_classes = {"chewy_hardware_dongle"};  // unknown
-    const auto bytes = VMPilot::Fixtures::encode_policy_requirement(s);
-    auto parsed = parse_policy_requirement(bytes);
+    // Same raw-string injection idiom for an unknown ProviderClass.
+    using namespace VMPilot::Fixtures::Cbor;
+    std::vector<std::vector<std::uint8_t>> family_items{encode_text("f1")};
+    std::vector<std::vector<std::uint8_t>> class_items{
+        encode_text("chewy_hardware_dongle")};
+    MapBuilder m;
+    m.put_uint(1,  encode_text("policy-requirement-v1"));
+    m.put_uint(2,  encode_uint(2));
+    m.put_uint(3,  encode_array(family_items));
+    m.put_uint(4,  encode_uint(0));
+    m.put_uint(5,  encode_uint(0));
+    m.put_uint(6,  encode_uint(0));
+    m.put_uint(7,  encode_uint(0));
+    m.put_uint(8,  encode_uint(1));
+    m.put_uint(9,  encode_array(class_items));
+    m.put_uint(10, encode_uint(0));
+    auto parsed = parse_policy_requirement(m.build());
     ASSERT_FALSE(parsed.has_value());
     EXPECT_EQ(parsed.error(), PolicyRequirementParseError::UnknownEnumValue);
 }

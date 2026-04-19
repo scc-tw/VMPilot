@@ -44,19 +44,6 @@ std::string default_family_specific_unwind_surface_ref(
     return std::string(family_id) + "-unwind-surface-v1";
 }
 
-std::uint64_t policy_floor_text_to_uint(std::string_view s) {
-    if (s == "debug")    return 1;
-    if (s == "standard") return 2;
-    if (s == "highsec")  return 3;
-    std::abort();  // test-only helper: caller bug
-}
-
-std::uint64_t recovery_model_text_to_uint(std::string_view s) {
-    if (s == "self_service")        return 1;
-    if (s == "signed_reprovision")  return 2;
-    if (s == "quorum")              return 3;
-    std::abort();
-}
 
 std::vector<std::uint8_t> encode_exception_unwind_contract(
     const ExceptionUnwindContractSpec& spec,
@@ -102,26 +89,28 @@ encode_policy_requirement(const PolicyRequirementSpec& spec) {
 
     std::vector<std::vector<std::uint8_t>> family_items;
     family_items.reserve(spec.required_family_set.size());
-    for (const auto& f : spec.required_family_set) {
-        family_items.push_back(encode_text(f));
+    for (auto f : spec.required_family_set) {
+        family_items.push_back(
+            encode_text(VMPilot::DomainLabels::to_text(f)));
     }
     std::vector<std::vector<std::uint8_t>> class_items;
     class_items.reserve(spec.allowed_provider_classes.size());
-    for (const auto& c : spec.allowed_provider_classes) {
-        class_items.push_back(encode_text(c));
+    for (auto c : spec.allowed_provider_classes) {
+        class_items.push_back(
+            encode_text(VMPilot::Runtime::Provider::to_text(c)));
     }
 
     MapBuilder m;
     m.put_uint(1,  encode_text(spec.requirement_version));
     m.put_uint(2,  encode_uint(
-        policy_floor_text_to_uint(spec.required_policy_floor)));
+        static_cast<std::uint64_t>(spec.required_policy_floor)));
     m.put_uint(3,  encode_array(family_items));
     m.put_uint(4,  encode_uint(spec.require_hardware_bound      ? 1u : 0u));
     m.put_uint(5,  encode_uint(spec.require_non_exportable_key  ? 1u : 0u));
     m.put_uint(6,  encode_uint(spec.require_online_freshness    ? 1u : 0u));
     m.put_uint(7,  encode_uint(spec.require_remote_attestation  ? 1u : 0u));
     m.put_uint(8,  encode_uint(
-        recovery_model_text_to_uint(spec.require_recovery_model)));
+        static_cast<std::uint64_t>(spec.require_recovery_model)));
     m.put_uint(9,  encode_array(class_items));
     m.put_uint(10, encode_uint(spec.minimum_provider_epoch));
     return m.build();

@@ -123,6 +123,7 @@ if(ENABLE_TESTS)
     target_compile_features(vmpilot_runtime_test_fixtures PUBLIC cxx_std_20)
     target_include_directories(vmpilot_runtime_test_fixtures
         PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/test
+                ${CMAKE_CURRENT_SOURCE_DIR}/include
                 ${CMAKE_SOURCE_DIR}/common/include
                 ${CMAKE_SOURCE_DIR}/common/include/vm
         PRIVATE ${CRYPTO_INCLUDE_DIR}
