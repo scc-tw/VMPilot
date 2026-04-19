@@ -6,6 +6,7 @@
 #include "VMPilot_crypto.hpp"
 #include "binding/inner_partition.hpp"
 #include "binding/signed_partition.hpp"
+#include "cbor/schema.hpp"
 #include "cbor/strict.hpp"
 #include "vm/domain_labels.hpp"
 
@@ -18,6 +19,8 @@ struct CborConsumerTraits<VMPilot::Runtime::Binding::AcceptError> {
     static constexpr E missing_field                 = E::MissingCoreField;
     static constexpr E wrong_field_type              = E::WrongFieldType;
     static constexpr E wrong_hash_size               = E::WrongHashSize;
+    static constexpr E bad_cbor                      = E::PbrCanonicalDecodeFailed;
+    static constexpr E not_a_map                     = E::PbrCanonicalDecodeFailed;
     static constexpr E partition_malformed           = E::PbrPartitionMalformed;
     static constexpr E auth_kind_unsupported         = E::AuthKindUnsupported;
     static constexpr E auth_key_id_mismatch          = E::AuthKeyIdMismatch;
@@ -36,17 +39,6 @@ namespace {
 using VMPilot::Cbor::Value;
 using VMPilot::Cbor::parse_strict;
 using VMPilot::Cbor::domain_hash_sha256;
-
-// Thin wrappers that pre-bind AcceptError so call sites stay tidy.
-inline auto require_text(const Value& m, std::uint64_t k) noexcept {
-    return VMPilot::Cbor::require_text<AcceptError>(m, k);
-}
-inline auto require_uint(const Value& m, std::uint64_t k) noexcept {
-    return VMPilot::Cbor::require_uint<AcceptError>(m, k);
-}
-inline auto require_hash(const Value& m, std::uint64_t k) noexcept {
-    return VMPilot::Cbor::require_hash<AcceptError>(m, k);
-}
 
 // Field IDs inside the canonical PBR map. Keep in sync with the fixture
 // builder in runtime/test/fixtures/fixture_generator.cpp and with
@@ -131,39 +123,43 @@ accept_package(const std::uint8_t* artifact_data,
     //    Either way, fail-closed.
     auto pbr_or = parse_strict(canonical_bytes);
     if (!pbr_or) return err(AcceptError::PbrCanonicalDecodeFailed);
-    const Value& pbr = *pbr_or;
-    if (pbr.kind() != Value::Kind::Map) return err(AcceptError::PbrCanonicalDecodeFailed);
 
-    auto id_or = require_text(pbr, kField_PbrId);
-    auto schema_or = require_text(pbr, kField_PackageSchemaVersion);
-    auto encoding_or = require_text(pbr, kField_CanonicalEncodingId);
-    auto ubt_or = require_hash(pbr, kField_UnitBindingTableHash);
-    auto rpt_or = require_hash(pbr, kField_ResolvedProfileTableHash);
-    auto reg_or = require_hash(pbr, kField_RuntimeSpecRegistryHash);
-    auto lay_or = require_hash(pbr, kField_ArtifactLayoutHash);
-    auto adg_or = require_uint(pbr, kField_AntiDowngradeEpoch);
-    auto mre_or = require_uint(pbr, kField_MinimumRuntimeEpoch);
-    if (!id_or) return err(id_or.error());
-    if (!schema_or) return err(schema_or.error());
-    if (!encoding_or) return err(encoding_or.error());
-    if (!ubt_or) return err(ubt_or.error());
-    if (!rpt_or) return err(rpt_or.error());
-    if (!reg_or) return err(reg_or.error());
-    if (!lay_or) return err(lay_or.error());
-    if (!adg_or) return err(adg_or.error());
-    if (!mre_or) return err(mre_or.error());
+    using namespace VMPilot::Cbor::Schema;
+    const auto schema = std::make_tuple(
+        TextField<AcceptedPackage>{kField_PbrId,
+                                   &AcceptedPackage::package_binding_record_id},
+        TextField<AcceptedPackage>{kField_PackageSchemaVersion,
+                                   &AcceptedPackage::package_schema_version},
+        TextField<AcceptedPackage>{kField_CanonicalEncodingId,
+                                   &AcceptedPackage::canonical_encoding_id},
+        HashField<AcceptedPackage>{kField_UnitBindingTableHash,
+                                   &AcceptedPackage::unit_binding_table_hash},
+        HashField<AcceptedPackage>{kField_ResolvedProfileTableHash,
+                                   &AcceptedPackage::resolved_profile_table_hash},
+        HashField<AcceptedPackage>{kField_RuntimeSpecRegistryHash,
+                                   &AcceptedPackage::runtime_specialization_registry_hash},
+        HashField<AcceptedPackage>{kField_ArtifactLayoutHash,
+                                   &AcceptedPackage::artifact_layout_hash},
+        UintField<AcceptedPackage>{kField_AntiDowngradeEpoch,
+                                   &AcceptedPackage::anti_downgrade_epoch},
+        UintField<AcceptedPackage>{kField_MinimumRuntimeEpoch,
+                                   &AcceptedPackage::minimum_runtime_epoch}
+    );
+    auto result_or = parse_schema<AcceptedPackage, AcceptError>(*pbr_or, schema);
+    if (!result_or) return err(result_or.error());
+    AcceptedPackage result = std::move(*result_or);
 
     // 6. Acceptance policy gates.
-    if (!is_in_list(config.supported_schema_versions, *schema_or)) {
+    if (!is_in_list(config.supported_schema_versions, result.package_schema_version)) {
         return err(AcceptError::UnsupportedPackageSchemaVersion);
     }
-    if (!is_in_list(config.supported_canonical_encodings, *encoding_or)) {
+    if (!is_in_list(config.supported_canonical_encodings, result.canonical_encoding_id)) {
         return err(AcceptError::UnsupportedCanonicalEncodingId);
     }
-    if (*mre_or > config.epoch.runtime_epoch) {
+    if (result.minimum_runtime_epoch > config.epoch.runtime_epoch) {
         return err(AcceptError::RuntimeEpochTooOld);
     }
-    if (*adg_or < config.epoch.minimum_accepted_epoch) {
+    if (result.anti_downgrade_epoch < config.epoch.minimum_accepted_epoch) {
         return err(AcceptError::AntiDowngradeEpochTooOld);
     }
 
@@ -178,7 +174,7 @@ accept_package(const std::uint8_t* artifact_data,
         VMPilot::DomainLabels::Hash::ArtifactLayout,
         artifact_data,
         envelope_body_len);
-    if (!hash_equals(layout_computed, *lay_or)) {
+    if (!hash_equals(layout_computed, result.artifact_layout_hash)) {
         return err(AcceptError::ArtifactLayoutHashMismatch);
     }
 
@@ -201,14 +197,14 @@ accept_package(const std::uint8_t* artifact_data,
     const auto ubt_computed = domain_hash_sha256(
         VMPilot::DomainLabels::Hash::UnitBindingTable,
         inner.unit_binding_table.data(), inner.unit_binding_table.size());
-    if (!hash_equals(ubt_computed, *ubt_or)) {
+    if (!hash_equals(ubt_computed, result.unit_binding_table_hash)) {
         return err(AcceptError::UnitBindingTableHashMismatch);
     }
 
     const auto rpt_computed = domain_hash_sha256(
         VMPilot::DomainLabels::Hash::ResolvedProfileTable,
         inner.resolved_profile_table.data(), inner.resolved_profile_table.size());
-    if (!hash_equals(rpt_computed, *rpt_or)) {
+    if (!hash_equals(rpt_computed, result.resolved_profile_table_hash)) {
         return err(AcceptError::ResolvedProfileTableHashMismatch);
     }
 
@@ -216,22 +212,12 @@ accept_package(const std::uint8_t* artifact_data,
         VMPilot::DomainLabels::Hash::RuntimeSpecRegistry,
         inner.runtime_specialization_registry.data(),
         inner.runtime_specialization_registry.size());
-    if (!hash_equals(reg_computed, *reg_or)) {
+    if (!hash_equals(reg_computed, result.runtime_specialization_registry_hash)) {
         return err(AcceptError::RuntimeSpecializationRegistryHashMismatch);
     }
 
-    // 8. Assemble the result and hand it back.
-    AcceptedPackage result;
-    result.package_binding_record_id        = std::move(*id_or);
-    result.package_schema_version           = std::move(*schema_or);
-    result.canonical_encoding_id            = std::move(*encoding_or);
-    result.unit_binding_table_hash          = *ubt_or;
-    result.resolved_profile_table_hash      = *rpt_or;
-    result.runtime_specialization_registry_hash = *reg_or;
-    result.artifact_layout_hash             = *lay_or;
-    result.anti_downgrade_epoch             = *adg_or;
-    result.minimum_runtime_epoch            = *mre_or;
-    result.pbr_canonical_bytes              = canonical_bytes;
+    // 8. Retain the canonical bytes so Stage 7 can cross-check without re-parsing.
+    result.pbr_canonical_bytes = canonical_bytes;
     return result;
 }
 
