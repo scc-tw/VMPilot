@@ -1,5 +1,6 @@
 #include "binding/resolved_profile.hpp"
 
+#include "cbor/schema.hpp"
 #include "cbor/strict.hpp"
 #include "vm/family_policy.hpp"
 
@@ -9,6 +10,8 @@ struct CborConsumerTraits<VMPilot::Runtime::Binding::ResolvedFamilyProfileParseE
     using E = VMPilot::Runtime::Binding::ResolvedFamilyProfileParseError;
     static constexpr E missing_field    = E::MissingField;
     static constexpr E wrong_field_type = E::WrongFieldType;
+    static constexpr E bad_cbor         = E::BadCbor;
+    static constexpr E not_a_map        = E::NotAMap;
 };
 }  // namespace VMPilot::Cbor
 
@@ -16,59 +19,41 @@ namespace VMPilot::Runtime::Binding {
 
 namespace {
 
-using VMPilot::Cbor::Value;
-using VMPilot::Cbor::parse_strict;
-
-// Field IDs match the fixture builder in
-// runtime/test/fixtures/fixture_generator.cpp
-// (ResolvedFamilyProfileBuilder::build). Keep in sync.
 constexpr std::uint64_t kField_ProfileId                  = 1;
 constexpr std::uint64_t kField_FamilyId                   = 2;
 constexpr std::uint64_t kField_RequestedPolicyId          = 3;
 constexpr std::uint64_t kField_ProfileRevision            = 4;
 constexpr std::uint64_t kField_RuntimeSpecializationId    = 5;
 
-inline tl::unexpected<ResolvedFamilyProfileParseError>
-err(ResolvedFamilyProfileParseError e) noexcept {
-    return tl::make_unexpected(e);
-}
-
-inline auto require_text(const Value& m, std::uint64_t k) noexcept {
-    return VMPilot::Cbor::require_text<ResolvedFamilyProfileParseError>(m, k);
-}
-
 }  // namespace
 
 tl::expected<ResolvedFamilyProfileHeader, ResolvedFamilyProfileParseError>
 parse_resolved_family_profile_header(const std::uint8_t* data, std::size_t size) noexcept {
-    auto tree_or = parse_strict(data, size);
-    if (!tree_or) return err(ResolvedFamilyProfileParseError::BadCbor);
-    const Value& tree = *tree_or;
-    if (tree.kind() != Value::Kind::Map) return err(ResolvedFamilyProfileParseError::NotAMap);
+    using namespace VMPilot::Cbor::Schema;
+    using E = ResolvedFamilyProfileParseError;
+    auto tree_or = VMPilot::Cbor::parse_strict(data, size);
+    if (!tree_or) return tl::make_unexpected(E::BadCbor);
 
-    auto pid = require_text(tree, kField_ProfileId);
-    auto fid = require_text(tree, kField_FamilyId);
-    auto rpid = require_text(tree, kField_RequestedPolicyId);
-    auto rev = require_text(tree, kField_ProfileRevision);
-    auto spec = require_text(tree, kField_RuntimeSpecializationId);
-    if (!pid) return err(pid.error());
-    if (!fid) return err(fid.error());
-    if (!rpid) return err(rpid.error());
-    if (!rev) return err(rev.error());
-    if (!spec) return err(spec.error());
-
-    auto fam_enum = VMPilot::DomainLabels::parse_family_id(*fid);
-    if (!fam_enum) return err(ResolvedFamilyProfileParseError::UnknownFamilyId);
-    auto pol_enum = VMPilot::DomainLabels::parse_policy_id(*rpid);
-    if (!pol_enum) return err(ResolvedFamilyProfileParseError::UnknownPolicyId);
-
-    ResolvedFamilyProfileHeader out;
-    out.profile_id                      = std::move(*pid);
-    out.family_id                       = *fam_enum;
-    out.requested_policy_id             = *pol_enum;
-    out.profile_revision                = std::move(*rev);
-    out.runtime_specialization_id       = std::move(*spec);
-    return out;
+    const auto schema = std::make_tuple(
+        TextField<ResolvedFamilyProfileHeader>{
+            kField_ProfileId, &ResolvedFamilyProfileHeader::profile_id},
+        EnumTextField<ResolvedFamilyProfileHeader,
+                      VMPilot::DomainLabels::FamilyId, E>{
+            kField_FamilyId, &ResolvedFamilyProfileHeader::family_id,
+            E::UnknownFamilyId},
+        EnumTextField<ResolvedFamilyProfileHeader,
+                      VMPilot::DomainLabels::PolicyId, E>{
+            kField_RequestedPolicyId,
+            &ResolvedFamilyProfileHeader::requested_policy_id,
+            E::UnknownPolicyId},
+        TextField<ResolvedFamilyProfileHeader>{
+            kField_ProfileRevision,
+            &ResolvedFamilyProfileHeader::profile_revision},
+        TextField<ResolvedFamilyProfileHeader>{
+            kField_RuntimeSpecializationId,
+            &ResolvedFamilyProfileHeader::runtime_specialization_id}
+    );
+    return parse_schema<ResolvedFamilyProfileHeader, E>(*tree_or, schema);
 }
 
 }  // namespace VMPilot::Runtime::Binding

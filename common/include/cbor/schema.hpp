@@ -104,6 +104,27 @@ struct HashField {
     std::array<std::uint8_t, N> T::*member;
 };
 
+// Arbitrary-length owned byte payload (strict CBOR major type 2).
+template <typename T>
+struct BytesField {
+    std::uint64_t key;
+    std::vector<std::uint8_t> T::*member;
+};
+
+// Scalar enum encoded as canonical text, validated via EnumTextTraits<EnumE>.
+//
+// `unknown_value_error` lets the caller route the rejection into a
+// per-enum code (e.g. UnknownFamilyId vs UnknownPolicyId) rather than
+// collapsing everything onto SchemaErrors<E>::unknown_enum_value. Three
+// current consumers rely on that distinction (ResolvedFamilyProfile,
+// Registry, UnitBinding), so the error code is a mandatory field.
+template <typename T, typename EnumE, typename E>
+struct EnumTextField {
+    std::uint64_t key;
+    EnumE T::*member;
+    E unknown_value_error;
+};
+
 // Array of enum text values, validated via EnumTextTraits<E>.
 template <typename T, typename E>
 struct EnumTextArrayField {
@@ -209,6 +230,26 @@ extract_one(const Value& m, T& out, const HashField<T, N>& f) noexcept {
     auto v_or = require_hash<E, N>(m, f.key);
     if (!v_or) return unexpected(v_or.error());
     out.*(f.member) = *v_or;
+    return {};
+}
+
+template <typename T, typename E>
+[[nodiscard]] inline tl::expected<void, E>
+extract_one(const Value& m, T& out, const BytesField<T>& f) noexcept {
+    auto v_or = require_bytes<E>(m, f.key);
+    if (!v_or) return unexpected(v_or.error());
+    out.*(f.member) = std::move(*v_or);
+    return {};
+}
+
+template <typename T, typename E, typename EnumE>
+[[nodiscard]] inline tl::expected<void, E>
+extract_one(const Value& m, T& out, const EnumTextField<T, EnumE, E>& f) noexcept {
+    auto v_or = require_text<E>(m, f.key);
+    if (!v_or) return unexpected(v_or.error());
+    auto parsed = VMPilot::enum_from_text<EnumE>(*v_or);
+    if (!parsed.has_value()) return unexpected(f.unknown_value_error);
+    out.*(f.member) = *parsed;
     return {};
 }
 
