@@ -6,6 +6,7 @@
 #include "VMPilot_crypto.hpp"
 #include "binding/inner_partition.hpp"
 #include "binding/resolved_profile.hpp"
+#include "cbor/schema.hpp"
 #include "cbor/strict.hpp"
 #include "eh_guard.hpp"
 #include "vm/domain_labels.hpp"
@@ -15,9 +16,16 @@ namespace VMPilot::Cbor {
 template <>
 struct CborConsumerTraits<VMPilot::Runtime::Binding::UnitAcceptError> {
     using E = VMPilot::Runtime::Binding::UnitAcceptError;
-    static constexpr E missing_field = E::MissingCoreField;
+    static constexpr E missing_field    = E::MissingCoreField;
     static constexpr E wrong_field_type = E::WrongFieldType;
-    static constexpr E wrong_hash_size = E::WrongHashSize;
+    static constexpr E wrong_hash_size  = E::WrongHashSize;
+    // Schema-side defaults. parse_payload_identity is still imperative
+    // because its caller needs to route a not-a-map failure to
+    // UnitDescriptorMalformed vs UnitBindingRecordMalformed by
+    // context; the constants below are the generic fall-backs
+    // used only by the top-level schema calls.
+    static constexpr E bad_cbor         = E::UnitDescriptorMalformed;
+    static constexpr E not_a_map        = E::UnitDescriptorMalformed;
 };
 }  // namespace VMPilot::Cbor
 
@@ -73,11 +81,6 @@ inline tl::unexpected<UnitAcceptError> err(UnitAcceptError e) noexcept {
     return tl::make_unexpected(e);
 }
 
-template <typename E>
-tl::unexpected<UnitAcceptError> err_as(UnitAcceptError e, const E&) noexcept {
-    return tl::make_unexpected(e);
-}
-
 bool hash_equals(const std::array<std::uint8_t, 32>& a,
                  const std::array<std::uint8_t, 32>& b) noexcept {
     return std::memcmp(a.data(), b.data(), 32) == 0;
@@ -115,9 +118,6 @@ UnitAcceptError map_eh_contract_error(
 // {MissingCoreField, WrongFieldType, WrongHashSize} triple, so the
 // per-call error customisation point was dead weight.
 
-inline auto require_text(const Value& m, std::uint64_t k) noexcept {
-    return VMPilot::Cbor::require_text<UnitAcceptError>(m, k);
-}
 inline auto require_uint(const Value& m, std::uint64_t k) noexcept {
     return VMPilot::Cbor::require_uint<UnitAcceptError>(m, k);
 }
@@ -144,77 +144,68 @@ tl::expected<PayloadIdentity, UnitAcceptError> parse_payload_identity(
 
 tl::expected<UnitDescriptor, UnitAcceptError> parse_unit_descriptor_bytes(
     const std::vector<std::uint8_t>& bytes) noexcept {
+    using namespace VMPilot::Cbor::Schema;
     auto tree_or = parse_strict(bytes.data(), bytes.size());
     if (!tree_or)
         return err(UnitAcceptError::UnitDescriptorMalformed);
     const Value& tree = *tree_or;
-    if (tree.kind() != Value::Kind::Map)
-        return err(UnitAcceptError::UnitDescriptorMalformed);
 
-    VMPILOT_TRY_ASSIGN(ver, require_text(tree, kUd_DescriptorVersion));
-    VMPILOT_TRY_ASSIGN(uid, require_text(tree, kUd_UnitId));
-    VMPILOT_TRY_ASSIGN(uih, require_hash32(tree, kUd_UnitIdentityHash));
-    VMPILOT_TRY_ASSIGN(fam, require_text(tree, kUd_FamilyId));
-    VMPILOT_TRY_ASSIGN(pol, require_text(tree, kUd_RequestedPolicyId));
-    VMPILOT_TRY_ASSIGN(prof, require_text(tree, kUd_ResolvedFamilyProfileId));
-    VMPILOT_TRY_ASSIGN(ubr, require_text(tree, kUd_UnitBindingRecordId));
-
-    auto fam_enum = VMPilot::DomainLabels::parse_family_id(fam);
-    if (!fam_enum)
-        return err(UnitAcceptError::UnknownFamilyId);
-    auto pol_enum = VMPilot::DomainLabels::parse_policy_id(pol);
-    if (!pol_enum)
-        return err(UnitAcceptError::UnknownPolicyId);
+    const auto schema = std::make_tuple(
+        TextField<UnitDescriptor>{kUd_DescriptorVersion,
+                                  &UnitDescriptor::descriptor_version},
+        TextField<UnitDescriptor>{kUd_UnitId, &UnitDescriptor::unit_id},
+        HashField<UnitDescriptor>{kUd_UnitIdentityHash,
+                                  &UnitDescriptor::unit_identity_hash},
+        EnumTextField<UnitDescriptor,
+                      VMPilot::DomainLabels::FamilyId, UnitAcceptError>{
+            kUd_FamilyId, &UnitDescriptor::family_id,
+            UnitAcceptError::UnknownFamilyId},
+        EnumTextField<UnitDescriptor,
+                      VMPilot::DomainLabels::PolicyId, UnitAcceptError>{
+            kUd_RequestedPolicyId, &UnitDescriptor::requested_policy_id,
+            UnitAcceptError::UnknownPolicyId},
+        TextField<UnitDescriptor>{kUd_ResolvedFamilyProfileId,
+                                  &UnitDescriptor::resolved_family_profile_id},
+        TextField<UnitDescriptor>{kUd_UnitBindingRecordId,
+                                  &UnitDescriptor::unit_binding_record_id}
+    );
+    auto parsed = parse_schema<UnitDescriptor, UnitAcceptError>(tree, schema);
+    if (!parsed) return err(parsed.error());
 
     const Value* pid_v = tree.find_by_uint_key(kUd_PayloadIdentity);
     if (pid_v == nullptr)
         return err(UnitAcceptError::MissingCoreField);
-    VMPILOT_TRY_ASSIGN(
-        pid, parse_payload_identity(*pid_v,
-                                    UnitAcceptError::UnitDescriptorMalformed));
-
-    UnitDescriptor out;
-    out.descriptor_version = std::string(ver);
-    out.unit_id = std::string(uid);
-    out.unit_identity_hash = uih;
-    out.family_id = *fam_enum;
-    out.requested_policy_id = *pol_enum;
-    out.resolved_family_profile_id = std::string(prof);
-    out.payload_identity = pid;
-    out.unit_binding_record_id = std::string(ubr);
-    return out;
+    auto pid = parse_payload_identity(*pid_v,
+                                      UnitAcceptError::UnitDescriptorMalformed);
+    if (!pid) return err(pid.error());
+    parsed->payload_identity = *pid;
+    return parsed;
 }
 
 // ─── UnitBindingAuth + UBR ──────────────────────────────────────────────
 
 tl::expected<UnitBindingAuth, UnitAcceptError> parse_binding_auth(
     const Value& auth_v) noexcept {
+    using namespace VMPilot::Cbor::Schema;
     if (auth_v.kind() != Value::Kind::Map)
         return err(UnitAcceptError::UnitBindingAuthMalformed);
 
-    auto kind = require_text(auth_v, kAuth_Kind);
-    auto ubt_hash = require_hash32(auth_v, kAuth_UnitBindingTableHash);
-    auto inclusion = require_uint(auth_v, kAuth_InclusionIndex);
-    auto rec_hash = require_hash32(auth_v, kAuth_RecordHash);
-    if (!kind)
-        return err(kind.error());
-    if (!ubt_hash)
-        return err(ubt_hash.error());
-    if (!inclusion)
-        return err(inclusion.error());
-    if (!rec_hash)
-        return err(rec_hash.error());
+    const auto schema = std::make_tuple(
+        TextField<UnitBindingAuth>{kAuth_Kind, &UnitBindingAuth::kind},
+        HashField<UnitBindingAuth>{kAuth_UnitBindingTableHash,
+                                   &UnitBindingAuth::unit_binding_table_hash},
+        UintField<UnitBindingAuth>{kAuth_InclusionIndex,
+                                   &UnitBindingAuth::inclusion_index},
+        HashField<UnitBindingAuth>{kAuth_RecordHash,
+                                   &UnitBindingAuth::record_hash}
+    );
+    auto parsed = parse_schema<UnitBindingAuth, UnitAcceptError>(auth_v, schema);
+    if (!parsed) return err(parsed.error());
 
-    if (*kind != kAuthKindPackageSignedUnitInclusionV1) {
+    if (parsed->kind != kAuthKindPackageSignedUnitInclusionV1) {
         return err(UnitAcceptError::UnitBindingAuthMalformed);
     }
-
-    UnitBindingAuth out;
-    out.kind = std::move(*kind);
-    out.unit_binding_table_hash = *ubt_hash;
-    out.inclusion_index = *inclusion;
-    out.record_hash = *rec_hash;
-    return out;
+    return parsed;
 }
 
 // Parse a single UBT entry (CBOR array[2] = [canonical_without_auth_bytes,
@@ -238,47 +229,46 @@ tl::expected<UnitBindingRecord, UnitAcceptError> parse_unit_binding_record(
         return err(UnitAcceptError::UnitBindingAuthMalformed);
     }
 
+    using namespace VMPilot::Cbor::Schema;
     const auto& canonical_bytes = canonical_v.as_bytes();
     auto inner_or =
         parse_strict(canonical_bytes.data(), canonical_bytes.size());
     if (!inner_or)
         return err(UnitAcceptError::UnitBindingRecordMalformed);
     const Value& ubr_v = *inner_or;
-    if (ubr_v.kind() != Value::Kind::Map) {
-        return err(UnitAcceptError::UnitBindingRecordMalformed);
+
+    const auto schema = std::make_tuple(
+        TextField<UnitBindingRecord>{kUbr_UnitBindingRecordId,
+                                     &UnitBindingRecord::unit_binding_record_id},
+        HashField<UnitBindingRecord>{kUbr_UnitIdentityHash,
+                                     &UnitBindingRecord::unit_identity_hash},
+        HashField<UnitBindingRecord>{kUbr_UnitDescriptorHash,
+                                     &UnitBindingRecord::unit_descriptor_hash},
+        EnumTextField<UnitBindingRecord,
+                      VMPilot::DomainLabels::FamilyId, UnitAcceptError>{
+            kUbr_FamilyId, &UnitBindingRecord::family_id,
+            UnitAcceptError::UnknownFamilyId},
+        EnumTextField<UnitBindingRecord,
+                      VMPilot::DomainLabels::PolicyId, UnitAcceptError>{
+            kUbr_RequestedPolicyId, &UnitBindingRecord::requested_policy_id,
+            UnitAcceptError::UnknownPolicyId},
+        TextField<UnitBindingRecord>{kUbr_ResolvedFamilyProfileId,
+                                     &UnitBindingRecord::resolved_family_profile_id},
+        HashField<UnitBindingRecord>{kUbr_ResolvedFamilyProfileContentHash,
+                                     &UnitBindingRecord::resolved_family_profile_content_hash},
+        UintField<UnitBindingRecord>{kUbr_AntiDowngradeEpoch,
+                                     &UnitBindingRecord::anti_downgrade_epoch}
+    );
+    auto parsed = parse_schema<UnitBindingRecord, UnitAcceptError>(ubr_v, schema);
+    if (!parsed) {
+        // parse_schema emits NotAMap via the default trait constants,
+        // which route to UnitDescriptorMalformed. Remap to the UBR
+        // variant here so the error keeps pointing at the right layer.
+        if (ubr_v.kind() != Value::Kind::Map) {
+            return err(UnitAcceptError::UnitBindingRecordMalformed);
+        }
+        return err(parsed.error());
     }
-
-    auto id = require_text(ubr_v, kUbr_UnitBindingRecordId);
-    auto uih = require_hash32(ubr_v, kUbr_UnitIdentityHash);
-    auto udh = require_hash32(ubr_v, kUbr_UnitDescriptorHash);
-    auto fam = require_text(ubr_v, kUbr_FamilyId);
-    auto pol = require_text(ubr_v, kUbr_RequestedPolicyId);
-    auto prof = require_text(ubr_v, kUbr_ResolvedFamilyProfileId);
-    auto pch = require_hash32(ubr_v, kUbr_ResolvedFamilyProfileContentHash);
-    auto epoch = require_uint(ubr_v, kUbr_AntiDowngradeEpoch);
-    if (!id)
-        return err(id.error());
-    if (!uih)
-        return err(uih.error());
-    if (!udh)
-        return err(udh.error());
-    if (!fam)
-        return err(fam.error());
-    if (!pol)
-        return err(pol.error());
-    if (!prof)
-        return err(prof.error());
-    if (!pch)
-        return err(pch.error());
-    if (!epoch)
-        return err(epoch.error());
-
-    auto fam_enum = VMPilot::DomainLabels::parse_family_id(*fam);
-    if (!fam_enum)
-        return err(UnitAcceptError::UnknownFamilyId);
-    auto pol_enum = VMPilot::DomainLabels::parse_policy_id(*pol);
-    if (!pol_enum)
-        return err(UnitAcceptError::UnknownPolicyId);
 
     const Value* pid_v = ubr_v.find_by_uint_key(kUbr_PayloadIdentity);
     if (pid_v == nullptr)
@@ -287,10 +277,12 @@ tl::expected<UnitBindingRecord, UnitAcceptError> parse_unit_binding_record(
         *pid_v, UnitAcceptError::UnitBindingRecordMalformed);
     if (!pid)
         return err(pid.error());
+    parsed->payload_identity = *pid;
 
     auto auth = parse_binding_auth(auth_v);
     if (!auth)
         return err(auth.error());
+    parsed->binding_auth = std::move(*auth);
 
     // Record hash must commit to the exact canonical bytes we just parsed.
     // Without this the wrapper's element [0] could be swapped for any
@@ -299,22 +291,10 @@ tl::expected<UnitBindingRecord, UnitAcceptError> parse_unit_binding_record(
     const auto computed_record_hash =
         domain_hash_sha256(VMPilot::DomainLabels::Hash::UnitBindingRecord,
                            canonical_bytes.data(), canonical_bytes.size());
-    if (!hash_equals(computed_record_hash, auth->record_hash)) {
+    if (!hash_equals(computed_record_hash, parsed->binding_auth.record_hash)) {
         return err(UnitAcceptError::UnitBindingRecordRecordHashMismatch);
     }
-
-    UnitBindingRecord out;
-    out.unit_binding_record_id = std::move(*id);
-    out.unit_identity_hash = *uih;
-    out.unit_descriptor_hash = *udh;
-    out.family_id = *fam_enum;
-    out.requested_policy_id = *pol_enum;
-    out.resolved_family_profile_id = std::move(*prof);
-    out.resolved_family_profile_content_hash = *pch;
-    out.payload_identity = *pid;
-    out.anti_downgrade_epoch = *epoch;
-    out.binding_auth = std::move(*auth);
-    return out;
+    return parsed;
 }
 
 // ─── Table lookups ──────────────────────────────────────────────────────
